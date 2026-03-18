@@ -41,6 +41,18 @@ fn open_tree_with_counter(folder: &tempfile::TempDir) -> lsm_tree::AnyTree {
     .unwrap()
 }
 
+fn open_blob_tree_with_counter(folder: &tempfile::TempDir) -> lsm_tree::AnyTree {
+    Config::new(
+        folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_merge_operator(Some(Arc::new(CounterMerge)))
+    .with_kv_separation(Some(lsm_tree::KvSeparationOptions::default()))
+    .open()
+    .unwrap()
+}
+
 fn get_counter(tree: &lsm_tree::AnyTree, key: &str, seqno: u64) -> Option<i64> {
     tree.get(key, seqno)
         .unwrap()
@@ -420,4 +432,115 @@ fn merge_overwrite_then_merge() {
 
     // Should merge with latest base (20), not first (10)
     assert_eq!(Some(25), get_counter(&tree, "key", 3));
+}
+
+// --- BlobTree merge tests ---
+
+#[test]
+fn blob_tree_merge_write_and_flush() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_blob_tree_with_counter(&folder);
+
+    tree.merge("counter", 1_i64.to_le_bytes(), 0);
+    tree.merge("counter", 2_i64.to_le_bytes(), 1);
+    tree.merge("counter", 3_i64.to_le_bytes(), 2);
+
+    // BlobTree merge write path works (same as standard tree internally)
+    tree.flush_active_memtable(0)?;
+
+    Ok(())
+}
+
+#[test]
+fn blob_tree_merge_mixed_operations() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_blob_tree_with_counter(&folder);
+
+    tree.insert("regular", b"hello world value".to_vec(), 0);
+    tree.merge("counter", 10_i64.to_le_bytes(), 1);
+    tree.remove("deleted", 2);
+    tree.merge("counter", 20_i64.to_le_bytes(), 3);
+
+    tree.flush_active_memtable(0)?;
+    assert_eq!(0, tree.sealed_memtable_count());
+
+    Ok(())
+}
+
+// --- Additional edge case tests for coverage ---
+
+#[test]
+fn merge_sealed_memtable_resolution() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    // Write base to memtable, rotate (seal it)
+    tree.insert("key", 100_i64.to_le_bytes(), 0);
+
+    // Rotate memtable manually by writing enough to trigger
+    // or use flush with gc_threshold=0 to preserve entries
+    tree.flush_active_memtable(0)?;
+
+    // Now write operands to a new memtable, then seal it
+    tree.merge("key", 10_i64.to_le_bytes(), 1);
+
+    // Read should resolve across sealed+tables
+    assert_eq!(Some(110), get_counter(&tree, "key", 2));
+
+    Ok(())
+}
+
+#[test]
+fn merge_empty_operands_after_base() {
+    let folder = tempfile::tempdir().unwrap();
+    let tree = open_tree_with_counter(&folder);
+
+    // Just a base value, no operands — get should return base
+    tree.insert("key", 42_i64.to_le_bytes(), 0);
+    assert_eq!(Some(42), get_counter(&tree, "key", 1));
+}
+
+#[test]
+fn merge_size_of() {
+    let folder = tempfile::tempdir().unwrap();
+    let tree = open_tree_with_counter(&folder);
+
+    tree.merge("key", 1_i64.to_le_bytes(), 0);
+
+    // size_of goes through get path → should resolve merge
+    let size = tree.size_of("key", 1).unwrap();
+    assert_eq!(size, Some(8)); // i64 = 8 bytes
+}
+
+#[test]
+fn merge_is_empty_and_len() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    assert!(tree.is_empty(0, None)?);
+
+    tree.merge("a", 1_i64.to_le_bytes(), 0);
+    tree.merge("b", 2_i64.to_le_bytes(), 1);
+
+    assert!(!tree.is_empty(2, None)?);
+    assert_eq!(2, tree.len(2, None)?);
+
+    Ok(())
+}
+
+#[test]
+fn merge_first_last_key_value() {
+    let folder = tempfile::tempdir().unwrap();
+    let tree = open_tree_with_counter(&folder);
+
+    tree.merge("b", 1_i64.to_le_bytes(), 0);
+    tree.merge("d", 2_i64.to_le_bytes(), 1);
+    tree.insert("a", 10_i64.to_le_bytes(), 2);
+    tree.insert("e", 20_i64.to_le_bytes(), 3);
+
+    let first = tree.first_key_value(4, None).unwrap().key().unwrap();
+    assert_eq!(&*first, b"a");
+
+    let last = tree.last_key_value(4, None).unwrap().key().unwrap();
+    assert_eq!(&*last, b"e");
 }

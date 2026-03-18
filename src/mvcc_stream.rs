@@ -213,10 +213,6 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
                         key_entries.push(tail);
                         return Some(self.resolve_merge_buffered(key_entries));
                     }
-                    if !key_entries.is_empty() {
-                        // Had multi-version key but no merge operands — return newest (tail)
-                        return Some(Ok(tail));
-                    }
                     return Some(Ok(tail));
                 }
             };
