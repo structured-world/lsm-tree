@@ -188,6 +188,11 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
         // merge is needed when we reach the newest entry (last in
         // reverse order). The base Value/Tombstone seen first must be
         // preserved for the merge function.
+        //
+        // NOTE: Lazy allocation (only buffer after seeing MergeOperand) is
+        // incorrect — reverse iteration visits the oldest (base) entry first,
+        // so deferring allocation until a MergeOperand is found would lose
+        // the base Value needed by the merge function.
         let has_merge_op = self.merge_operator.is_some();
         let mut key_entries: Vec<InternalValue> = Vec::new();
 
