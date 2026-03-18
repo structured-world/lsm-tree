@@ -514,7 +514,7 @@ impl Config {
 
     /// Installs a merge operator for commutative operations.
     ///
-    /// When set, enables [`AbstractTree::merge`] which stores partial updates
+    /// When set, enables [`crate::AbstractTree::merge`] which stores partial updates
     /// (operands) that are lazily combined during reads and compaction.
     #[must_use]
     pub fn with_merge_operator(mut self, op: Option<Arc<dyn MergeOperator>>) -> Self {

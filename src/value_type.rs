@@ -18,7 +18,7 @@ pub enum ValueType {
     /// Merge operand
     ///
     /// Stores a partial update that will be combined with other operands
-    /// and/or a base value via a user-provided [`MergeOperator`].
+    /// and/or a base value via a user-provided [`crate::MergeOperator`].
     MergeOperand = 3,
 
     /// Value pointer

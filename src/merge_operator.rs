@@ -73,7 +73,7 @@ pub trait MergeOperator: Send + Sync + RefUnwindSafe + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::MergeOperator`] if the merge fails (e.g., corrupted
+    /// Returns [`crate::Error::MergeOperator`] if the merge fails (e.g., corrupted
     /// operand data).
     fn merge(
         &self,

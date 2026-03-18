@@ -704,7 +704,7 @@ pub trait AbstractTree: sealed::Sealed {
     /// Writes a merge operand for a key.
     ///
     /// The operand is stored as a partial update that will be combined with
-    /// other operands and/or a base value via the configured [`MergeOperator`]
+    /// other operands and/or a base value via the configured [`crate::MergeOperator`]
     /// during reads and compaction.
     ///
     /// Returns the added item's size and new size of the memtable.
