@@ -144,6 +144,27 @@ impl Memtable {
         })
     }
 
+    /// Collects all entries for a given key with seqno < `seqno`,
+    /// ordered by descending sequence number (newest first).
+    ///
+    /// Used by the merge operator read path to collect all operands for a key.
+    pub fn get_all_for_key(&self, key: &[u8], seqno: SeqNo) -> Vec<InternalValue> {
+        if seqno == 0 {
+            return Vec::new();
+        }
+
+        let lower_bound = InternalKey::new(key, seqno - 1, ValueType::Value);
+
+        self.items
+            .range(lower_bound..)
+            .take_while(|entry| &*entry.key().user_key == key)
+            .map(|entry| InternalValue {
+                key: entry.key().clone(),
+                value: entry.value().clone(),
+            })
+            .collect()
+    }
+
     /// Gets approximate size of memtable in bytes.
     pub fn size(&self) -> u64 {
         self.approximate_size

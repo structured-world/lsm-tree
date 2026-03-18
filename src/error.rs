@@ -72,6 +72,13 @@ pub enum Error {
         /// (captured before reading bytes for that field).
         offset: u64,
     },
+
+    /// Merge operator failed.
+    ///
+    /// No context payload — consistent with other unit variants
+    /// (`Unrecoverable`, `InvalidTrailer`). Operators should log
+    /// details before returning this error.
+    MergeOperator,
 }
 
 impl std::fmt::Display for Error {

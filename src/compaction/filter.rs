@@ -162,6 +162,7 @@ impl<'a> ItemAccessor<'a> {
                     Err(crate::Error::Unrecoverable)
                 }
             }
+            crate::ValueType::MergeOperand => Ok(self.item.value.clone()),
             crate::ValueType::WeakTombstone | crate::ValueType::Tombstone => {
                 unreachable!("tombstones are filtered out before calling filter")
             }

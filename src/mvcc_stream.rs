@@ -3,22 +3,159 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::double_ended_peekable::{DoubleEndedPeekable, DoubleEndedPeekableExt};
-use crate::{InternalValue, UserKey};
+use crate::merge_operator::MergeOperator;
+use crate::{InternalValue, UserKey, UserValue, ValueType};
+use std::sync::Arc;
 
 /// Consumes a stream of KVs and emits a new stream according to MVCC and tombstone rules
 ///
 /// This iterator is used for read operations.
 pub struct MvccStream<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> {
     inner: DoubleEndedPeekable<crate::Result<InternalValue>, I>,
+    merge_operator: Option<Arc<dyn MergeOperator>>,
 }
 
 impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> {
     /// Initializes a new multi-version-aware iterator.
     #[must_use]
-    pub fn new(iter: I) -> Self {
+    pub fn new(iter: I, merge_operator: Option<Arc<dyn MergeOperator>>) -> Self {
         Self {
             inner: iter.double_ended_peekable(),
+            merge_operator,
         }
+    }
+
+    /// Collects all entries for the given key and applies the merge operator (forward).
+    fn resolve_merge_forward(
+        &mut self,
+        head: &InternalValue,
+        merge_op: &dyn MergeOperator,
+    ) -> crate::Result<InternalValue> {
+        let user_key = &head.key.user_key;
+        let mut operands: Vec<UserValue> = vec![head.value.clone()];
+        let mut base_value: Option<UserValue> = None;
+        let mut found_base = false;
+
+        // Collect remaining same-key entries
+        loop {
+            let Some(next) = self.inner.next_if(|kv| {
+                if let Ok(kv) = kv {
+                    kv.key.user_key == *user_key
+                } else {
+                    true
+                }
+            }) else {
+                break;
+            };
+
+            let next = next?;
+
+            match next.key.value_type {
+                ValueType::MergeOperand => {
+                    operands.push(next.value);
+                }
+                ValueType::Value | ValueType::Indirection => {
+                    base_value = Some(next.value);
+                    found_base = true;
+                    break;
+                }
+                ValueType::Tombstone | ValueType::WeakTombstone => {
+                    // Tombstone kills base
+                    found_base = true;
+                    break;
+                }
+            }
+        }
+
+        // Drain any remaining same-key entries
+        if found_base {
+            self.drain_key_min(user_key)?;
+        }
+
+        // Reverse to chronological order (ascending seqno)
+        operands.reverse();
+
+        let operand_refs: Vec<&[u8]> = operands.iter().map(|v| v.as_ref()).collect();
+        let merged = merge_op.merge(user_key, base_value.as_deref(), &operand_refs)?;
+
+        Ok(InternalValue::from_components(
+            user_key.clone(),
+            merged,
+            head.key.seqno,
+            ValueType::Value,
+        ))
+    }
+
+    /// Resolves a single merge operand (no other entries for this key).
+    fn resolve_merge_single(
+        &self,
+        entry: &InternalValue,
+        merge_op: &dyn MergeOperator,
+    ) -> crate::Result<InternalValue> {
+        let operand_refs: Vec<&[u8]> = vec![entry.value.as_ref()];
+        let merged = merge_op.merge(&entry.key.user_key, None, &operand_refs)?;
+        Ok(InternalValue::from_components(
+            entry.key.user_key.clone(),
+            merged,
+            entry.key.seqno,
+            ValueType::Value,
+        ))
+    }
+
+    /// Resolves buffered entries for reverse iteration merge.
+    /// `entries` are in ascending seqno order (oldest first, as collected by next_back).
+    fn resolve_merge_buffered(&self, entries: Vec<InternalValue>) -> crate::Result<InternalValue> {
+        let merge_op = match &self.merge_operator {
+            Some(op) => op,
+            None => {
+                // No merge operator — return newest entry (last in ascending order)
+                return entries
+                    .into_iter()
+                    .last()
+                    .ok_or(crate::Error::Unrecoverable);
+            }
+        };
+
+        // entries are in ascending seqno order (oldest→newest)
+        // The newest entry has the highest seqno — that's our result seqno
+        let mut operands: Vec<UserValue> = Vec::new();
+        let mut base_value: Option<UserValue> = None;
+        let mut result_seqno = 0;
+        let mut result_key = UserKey::empty();
+
+        // Process in descending seqno order (newest first) to match forward merge semantics
+        for entry in entries.iter().rev() {
+            if result_seqno == 0 {
+                result_seqno = entry.key.seqno;
+                result_key = entry.key.user_key.clone();
+            }
+
+            match entry.key.value_type {
+                ValueType::MergeOperand => {
+                    operands.push(entry.value.clone());
+                }
+                ValueType::Value | ValueType::Indirection => {
+                    base_value = Some(entry.value.clone());
+                    break;
+                }
+                ValueType::Tombstone | ValueType::WeakTombstone => {
+                    break;
+                }
+            }
+        }
+
+        // Reverse operands to chronological order (ascending seqno)
+        operands.reverse();
+
+        let operand_refs: Vec<&[u8]> = operands.iter().map(|v| v.as_ref()).collect();
+        let merged = merge_op.merge(&result_key, base_value.as_deref(), &operand_refs)?;
+
+        Ok(InternalValue::from_components(
+            result_key,
+            merged,
+            result_seqno,
+            ValueType::Value,
+        ))
     }
 
     // Drains all entries for the given user key from the front of the iterator.
@@ -45,6 +182,14 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> Iterator for M
     fn next(&mut self) -> Option<Self::Item> {
         let head = fail_iter!(self.inner.next()?);
 
+        if head.key.value_type.is_merge_operand() {
+            if let Some(merge_op) = self.merge_operator.clone() {
+                // Collect remaining entries for this key
+                let result = self.resolve_merge_forward(&head, merge_op.as_ref());
+                return Some(result);
+            }
+        }
+
         // As long as items are the same key, ignore them
         fail_iter!(self.drain_key_min(&head.key.user_key));
 
@@ -56,6 +201,9 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
     for MvccStream<I>
 {
     fn next_back(&mut self) -> Option<Self::Item> {
+        // Buffer for collecting entries in merge-aware reverse iteration
+        let mut key_entries: Vec<InternalValue> = Vec::new();
+
         loop {
             let tail = fail_iter!(self.inner.next_back()?);
 
@@ -73,13 +221,45 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
                         .expect_err("should be error")));
                 }
                 None => {
+                    // Last item in iterator — check if we have buffered merge entries
+                    if !key_entries.is_empty() {
+                        key_entries.push(tail);
+                        return Some(self.resolve_merge_buffered(key_entries));
+                    }
+                    // Check if this single entry is a merge operand
+                    if tail.key.value_type.is_merge_operand() {
+                        if let Some(merge_op) = self.merge_operator.clone() {
+                            return Some(self.resolve_merge_single(&tail, merge_op.as_ref()));
+                        }
+                    }
                     return Some(Ok(tail));
                 }
             };
 
             if prev.key.user_key < tail.key.user_key {
+                // `tail` is the newest entry for this key
+                if !key_entries.is_empty() {
+                    key_entries.push(tail);
+                    return Some(self.resolve_merge_buffered(key_entries));
+                }
+                // Check if this single entry needs merge resolution
+                if tail.key.value_type.is_merge_operand() {
+                    if let Some(merge_op) = self.merge_operator.clone() {
+                        return Some(self.resolve_merge_single(&tail, merge_op.as_ref()));
+                    }
+                }
                 return Some(Ok(tail));
             }
+
+            // Same key — if merge operator is configured and any entry is MergeOperand,
+            // we need to buffer entries for merge resolution
+            if self.merge_operator.is_some() && tail.key.value_type.is_merge_operand() {
+                key_entries.push(tail);
+            } else if !key_entries.is_empty() {
+                // Already buffering for this key — continue
+                key_entries.push(tail);
+            }
+            // Otherwise: normal behavior — just skip older versions (loop continues)
         }
     }
 }
@@ -128,12 +308,12 @@ mod tests {
     macro_rules! test_reverse {
         ($v:expr) => {
             let iter = Box::new($v.iter().cloned().map(Ok));
-            let iter = MvccStream::new(iter);
+            let iter = MvccStream::new(iter, None);
             let mut forwards = iter.flatten().collect::<Vec<_>>();
             forwards.reverse();
 
             let iter = Box::new($v.iter().cloned().map(Ok));
-            let iter = MvccStream::new(iter);
+            let iter = MvccStream::new(iter, None);
             let backwards = iter.rev().flatten().collect::<Vec<_>>();
 
             assert_eq!(forwards, backwards);
@@ -155,7 +335,7 @@ mod tests {
             ];
 
             let iter = Box::new(vec.into_iter());
-            let mut iter = MvccStream::new(iter);
+            let mut iter = MvccStream::new(iter, None);
 
             // Because next calls drain_key_min, the error is immediately first, even though
             // the first item is technically Ok
@@ -175,7 +355,7 @@ mod tests {
             ];
 
             let iter = Box::new(vec.into_iter());
-            let mut iter = MvccStream::new(iter);
+            let mut iter = MvccStream::new(iter, None);
 
             assert!(matches!(
                 iter.next_back().unwrap(),
@@ -208,7 +388,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"a", 0, ValueType::Value),
@@ -250,7 +430,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"a", 0, ValueType::Value),
@@ -293,7 +473,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"a", 0, ValueType::Value),
@@ -339,7 +519,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"a", 0, ValueType::Value),
@@ -381,7 +561,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"a", 0, ValueType::Value),
@@ -424,7 +604,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"a", 0, ValueType::Value),
@@ -464,7 +644,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"new", 999, ValueType::Value),
@@ -493,7 +673,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"new", 999, ValueType::Value),
@@ -525,7 +705,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"", 999, ValueType::Tombstone),
@@ -554,7 +734,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"", 999, ValueType::Tombstone),
@@ -586,7 +766,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"", 999, ValueType::WeakTombstone),
@@ -611,7 +791,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"", 999, ValueType::WeakTombstone),
@@ -637,7 +817,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"", 999, ValueType::Tombstone),
@@ -665,7 +845,7 @@ mod tests {
 
         let iter = Box::new(vec.iter().cloned().map(Ok));
 
-        let mut iter = MvccStream::new(iter);
+        let mut iter = MvccStream::new(iter, None);
 
         assert_eq!(
             InternalValue::from_components(*b"a", *b"", 999, ValueType::WeakTombstone),

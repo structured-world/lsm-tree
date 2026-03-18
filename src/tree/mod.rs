@@ -653,9 +653,29 @@ impl AbstractTree for Tree {
     }
 
     fn get<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<UserValue>> {
-        Ok(self
-            .get_internal_entry(key.as_ref(), seqno)?
-            .map(|x| x.value))
+        let key = key.as_ref();
+
+        #[expect(clippy::expect_used, reason = "lock is expected to not be poisoned")]
+        let super_version = self
+            .version_history
+            .read()
+            .expect("lock is poisoned")
+            .get_version_for_snapshot(seqno);
+
+        let entry = Self::get_internal_entry_from_version(&super_version, key, seqno)?;
+
+        match entry {
+            Some(entry) if entry.key.value_type == ValueType::MergeOperand => {
+                if let Some(merge_op) = &self.config.merge_operator {
+                    Self::resolve_merge_get(&super_version, key, seqno, entry, merge_op.as_ref())
+                } else {
+                    // No merge operator configured — return raw operand bytes
+                    Ok(Some(entry.value))
+                }
+            }
+            Some(entry) => Ok(Some(entry.value)),
+            None => Ok(None),
+        }
     }
 
     fn multi_get<K: AsRef<[u8]>>(
@@ -667,10 +687,26 @@ impl AbstractTree for Tree {
 
         keys.into_iter()
             .map(|key| {
-                Ok(
-                    Self::get_internal_entry_from_version(&super_version, key.as_ref(), seqno)?
-                        .map(|x| x.value),
-                )
+                let key = key.as_ref();
+                let entry = Self::get_internal_entry_from_version(&super_version, key, seqno)?;
+
+                match entry {
+                    Some(entry) if entry.key.value_type == ValueType::MergeOperand => {
+                        if let Some(merge_op) = &self.config.merge_operator {
+                            Self::resolve_merge_get(
+                                &super_version,
+                                key,
+                                seqno,
+                                entry,
+                                merge_op.as_ref(),
+                            )
+                        } else {
+                            Ok(Some(entry.value))
+                        }
+                    }
+                    Some(entry) => Ok(Some(entry.value)),
+                    None => Ok(None),
+                }
             })
             .collect()
     }
@@ -682,6 +718,16 @@ impl AbstractTree for Tree {
         seqno: SeqNo,
     ) -> (u64, u64) {
         let value = InternalValue::from_components(key, value, seqno, ValueType::Value);
+        self.append_entry(value)
+    }
+
+    fn merge<K: Into<UserKey>, V: Into<UserValue>>(
+        &self,
+        key: K,
+        operand: V,
+        seqno: SeqNo,
+    ) -> (u64, u64) {
+        let value = InternalValue::new_merge_operand(key, operand, seqno);
         self.append_entry(value)
     }
 
@@ -717,8 +763,16 @@ impl Tree {
         range: &'a R,
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
+        merge_operator: Option<Arc<dyn crate::merge_operator::MergeOperator>>,
     ) -> impl DoubleEndedIterator<Item = crate::Result<InternalValue>> + 'static {
-        Self::create_internal_range_with_prefix_hash(version, range, seqno, ephemeral, None)
+        Self::create_internal_range_with_prefix_hash(
+            version,
+            range,
+            seqno,
+            ephemeral,
+            merge_operator,
+            None,
+        )
     }
 
     /// Like [`Tree::create_internal_range`], but with an optional prefix hash
@@ -733,6 +787,7 @@ impl Tree {
         range: &'a R,
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
+        merge_operator: Option<Arc<dyn crate::merge_operator::MergeOperator>>,
         prefix_hash: Option<u64>,
     ) -> impl DoubleEndedIterator<Item = crate::Result<InternalValue>> + 'static {
         use crate::range::{IterState, TreeIter};
@@ -755,10 +810,111 @@ impl Tree {
         let iter_state = IterState {
             version,
             ephemeral,
+            merge_operator,
             prefix_hash,
         };
 
         TreeIter::create_range(iter_state, bounds, seqno)
+    }
+
+    /// Resolves merge operands for a point read.
+    ///
+    /// Called when `get()` encounters a MergeOperand as the top entry.
+    /// Collects all entries for the key across all storage layers (active memtable,
+    /// sealed memtables, disk tables), identifies the base value, and applies the
+    /// merge operator.
+    fn resolve_merge_get(
+        super_version: &SuperVersion,
+        key: &[u8],
+        seqno: SeqNo,
+        first_entry: InternalValue,
+        merge_op: &dyn crate::merge_operator::MergeOperator,
+    ) -> crate::Result<Option<UserValue>> {
+        let mut operands: Vec<UserValue> = Vec::new();
+        let mut base_value: Option<UserValue> = None;
+
+        // Process entries from a source. Returns true if a base value
+        // or tombstone was found (stop scanning).
+        let mut process_entry = |entry: &InternalValue| -> bool {
+            match entry.key.value_type {
+                ValueType::Value | ValueType::Indirection => {
+                    base_value = Some(entry.value.clone());
+                    true
+                }
+                ValueType::Tombstone | ValueType::WeakTombstone => {
+                    // Tombstone kills everything below — no base value
+                    true
+                }
+                ValueType::MergeOperand => {
+                    operands.push(entry.value.clone());
+                    false
+                }
+            }
+        };
+
+        // Process the first entry (which we already know is a MergeOperand)
+        process_entry(&first_entry);
+
+        // Scan active memtable for remaining entries of this key
+        let active_entries = super_version.active_memtable.get_all_for_key(key, seqno);
+        let mut found_base = false;
+        // Skip the first entry (already processed) by comparing seqno
+        for entry in &active_entries {
+            if entry.key.seqno == first_entry.key.seqno {
+                continue;
+            }
+            if process_entry(entry) {
+                found_base = true;
+                break;
+            }
+        }
+
+        // Scan sealed memtables
+        if !found_base {
+            for mt in super_version.sealed_memtables.iter().rev() {
+                let entries = mt.get_all_for_key(key, seqno);
+                for entry in &entries {
+                    if process_entry(entry) {
+                        found_base = true;
+                        break;
+                    }
+                }
+                if found_base {
+                    break;
+                }
+            }
+        }
+
+        // Scan tables on disk
+        if !found_base {
+            let key_hash = crate::table::filter::standard_bloom::Builder::get_hash(key);
+
+            for table in super_version
+                .version
+                .iter_levels()
+                .flat_map(|lvl| lvl.iter())
+                .filter_map(|run| run.get_for_key(key))
+            {
+                if let Some(entry) = table.get(key, seqno, key_hash)? {
+                    if process_entry(&entry) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if operands.is_empty() {
+            // Only base value or nothing — should not happen since first_entry was MergeOperand
+            return Ok(base_value);
+        }
+
+        // Reverse operands to chronological order (ascending seqno)
+        operands.reverse();
+
+        let operand_refs: Vec<&[u8]> = operands.iter().map(|v| v.as_ref()).collect();
+        let merged = merge_op.merge(key, base_value.as_deref(), &operand_refs)?;
+
+        Ok(Some(merged))
     }
 
     pub(crate) fn get_internal_entry_from_version(
@@ -1068,7 +1224,14 @@ impl Tree {
             .expect("lock is poisoned")
             .get_version_for_snapshot(seqno);
 
-        Self::create_internal_range(super_version, range, seqno, ephemeral).map(|item| match item {
+        Self::create_internal_range(
+            super_version,
+            range,
+            seqno,
+            ephemeral,
+            self.config.merge_operator.clone(),
+        )
+        .map(|item| match item {
             Ok(kv) => Ok((kv.key.user_key, kv.value)),
             Err(e) => Err(e),
         })
@@ -1100,6 +1263,7 @@ impl Tree {
         let iter_state = IterState {
             version: super_version,
             ephemeral,
+            merge_operator: self.config.merge_operator.clone(),
             prefix_hash,
         };
 

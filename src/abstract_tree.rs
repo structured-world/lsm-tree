@@ -123,7 +123,8 @@ pub trait AbstractTree: sealed::Sealed {
                 .map(|mt| mt.iter().map(Ok))
                 .collect::<Vec<_>>(),
         );
-        let stream = CompactionStream::new(merger, seqno_threshold);
+        let stream = CompactionStream::new(merger, seqno_threshold)
+            .with_merge_operator(self.tree_config().merge_operator.clone());
 
         drop(version_history);
 
@@ -699,6 +700,32 @@ pub trait AbstractTree: sealed::Sealed {
     ///
     /// Will return `Err` if an IO error occurs.
     fn remove<K: Into<UserKey>>(&self, key: K, seqno: SeqNo) -> (u64, u64);
+
+    /// Writes a merge operand for a key.
+    ///
+    /// The operand is stored as a partial update that will be combined with
+    /// other operands and/or a base value via the configured [`MergeOperator`]
+    /// during reads and compaction.
+    ///
+    /// Returns the added item's size and new size of the memtable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # let folder = tempfile::tempdir()?;
+    /// use lsm_tree::{AbstractTree, Config, Tree};
+    ///
+    /// let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    /// tree.merge("counter", 1_i64.to_le_bytes(), 0);
+    /// #
+    /// # Ok::<(), lsm_tree::Error>(())
+    /// ```
+    fn merge<K: Into<UserKey>, V: Into<UserValue>>(
+        &self,
+        key: K,
+        operand: V,
+        seqno: SeqNo,
+    ) -> (u64, u64);
 
     /// Removes an item from the tree.
     ///

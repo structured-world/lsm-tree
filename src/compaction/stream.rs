@@ -2,8 +2,8 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use crate::{InternalValue, SeqNo, UserKey, UserValue, ValueType};
-use std::iter::Peekable;
+use crate::{merge_operator::MergeOperator, InternalValue, SeqNo, UserKey, UserValue, ValueType};
+use std::{iter::Peekable, sync::Arc};
 
 type Item = crate::Result<InternalValue>;
 
@@ -62,6 +62,9 @@ pub struct CompactionStream<'a, I: Iterator<Item = Item>, F: StreamFilter = NoFi
     evict_tombstones: bool,
 
     zero_seqnos: bool,
+
+    /// Merge operator for collapsing merge operands during compaction
+    merge_operator: Option<Arc<dyn MergeOperator>>,
 }
 
 impl<I: Iterator<Item = Item>> CompactionStream<'_, I, NoFilter> {
@@ -77,6 +80,7 @@ impl<I: Iterator<Item = Item>> CompactionStream<'_, I, NoFilter> {
             filter: NoFilter,
             evict_tombstones: false,
             zero_seqnos: false,
+            merge_operator: None,
         }
     }
 }
@@ -91,6 +95,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
             filter,
             evict_tombstones: self.evict_tombstones,
             zero_seqnos: self.zero_seqnos,
+            merge_operator: self.merge_operator,
         }
     }
 
@@ -105,12 +110,84 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
         self
     }
 
+    /// Installs a merge operator for collapsing merge operands during compaction.
+    pub fn with_merge_operator(mut self, op: Option<Arc<dyn MergeOperator>>) -> Self {
+        self.merge_operator = op;
+        self
+    }
+
     /// Sets sequence numbers to zero if they are below the snapshot watermark.
     ///
     /// This can save a lot of space, because "0" only takes 1 byte, and sequence numbers are monotonically increasing.
     pub fn zero_seqnos(mut self, b: bool) -> Self {
         self.zero_seqnos = b;
         self
+    }
+
+    /// Collects merge operands and resolves them via the merge operator.
+    ///
+    /// `head` is the first MergeOperand entry (highest seqno).
+    /// Collects subsequent same-key entries, merges them, and returns the merged Value.
+    fn resolve_merge_operands(
+        &mut self,
+        head: InternalValue,
+        merge_op: &dyn MergeOperator,
+    ) -> crate::Result<InternalValue> {
+        let user_key = head.key.user_key.clone();
+        let head_seqno = head.key.seqno;
+        let mut operands: Vec<UserValue> = vec![head.value];
+        let mut base_value: Option<UserValue> = None;
+
+        // Collect remaining same-key entries
+        loop {
+            let should_take = self.inner.peek().is_some_and(|peeked| {
+                if let Ok(peeked) = peeked {
+                    peeked.key.user_key == user_key
+                } else {
+                    true
+                }
+            });
+
+            if !should_take {
+                break;
+            }
+
+            #[expect(clippy::expect_used, reason = "we just checked peek is Some")]
+            let next = self.inner.next().expect("peeked value should exist")?;
+
+            match next.key.value_type {
+                ValueType::MergeOperand => {
+                    operands.push(next.value);
+                }
+                ValueType::Value | ValueType::Indirection => {
+                    base_value = Some(next.value);
+                    // Drain any remaining entries for this key below the base
+                    self.drain_key(&user_key)?;
+                    break;
+                }
+                ValueType::Tombstone | ValueType::WeakTombstone => {
+                    // Tombstone kills base — merge with no base
+                    if let Some(watcher) = &mut self.dropped_callback {
+                        watcher.on_dropped(&next);
+                    }
+                    self.drain_key(&user_key)?;
+                    break;
+                }
+            }
+        }
+
+        // Reverse to chronological order (ascending seqno)
+        operands.reverse();
+
+        let operand_refs: Vec<&[u8]> = operands.iter().map(|v| v.as_ref()).collect();
+        let merged = merge_op.merge(&user_key, base_value.as_deref(), &operand_refs)?;
+
+        Ok(InternalValue::from_components(
+            user_key,
+            merged,
+            head_seqno,
+            ValueType::Value,
+        ))
     }
 
     /// Drains the remaining versions of the given key.
@@ -187,8 +264,31 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                     }
 
                     // NOTE: Only item of this key and thus latest version, so return it no matter what
-                    // ...
+                    // For a lone merge operand with a merge operator and below GC threshold,
+                    // resolve it to a Value via partial merge
+                    if head.key.value_type.is_merge_operand()
+                        && head.key.seqno < self.gc_seqno_threshold
+                    {
+                        if let Some(merge_op) = self.merge_operator.clone() {
+                            let merged =
+                                fail_iter!(self.resolve_merge_operands(head, merge_op.as_ref()));
+                            head = merged;
+                        }
+                    }
                 } else if peeked.key.seqno < self.gc_seqno_threshold {
+                    // Merge operands below GC watermark: collapse via merge operator
+                    if head.key.value_type.is_merge_operand() {
+                        if let Some(merge_op) = self.merge_operator.clone() {
+                            let mut merged =
+                                fail_iter!(self.resolve_merge_operands(head, merge_op.as_ref()));
+
+                            if self.zero_seqnos && merged.key.seqno < self.gc_seqno_threshold {
+                                merged.key.seqno = 0;
+                            }
+                            return Some(Ok(merged));
+                        }
+                    }
+
                     if head.key.value_type == ValueType::Tombstone && self.evict_tombstones {
                         fail_iter!(self.drain_key(&head.key.user_key));
                         continue;
@@ -209,6 +309,13 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                 }
             } else if head.is_tombstone() && self.evict_tombstones {
                 continue;
+            } else if head.key.value_type.is_merge_operand()
+                && head.key.seqno < self.gc_seqno_threshold
+            {
+                if let Some(merge_op) = self.merge_operator.clone() {
+                    let merged = fail_iter!(self.resolve_merge_operands(head, merge_op.as_ref()));
+                    head = merged;
+                }
             }
 
             if self.zero_seqnos && head.key.seqno < self.gc_seqno_threshold {
