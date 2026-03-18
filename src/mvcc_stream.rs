@@ -164,8 +164,9 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> Iterator for M
         let head = fail_iter!(self.inner.next()?);
 
         if head.key.value_type.is_merge_operand() {
+            // Clone the Arc (not the operator) — resolve_merge_forward needs
+            // &mut self which conflicts with borrowing self.merge_operator.
             if let Some(merge_op) = self.merge_operator.clone() {
-                // Collect remaining entries for this key
                 let result = self.resolve_merge_forward(&head, merge_op.as_ref());
                 return Some(result);
             }
@@ -182,7 +183,11 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
     for MvccStream<I>
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        // Buffer ALL entries for a key during reverse iteration when merge operator is configured
+        // When a merge operator is configured we must buffer ALL entries
+        // for a key (not just MergeOperands) because we only learn that
+        // merge is needed when we reach the newest entry (last in
+        // reverse order). The base Value/Tombstone seen first must be
+        // preserved for the merge function.
         let has_merge_op = self.merge_operator.is_some();
         let mut key_entries: Vec<InternalValue> = Vec::new();
 
@@ -204,7 +209,6 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
                 }
                 None => {
                     // Last item — resolve merge only if newest entry is a MergeOperand.
-                    // A Value/Tombstone as newest supersedes all entries below it.
                     if has_merge_op && tail.key.value_type.is_merge_operand() {
                         key_entries.push(tail);
                         return Some(self.resolve_merge_buffered(key_entries));
@@ -220,15 +224,16 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
                     key_entries.push(tail);
                     return Some(self.resolve_merge_buffered(key_entries));
                 }
-                // Normal: return newest version
                 return Some(Ok(tail));
             }
 
-            // Same key — buffer entry for potential merge resolution
+            // Same key — buffer entry when merge operator is configured.
+            // We must buffer ALL types (including Value/Tombstone) because
+            // we don't yet know if the newest entry will be a MergeOperand.
             if has_merge_op {
                 key_entries.push(tail);
             }
-            // Without merge operator: just skip older versions (loop continues)
+            // Without merge operator: skip older versions (loop continues)
         }
     }
 }
@@ -290,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_error() -> crate::Result<()> {
         {
             let vec = [
@@ -341,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_queue_reverse_almost_gone() -> crate::Result<()> {
         let vec = [
             InternalValue::from_components("a", "a", 0, ValueType::Value),
@@ -387,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_queue_almost_gone_2() -> crate::Result<()> {
         let vec = [
             InternalValue::from_components("a", "a", 0, ValueType::Value),
@@ -429,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_queue() -> crate::Result<()> {
         let vec = [
             InternalValue::from_components("a", "a", 0, ValueType::Value),
@@ -472,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_queue_weak_almost_gone() -> crate::Result<()> {
         let vec = [
             InternalValue::from_components("a", "a", 0, ValueType::Value),
@@ -518,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_queue_weak_almost_gone_2() -> crate::Result<()> {
         let vec = [
             InternalValue::from_components("a", "a", 0, ValueType::Value),
@@ -560,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_queue_weak_reverse() -> crate::Result<()> {
         let vec = [
             InternalValue::from_components("a", "a", 0, ValueType::Value),
@@ -603,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_simple() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -627,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_simple_multi_keys() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -664,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_tombstone() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -688,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_tombstone_multi_keys() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -725,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_weak_tombstone_simple() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -749,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_weak_tombstone_resurrection() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -774,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_weak_tombstone_priority() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -800,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn mvcc_stream_weak_tombstone_multi_keys() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -869,7 +874,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_forward_operands_only() -> crate::Result<()> {
             let vec = vec![
                 InternalValue::from_components("a", "op2", 2, ValueType::MergeOperand),
@@ -888,7 +893,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_forward_with_base() -> crate::Result<()> {
             let vec = vec![
                 InternalValue::from_components("a", "op2", 3, ValueType::MergeOperand),
@@ -907,7 +912,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_forward_with_tombstone() -> crate::Result<()> {
             let vec = vec![
                 InternalValue::from_components("a", "op1", 3, ValueType::MergeOperand),
@@ -927,7 +932,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_forward_mixed_keys() -> crate::Result<()> {
             let vec = vec![
                 InternalValue::from_components("a", "val_a", 5, ValueType::Value),
@@ -949,7 +954,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_reverse_operands_with_base() -> crate::Result<()> {
             let vec = vec![
                 InternalValue::from_components("a", "op2", 3, ValueType::MergeOperand),
@@ -968,7 +973,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_reverse_operands_only() -> crate::Result<()> {
             let vec = vec![
                 InternalValue::from_components("a", "op2", 2, ValueType::MergeOperand),
@@ -986,7 +991,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_reverse_mixed_keys() -> crate::Result<()> {
             let vec = vec![
                 InternalValue::from_components("a", "val_a", 5, ValueType::Value),
@@ -1009,7 +1014,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_reverse_single_operand_last() -> crate::Result<()> {
             // Single merge operand as last item in reverse iteration
             let vec = vec![InternalValue::from_components(
@@ -1030,7 +1035,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_no_operator_passthrough() -> crate::Result<()> {
             // Without merge operator, MergeOperand entries returned as-is (latest version wins)
             let vec = vec![
@@ -1050,7 +1055,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn mvcc_merge_reverse_single_operand_with_different_key() -> crate::Result<()> {
             // Single merge operand key followed by regular key in reverse
             let vec = vec![

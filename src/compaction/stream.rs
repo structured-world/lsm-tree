@@ -111,6 +111,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
     }
 
     /// Installs a merge operator for collapsing merge operands during compaction.
+    #[must_use]
     pub fn with_merge_operator(mut self, op: Option<Arc<dyn MergeOperator>>) -> Self {
         self.merge_operator = op;
         self
@@ -406,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_expired_callback_1() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -438,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_seqno_zeroing_1() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -479,7 +480,7 @@ mod tests {
 
     /// GC should not evict tombstones, unless they are covered up
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_tombstone_no_gc() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -509,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_old_tombstone() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -554,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_tombstone_overwrite_gc() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -575,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_weak_tombstone_simple() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -600,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_weak_tombstone_no_gc() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -641,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_weak_tombstone_evict_next_value() -> crate::Result<()> {
         #[rustfmt::skip]
         let mut vec = stream![
@@ -671,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_no_evict_simple() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -701,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertion")]
     fn compaction_stream_no_evict_simple_multi_keys() -> crate::Result<()> {
         #[rustfmt::skip]
         let vec = stream![
@@ -1002,7 +1003,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_operands_below_gc() -> crate::Result<()> {
             // All entries below gc_seqno_threshold=1000 → should be merged
             #[rustfmt::skip]
@@ -1023,7 +1024,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_with_base_below_gc() -> crate::Result<()> {
             // Merge operands + base value, all below gc threshold
             #[rustfmt::skip]
@@ -1045,7 +1046,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_with_tombstone_below_gc() -> crate::Result<()> {
             // Merge operand above tombstone → merge with no base
             #[rustfmt::skip]
@@ -1066,7 +1067,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_above_gc_preserved() -> crate::Result<()> {
             // Entries above gc_seqno_threshold → NOT merged, preserved as-is
             #[rustfmt::skip]
@@ -1093,7 +1094,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_lone_operand_below_gc() -> crate::Result<()> {
             // Single merge operand (only entry for key) below gc → resolve to Value
             let vec = vec![
@@ -1119,7 +1120,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_last_item_operand() -> crate::Result<()> {
             // Last item in entire stream is a merge operand below gc
             let vec = vec![InternalValue::from_components(
@@ -1142,7 +1143,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_mixed_keys() -> crate::Result<()> {
             // Multiple keys, some with merge operands, some without
             let vec = vec![
@@ -1170,7 +1171,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_no_operator_passthrough() -> crate::Result<()> {
             // Without merge operator, MergeOperand entries pass through unchanged
             #[rustfmt::skip]
@@ -1189,7 +1190,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_with_weak_tombstone() -> crate::Result<()> {
             // Merge operand above weak tombstone → merge with no base
             #[rustfmt::skip]
@@ -1211,7 +1212,7 @@ mod tests {
         }
 
         #[test]
-        #[expect(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
         fn compaction_merge_seqno_zeroing() -> crate::Result<()> {
             // Merged value should get seqno zeroed when below threshold
             #[rustfmt::skip]
