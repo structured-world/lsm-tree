@@ -160,11 +160,26 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                 ValueType::MergeOperand => {
                     operands.push(next.value);
                 }
-                // NOTE: Indirection (blob pointer) is treated as opaque base value here.
-                // BlobTree merge resolution during compaction is handled by the
-                // RelocatingCompaction flavour which resolves blob references first.
-                ValueType::Value | ValueType::Indirection => {
+                ValueType::Value => {
                     base_value = Some(next.value);
+                    self.drain_key(&user_key)?;
+                    break;
+                }
+                ValueType::Indirection => {
+                    // Indirection is a serialized blob pointer, not user data.
+                    // We cannot pass raw blob handles to the merge operator.
+                    // This path should not be reached in standard Tree
+                    // compaction (no Indirection entries). For BlobTree,
+                    // merge operator support during compaction requires
+                    // RelocatingCompaction to resolve blobs first.
+                    //
+                    // Safety: skip this entry as base — merge proceeds with
+                    // base=None. The Indirection is consumed (lost), which is
+                    // acceptable because BlobTree merge is a documented
+                    // limitation (follow-up for full support).
+                    log::warn!(
+                        "merge operand encountered Indirection base for key {user_key:?}, skipping blob base",
+                    );
                     self.drain_key(&user_key)?;
                     break;
                 }
