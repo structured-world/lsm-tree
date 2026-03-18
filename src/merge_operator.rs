@@ -11,6 +11,14 @@ use std::panic::RefUnwindSafe;
 /// partial updates (operands) that are lazily combined during reads and
 /// compaction, avoiding the need for explicit read-modify-write cycles.
 ///
+/// # Implementor contract
+///
+/// The merge function must be **deterministic and stable across multiple
+/// passes**. The `base_value` may itself be the result of a previous merge
+/// (e.g., from compaction or an earlier read resolution) rather than the
+/// original stored value. Repeated merging must produce identical bytes
+/// for the same logical state.
+///
 /// # Examples
 ///
 /// A simple counter merge operator that sums integer operands:
@@ -54,7 +62,9 @@ pub trait MergeOperator: Send + Sync + RefUnwindSafe + 'static {
     /// `key` is the user key being merged.
     ///
     /// `base_value` is the existing value for the key, or `None` if no base
-    /// value exists (e.g., the key was never written or was deleted).
+    /// value exists (e.g., the key was never written or was deleted). This
+    /// may already be the output of a previous `merge` call (after compaction
+    /// or an earlier read), so implementations must be stable when re-merging.
     ///
     /// `operands` contains the merge operand values in ascending sequence
     /// number order (chronological — oldest first).
