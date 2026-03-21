@@ -1,4 +1,7 @@
-use lsm_tree::{AbstractTree, Config, PrefixExtractor, SequenceNumberCounter, Tree};
+use lsm_tree::{
+    config::PinningPolicy, AbstractTree, Config, KvSeparationOptions, PrefixExtractor,
+    SequenceNumberCounter, Tree,
+};
 use std::sync::Arc;
 
 /// Extracts prefixes at each ':' separator boundary.
@@ -223,6 +226,119 @@ fn prefix_bloom_with_memtable_and_disk() -> lsm_tree::Result<()> {
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0.as_ref(), b"x:1");
     assert_eq!(results[1].0.as_ref(), b"x:2");
+
+    Ok(())
+}
+
+#[test]
+fn prefix_bloom_unpinned_filter() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+
+    // Create tree with unpinned filters to exercise the fallback load path
+    // in Table::maybe_contains_prefix
+    let tree = Config::new(
+        folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .prefix_extractor(Arc::new(ColonSeparatedPrefix))
+    .filter_block_pinning_policy(PinningPolicy::all(false))
+    .open()?;
+
+    let tree = match tree {
+        lsm_tree::AnyTree::Standard(t) => t,
+        _ => panic!("expected standard tree"),
+    };
+
+    tree.insert("a:1", "v1", 0);
+    tree.insert("b:1", "v2", 1);
+    tree.flush_active_memtable(0)?;
+
+    tree.insert("c:1", "v3", 2);
+    tree.insert("d:1", "v4", 3);
+    tree.flush_active_memtable(0)?;
+
+    // Prefix scan on unpinned filters exercises the load_block fallback
+    let results: Vec<_> = tree
+        .create_prefix("a:", 4, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0.as_ref(), b"a:1");
+
+    // Non-matching prefix should be skipped via unpinned bloom
+    let results: Vec<_> = tree
+        .create_prefix("z:", 4, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn prefix_bloom_blob_tree() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+
+    // Create BlobTree with prefix extractor to exercise BlobTree::prefix path
+    let tree = Config::new(
+        folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .prefix_extractor(Arc::new(ColonSeparatedPrefix))
+    .with_kv_separation(Some(KvSeparationOptions::default()))
+    .open()?;
+
+    tree.insert("user:1:name", "Alice", 0);
+    tree.insert("user:2:name", "Bob", 1);
+    tree.insert("order:1:item", "widget", 2);
+    tree.flush_active_memtable(0)?;
+
+    // Prefix scan through BlobTree
+    let count = tree.prefix("user:", 3, None).count();
+    assert_eq!(count, 2);
+
+    let count = tree.prefix("order:", 3, None).count();
+    assert_eq!(count, 1);
+
+    let count = tree.prefix("nonexist:", 3, None).count();
+    assert_eq!(count, 0);
+
+    Ok(())
+}
+
+#[test]
+fn prefix_bloom_many_disjoint_segments() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = tree_with_prefix_bloom(&folder)?;
+
+    // Create 10 segments each with a unique prefix — exercises the bloom skip
+    // path repeatedly across many single-table runs
+    for i in 0u64..10 {
+        let key = format!("ns{i}:key");
+        tree.insert(key, "value", i);
+        tree.flush_active_memtable(0)?;
+    }
+
+    assert!(tree.table_count() >= 10);
+
+    // Each prefix scan should find exactly 1 result and skip 9 segments
+    for i in 0u64..10 {
+        let prefix = format!("ns{i}:");
+        let results: Vec<_> = tree
+            .create_prefix(&prefix, 10, None)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            results.len(),
+            1,
+            "prefix {prefix} should match exactly 1 key"
+        );
+    }
+
+    // A prefix that doesn't exist should match nothing
+    let results: Vec<_> = tree
+        .create_prefix("nonexist:", 10, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 0);
 
     Ok(())
 }
