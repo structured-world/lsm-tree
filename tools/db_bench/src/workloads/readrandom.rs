@@ -24,14 +24,19 @@ impl Workload for ReadRandom {
         let mut rng = rand::rng();
         let mut found = 0u64;
 
+        // Pre-generate keys so per-iteration allocation is not included in read latency.
+        let keys: Vec<Vec<u8>> = (0..config.num)
+            .map(|i| make_sequential_key(i, config.key_size))
+            .collect();
+
         reporter.start();
 
         for _ in 0..config.num {
             let idx: u64 = rng.random_range(0..config.num);
-            let key = make_sequential_key(idx, config.key_size);
+            let key = &keys[idx as usize];
 
             let t = Instant::now();
-            let result = tree.get(&key, read_seq)?;
+            let result = tree.get(key, read_seq)?;
             reporter.record_duration(t.elapsed());
 
             if result.is_some() {

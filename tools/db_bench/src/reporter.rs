@@ -38,7 +38,8 @@ impl Reporter {
     )]
     #[inline]
     pub fn record(&mut self, nanos: u64) {
-        // Clamp to histogram max rather than silently dropping extreme values.
+        // Clamp to histogram max (highest trackable value, set in new_with_max)
+        // rather than silently dropping extreme values.
         let clamped = nanos.min(self.histogram.high());
         self.histogram
             .record(clamped)

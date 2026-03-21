@@ -54,10 +54,12 @@ impl BenchConfig {
 
 /// Create an lsm-tree at the given path using the benchmark configuration.
 pub fn create_tree(path: &Path, config: &BenchConfig) -> lsm_tree::Result<AnyTree> {
-    let cache_bytes = config
-        .cache_mb
-        .checked_mul(1024 * 1024)
-        .expect("requested cache size overflows u64");
+    let cache_bytes = config.cache_mb.checked_mul(1024 * 1024).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "requested cache size overflows u64",
+        )
+    })?;
     let cache = Arc::new(Cache::with_capacity_bytes(cache_bytes));
 
     let compression_policy = CompressionPolicy::all(config.compression.to_lsm());

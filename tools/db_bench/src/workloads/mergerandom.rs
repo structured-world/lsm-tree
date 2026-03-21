@@ -50,14 +50,21 @@ impl Workload for MergeRandom {
             reporter.record_duration(t.elapsed());
 
             if (i + 1) % flush_interval == 0 {
+                let t_flush = Instant::now();
                 tree.flush_active_memtable(0)?;
+                reporter.record_duration(t_flush.elapsed());
             }
         }
 
         // Final flush + major compaction to exercise merge.
+        let t_flush = Instant::now();
         tree.flush_active_memtable(0)?;
+        reporter.record_duration(t_flush.elapsed());
+
         let compact_seqno = seqno.load(Ordering::Relaxed);
+        let t_compact = Instant::now();
         tree.major_compact(64 * 1024 * 1024, compact_seqno)?;
+        reporter.record_duration(t_compact.elapsed());
 
         reporter.stop();
 

@@ -121,10 +121,11 @@ pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
         key.extend_from_slice(&be_bytes);
         key.resize(key_size, 0);
     } else {
-        // SAFETY (release builds): All workloads validate key_size at entry
-        // (mergerandom >= 2, prefixscan >= 4, default 16), so collisions are
-        // rejected before reaching here. The debug_assert below is a dev-time
-        // belt-and-suspenders check and is intentionally compiled out in release.
+        // SAFETY (release builds): main.rs validates key_size > 0, workloads
+        // validate key_size >= 2 (mergerandom) or >= 4 (prefixscan), default is
+        // 16. For workloads without explicit guards (fillseq, readrandom, etc.),
+        // small key_size + large num may produce collisions — this is user error
+        // detectable via debug_assert in debug builds.
         debug_assert!(
             index < (1u64 << (key_size * 8)),
             "index {index} exceeds unique key space for key_size {key_size}"
