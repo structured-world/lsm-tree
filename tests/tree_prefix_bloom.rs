@@ -1,5 +1,5 @@
 use lsm_tree::{
-    config::PinningPolicy, AbstractTree, Config, KvSeparationOptions, PrefixExtractor,
+    config::PinningPolicy, AbstractTree, Config, Guard, KvSeparationOptions, PrefixExtractor,
     SequenceNumberCounter, Tree,
 };
 use std::sync::Arc;
@@ -293,15 +293,24 @@ fn prefix_bloom_blob_tree() -> lsm_tree::Result<()> {
     tree.insert("order:1:item", "widget", 2);
     tree.flush_active_memtable(0)?;
 
-    // Prefix scan through BlobTree
-    let count = tree.prefix("user:", 3, None).count();
-    assert_eq!(count, 2);
+    // Prefix scan through BlobTree — collect results to surface I/O errors
+    let results: Vec<_> = tree
+        .prefix("user:", 3, None)
+        .map(|g| g.key())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 2);
 
-    let count = tree.prefix("order:", 3, None).count();
-    assert_eq!(count, 1);
+    let results: Vec<_> = tree
+        .prefix("order:", 3, None)
+        .map(|g| g.key())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 1);
 
-    let count = tree.prefix("nonexist:", 3, None).count();
-    assert_eq!(count, 0);
+    let results: Vec<_> = tree
+        .prefix("nonexist:", 3, None)
+        .map(|g| g.key())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 0);
 
     Ok(())
 }

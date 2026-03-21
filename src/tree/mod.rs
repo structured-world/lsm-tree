@@ -390,8 +390,7 @@ impl AbstractTree for Tree {
                 Bloom(policy) => policy,
                 None => BloomConstructionPolicy::BitsPerKey(0.0),
             }
-        })
-        .use_prefix_extractor(self.config.prefix_extractor.clone());
+        });
 
         if index_partitioning {
             table_writer = table_writer.use_partitioned_index();
@@ -399,6 +398,10 @@ impl AbstractTree for Tree {
         if filter_partitioning {
             table_writer = table_writer.use_partitioned_filter();
         }
+
+        // NOTE: prefix extractor must be set AFTER partitioned filter setup,
+        // because use_partitioned_filter() replaces the filter writer entirely.
+        table_writer = table_writer.use_prefix_extractor(self.config.prefix_extractor.clone());
 
         // Set range tombstones BEFORE writing KV items so that if MultiWriter
         // rotates to a new table during the write loop, earlier tables already
@@ -1078,8 +1081,10 @@ impl Tree {
         let prefix_bytes = prefix.as_ref();
 
         // Compute prefix hash for bloom filter skipping when a prefix extractor
-        // is configured. The hash of the raw prefix is checked against segment
-        // bloom filters that index extracted prefixes.
+        // is configured. This is correct because PrefixExtractor::prefixes()
+        // returns sub-slices of the original key — so a user-provided scan prefix
+        // like "adj:out:" will match the identical byte sequence that was extracted
+        // and hashed at write time. The same bytes produce the same hash.
         let prefix_hash = if self.config.prefix_extractor.is_some() && !prefix_bytes.is_empty() {
             Some(Builder::get_hash(prefix_bytes))
         } else {

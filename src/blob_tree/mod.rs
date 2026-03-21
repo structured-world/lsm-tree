@@ -241,6 +241,8 @@ impl AbstractTree for BlobTree {
 
         let prefix_bytes = prefix.as_ref();
 
+        // Correct: PrefixExtractor::prefixes() returns sub-slices of the original
+        // key, so the scan prefix matches the exact bytes hashed at write time.
         let prefix_hash =
             if self.index.config.prefix_extractor.is_some() && !prefix_bytes.is_empty() {
                 Some(Builder::get_hash(prefix_bytes))
@@ -426,8 +428,7 @@ impl AbstractTree for BlobTree {
                 Bloom(policy) => policy,
                 None => BloomConstructionPolicy::BitsPerKey(0.0),
             }
-        })
-        .use_prefix_extractor(self.index.config.prefix_extractor.clone());
+        });
 
         if index_partitioning {
             table_writer = table_writer.use_partitioned_index();
@@ -435,6 +436,11 @@ impl AbstractTree for BlobTree {
         if filter_partitioning {
             table_writer = table_writer.use_partitioned_filter();
         }
+
+        // NOTE: prefix extractor must be set AFTER partitioned filter setup,
+        // because use_partitioned_filter() replaces the filter writer entirely.
+        table_writer =
+            table_writer.use_prefix_extractor(self.index.config.prefix_extractor.clone());
 
         #[expect(
             clippy::expect_used,

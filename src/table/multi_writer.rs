@@ -314,8 +314,7 @@ impl MultiWriter {
             .use_data_block_restart_interval(self.data_block_restart_interval)
             .use_index_block_restart_interval(self.index_block_restart_interval)
             .use_bloom_policy(self.bloom_policy)
-            .use_data_block_hash_ratio(self.data_block_hash_ratio)
-            .use_prefix_extractor(self.prefix_extractor.clone());
+            .use_data_block_hash_ratio(self.data_block_hash_ratio);
 
         if self.use_partitioned_index {
             new_writer = new_writer.use_partitioned_index();
@@ -323,6 +322,10 @@ impl MultiWriter {
         if self.use_partitioned_filter {
             new_writer = new_writer.use_partitioned_filter();
         }
+
+        // NOTE: prefix extractor must be set AFTER partitioned filter setup,
+        // because use_partitioned_filter() replaces the filter writer entirely.
+        new_writer = new_writer.use_prefix_extractor(self.prefix_extractor.clone());
 
         let mut old_writer = std::mem::replace(&mut self.writer, new_writer);
         old_writer.spill_block()?;
