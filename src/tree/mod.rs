@@ -825,7 +825,6 @@ impl Tree {
         let mut base_value: Option<UserValue> = None;
         let mut found_base = false;
 
-        // Process a single entry. Returns true if search should stop.
         let mut has_indirection_base = false;
 
         // Process a single entry. Returns true if search should stop.
