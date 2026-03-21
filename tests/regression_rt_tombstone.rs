@@ -114,8 +114,8 @@ fn regression_remove_range_then_insert_then_remove() -> lsm_tree::Result<()> {
     let result = tree.get(&[2u8], 8)?;
     assert_eq!(
         result, None,
-        "point tombstone at seqno 7 should shadow insert at seqno 6, \
-         but range tombstone in SST-2 makes the point tombstone invisible"
+        "point tombstone at seqno 7 must remain visible and shadow insert at seqno 6, \
+         even in the presence of the range tombstone in SST-2"
     );
 
     Ok(())
