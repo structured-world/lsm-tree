@@ -401,6 +401,8 @@ impl AbstractTree for Tree {
 
         // NOTE: prefix extractor must be set AFTER partitioned filter setup,
         // because use_partitioned_filter() replaces the filter writer entirely.
+        // TODO: make use_partitioned_filter() preserve the extractor to avoid
+        // this ordering requirement across all call sites.
         table_writer = table_writer.use_prefix_extractor(self.config.prefix_extractor.clone());
 
         // Set range tombstones BEFORE writing KV items so that if MultiWriter
@@ -726,7 +728,7 @@ impl Tree {
     /// Like [`Tree::create_internal_range`], but with an optional prefix hash
     /// for prefix bloom filter skipping during prefix scans.
     #[doc(hidden)]
-    pub fn create_internal_range_with_prefix_hash<
+    pub(crate) fn create_internal_range_with_prefix_hash<
         'a,
         K: AsRef<[u8]> + 'a,
         R: RangeBounds<K> + 'a,

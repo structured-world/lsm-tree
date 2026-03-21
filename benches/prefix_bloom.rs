@@ -48,8 +48,9 @@ fn setup_tree(
     }
 
     // Compact to L1 for single-table runs (bloom skip applies here).
-    // Use u64::MAX target size to avoid pathological micro-tables.
-    tree.major_compact(u64::MAX, 0).unwrap();
+    // 64 KiB target produces multiple reasonably-sized tables so the
+    // benchmark measures actual bloom-skip benefits across segments.
+    tree.major_compact(64 * 1024, 0).unwrap();
     tree
 }
 
