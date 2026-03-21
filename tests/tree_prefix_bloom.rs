@@ -386,12 +386,16 @@ fn prefix_bloom_skip_on_compacted_levels() -> lsm_tree::Result<()> {
         tree.flush_active_memtable(0)?;
     }
 
-    // Compact to L1 — all tables will have "data:" prefix in bloom.
-    // Use large target_size to produce a few reasonably-sized tables.
-    tree.major_compact(64 * 1024 * 1024, 0)?;
+    // Compact with small target_size so compaction produces multiple L1 tables.
+    // Each table covers a sub-range of "data:" keys, enabling bloom-skip for
+    // prefixes that fall in the key_range but were never indexed.
+    tree.major_compact(1, 0)?;
 
     let table_count = tree.table_count();
-    assert!(table_count >= 1, "should have tables after compaction");
+    assert!(
+        table_count >= 2,
+        "compaction must produce >=2 tables for bloom skip to apply, got {table_count}",
+    );
 
     // Scanning "data:" should find all 500 keys.
     let results: Vec<_> = tree
