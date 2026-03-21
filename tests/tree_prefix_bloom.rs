@@ -458,7 +458,7 @@ fn prefix_bloom_non_boundary_prefix_no_false_negative() -> lsm_tree::Result<()> 
 }
 
 #[test]
-fn prefix_bloom_false_negative_in_key_range_gap() -> lsm_tree::Result<()> {
+fn prefix_bloom_negative_lookup_in_key_range_gap() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let tree = tree_with_prefix_bloom(&folder)?;
 

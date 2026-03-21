@@ -47,8 +47,9 @@ pub trait PrefixExtractor:
     /// checked against the bloom — segments without a match are skipped.
     ///
     /// Implementations should return prefixes from shortest to longest.
-    /// Do **not** include the full key itself — it is always indexed
-    /// separately by the standard bloom path.
+    /// The full key itself is always indexed separately by the standard bloom
+    /// path; including it in the returned prefixes is allowed but redundant
+    /// and generally unnecessary.
     ///
     /// The returned iterator must be finite and yield a small number of
     /// prefixes per key (typically 1–5). It is called on the write path
