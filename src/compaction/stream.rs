@@ -330,7 +330,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
 
                     // NOTE: Only item of this key and thus latest version, so return it no matter what
                     // For a lone merge operand with a merge operator and below GC threshold,
-                    // resolve it to a Value via partial merge
+                    // collapse via partial merge (result stays MergeOperand if no base found)
                     if head.key.value_type.is_merge_operand()
                         && head.key.seqno < self.gc_seqno_threshold
                     {
