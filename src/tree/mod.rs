@@ -815,6 +815,10 @@ impl Tree {
     /// Collects ALL entries for the key across all storage layers (active memtable,
     /// sealed memtables, disk tables), identifies the base value, and applies the
     /// merge operator. Entries are processed from newest to oldest (descending seqno).
+    ///
+    // TODO: range tombstone suppression is not applied here — operands or base
+    // values that are logically deleted by a range tombstone may still be merged.
+    // This requires passing range tombstone state into the scan loop.
     fn resolve_merge_get(
         super_version: &SuperVersion,
         key: &[u8],
