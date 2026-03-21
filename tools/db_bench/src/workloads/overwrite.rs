@@ -10,10 +10,6 @@ use std::time::Instant;
 pub struct Overwrite;
 
 impl Workload for Overwrite {
-    fn name(&self) -> &'static str {
-        "overwrite"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,

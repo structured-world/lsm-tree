@@ -134,14 +134,16 @@ fn run_mvcc_test(ops: Vec<MvccOp>) -> Result<(), TestCaseError> {
                 let val = vec![*value; 4];
                 oracle.insert(key.clone(), val.clone(), seqno);
                 tree.insert(key, val, seqno);
-                snapshot_seqnos.push(seqno);
+                // Record seqno + 1 so reads at this snapshot see the write
+                // (lsm-tree uses exclusive upper bound: entry_seqno < read_seqno)
+                snapshot_seqnos.push(seqno + 1);
                 seqno += 1;
             }
             MvccOp::Remove { key_idx } => {
                 let key = key_from_idx(*key_idx);
                 oracle.remove(key.clone(), seqno);
                 tree.remove(key, seqno);
-                snapshot_seqnos.push(seqno);
+                snapshot_seqnos.push(seqno + 1);
                 seqno += 1;
             }
             MvccOp::Flush => {

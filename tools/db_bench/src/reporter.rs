@@ -30,8 +30,9 @@ impl Reporter {
     /// Record a single operation's latency in nanoseconds.
     #[inline]
     pub fn record(&mut self, nanos: u64) {
-        let _ = self.histogram.record(nanos);
-        self.ops_counted += 1;
+        if self.histogram.record(nanos).is_ok() {
+            self.ops_counted += 1;
+        }
     }
 
     /// Stop the measurement timer.
@@ -39,13 +40,6 @@ impl Reporter {
         if let Some(start) = self.start.take() {
             self.elapsed = start.elapsed();
         }
-    }
-
-    /// Reset histogram (used after warmup phase).
-    pub fn reset(&mut self) {
-        self.histogram.reset();
-        self.ops_counted = 0;
-        self.start = Some(Instant::now());
     }
 
     /// Merge another reporter's histogram into this one.

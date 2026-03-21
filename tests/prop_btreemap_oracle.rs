@@ -223,9 +223,18 @@ fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
         prop_assert_eq!(
             actual_prefix.len(),
             expected_prefix.len(),
-            "Prefix scan mismatch for prefix {:?}",
+            "Prefix scan length mismatch for prefix {:?}",
             prefix,
         );
+
+        for (actual, expected) in actual_prefix.iter().zip(expected_prefix.iter()) {
+            prop_assert_eq!(
+                actual,
+                expected,
+                "Prefix scan entry mismatch for prefix {:?}",
+                prefix,
+            );
+        }
     }
 
     Ok(())

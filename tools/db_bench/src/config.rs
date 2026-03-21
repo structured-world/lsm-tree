@@ -33,7 +33,6 @@ pub struct BenchConfig {
     pub compression: Compression,
     pub block_size: u32,
     pub use_blob_tree: bool,
-    pub warmup_secs: u64,
 }
 
 impl BenchConfig {

@@ -9,10 +9,6 @@ use std::time::Instant;
 pub struct FillRandom;
 
 impl Workload for FillRandom {
-    fn name(&self) -> &'static str {
-        "fillrandom"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,

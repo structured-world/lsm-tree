@@ -59,10 +59,6 @@ struct Cli {
     /// Database directory path. If not set, a temporary directory is used.
     #[arg(long)]
     db: Option<PathBuf>,
-
-    /// Warmup period in seconds before measurement.
-    #[arg(long, default_value = "0")]
-    warmup_secs: u64,
 }
 
 fn parse_benchmark(s: &str) -> Result<String, String> {
@@ -90,7 +86,6 @@ fn main() {
         compression: cli.compression,
         block_size: cli.block_size,
         use_blob_tree: cli.use_blob_tree,
-        warmup_secs: cli.warmup_secs,
     };
 
     // Use provided path or create a temp directory.

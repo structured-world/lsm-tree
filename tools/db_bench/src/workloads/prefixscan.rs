@@ -13,10 +13,6 @@ const NUM_PREFIXES: u16 = 256;
 const SCAN_LIMIT: usize = 10;
 
 impl Workload for PrefixScan {
-    fn name(&self) -> &'static str {
-        "prefixscan"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,
@@ -38,7 +34,7 @@ impl Workload for PrefixScan {
 
             let t = Instant::now();
             let iter = tree.prefix(&prefix_bytes, read_seq, None);
-            let _results: Vec<_> = iter.take(SCAN_LIMIT).collect();
+            iter.take(SCAN_LIMIT).for_each(|_| {});
             reporter.record(t.elapsed().as_nanos() as u64);
         }
 

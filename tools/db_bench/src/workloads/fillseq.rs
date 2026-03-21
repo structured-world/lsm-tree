@@ -9,10 +9,6 @@ use std::time::Instant;
 pub struct FillSeq;
 
 impl Workload for FillSeq {
-    fn name(&self) -> &'static str {
-        "fillseq"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,

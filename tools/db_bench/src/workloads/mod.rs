@@ -15,9 +15,6 @@ use std::sync::atomic::AtomicU64;
 
 /// All benchmark workloads implement this trait.
 pub trait Workload {
-    /// Human-readable name of the benchmark.
-    fn name(&self) -> &'static str;
-
     /// Run the benchmark, recording latencies into the reporter.
     fn run(
         &self,

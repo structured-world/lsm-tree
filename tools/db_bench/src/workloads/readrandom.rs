@@ -10,10 +10,6 @@ use std::time::Instant;
 pub struct ReadRandom;
 
 impl Workload for ReadRandom {
-    fn name(&self) -> &'static str {
-        "readrandom"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,

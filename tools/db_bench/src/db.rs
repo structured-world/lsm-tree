@@ -3,8 +3,6 @@ use lsm_tree::{AbstractTree, AnyTree, SeqNo};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Prefill a tree with sequential keys for read benchmarks.
-///
-/// Returns the next available seqno.
 pub fn prefill_sequential(
     tree: &AnyTree,
     config: &BenchConfig,
@@ -46,13 +44,22 @@ pub fn prefill_prefix_keys(
     seqno: &AtomicU64,
     num_prefixes: u16,
 ) -> lsm_tree::Result<()> {
-    let keys_per_prefix = config.num / num_prefixes as u64;
+    let mut keys_per_prefix = config.num / num_prefixes as u64;
+    if keys_per_prefix == 0 && config.num > 0 {
+        keys_per_prefix = 1;
+    }
     let batch_size = 10_000u64;
     let mut total = 0u64;
 
     for prefix in 0..num_prefixes {
+        if total >= config.num {
+            break;
+        }
         let prefix_bytes = prefix.to_be_bytes();
         for suffix in 0..keys_per_prefix {
+            if total >= config.num {
+                break;
+            }
             let mut key = Vec::with_capacity(config.key_size);
             key.extend_from_slice(&prefix_bytes);
             let suffix_bytes = suffix.to_be_bytes();

@@ -9,10 +9,6 @@ use std::time::Instant;
 pub struct ReadSeq;
 
 impl Workload for ReadSeq {
-    fn name(&self) -> &'static str {
-        "readseq"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,
@@ -28,15 +24,22 @@ impl Workload for ReadSeq {
 
         reporter.start();
 
-        let iter = tree.iter(read_seq, None);
-        for item in iter {
+        let mut iter = tree.iter(read_seq, None);
+        loop {
             let t = Instant::now();
-            let _kv = item;
-            reporter.record(t.elapsed().as_nanos() as u64);
+            match iter.next() {
+                Some(item) => {
+                    let _kv = item;
+                    reporter.record(t.elapsed().as_nanos() as u64);
 
-            count += 1;
-            if count >= config.num {
-                break;
+                    count += 1;
+                    if count >= config.num {
+                        break;
+                    }
+                }
+                None => {
+                    break;
+                }
             }
         }
 

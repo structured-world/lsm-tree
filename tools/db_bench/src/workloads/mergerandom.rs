@@ -11,10 +11,6 @@ use std::time::Instant;
 pub struct MergeRandom;
 
 impl Workload for MergeRandom {
-    fn name(&self) -> &'static str {
-        "mergerandom"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,

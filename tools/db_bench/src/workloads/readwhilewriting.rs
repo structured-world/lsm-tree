@@ -11,10 +11,6 @@ use std::time::Instant;
 pub struct ReadWhileWriting;
 
 impl Workload for ReadWhileWriting {
-    fn name(&self) -> &'static str {
-        "readwhilewriting"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,
@@ -47,7 +43,11 @@ impl Workload for ReadWhileWriting {
                             let key = make_sequential_key(idx, config.key_size);
 
                             let t = Instant::now();
-                            let _ = tree.get(&key, read_seq);
+                            // Unwrap read errors — silent failures would
+                            // hide real issues in the benchmark.
+                            let _val = tree
+                                .get(&key, read_seq)
+                                .expect("read failed during benchmark");
                             local_reporter.record(t.elapsed().as_nanos() as u64);
                         }
 

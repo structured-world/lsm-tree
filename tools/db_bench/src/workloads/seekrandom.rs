@@ -10,10 +10,6 @@ use std::time::Instant;
 pub struct SeekRandom;
 
 impl Workload for SeekRandom {
-    fn name(&self) -> &'static str {
-        "seekrandom"
-    }
-
     fn run(
         &self,
         tree: &AnyTree,
