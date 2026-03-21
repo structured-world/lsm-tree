@@ -130,6 +130,14 @@ impl Metadata {
                 .ok_or(crate::Error::InvalidHeader("BlobFileMeta"))?
         };
 
+        // Reject unknown versions early to catch corrupted or
+        // future-incompatible metadata before downstream code
+        // misinterprets header fields.
+        match version {
+            3 | 4 => {}
+            _ => return Err(crate::Error::InvalidHeader("BlobFileMeta")),
+        }
+
         let id = read_u64!(block, b"id");
         let created_at = read_u128!(block, b"created_at");
         let item_count = read_u64!(block, b"item_count");

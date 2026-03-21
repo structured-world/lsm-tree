@@ -210,7 +210,9 @@ mod tests {
             .position(|w| w == BLOB_HEADER_MAGIC_V4)
             .unwrap();
 
-        // Tamper seqno: frame_start + magic(4) + checksum(16) = +20
+        // Tamper seqno: frame_start + magic(4) + checksum(16) = +20.
+        // Offset derived from V4 header layout in writer.rs; named constants
+        // are not defined for individual field positions (only total header len).
         let seqno_offset = frame_start + 20;
         raw[seqno_offset..seqno_offset + 8].copy_from_slice(&99u64.to_le_bytes());
         std::fs::write(&blob_file_path, &raw)?;
@@ -333,6 +335,7 @@ mod tests {
     /// Scanner rejects frames with invalid magic (neither V3 nor V4).
     #[test]
     fn blob_scanner_rejects_invalid_magic() -> crate::Result<()> {
+        use crate::vlog::blob_file::writer::BLOB_HEADER_MAGIC_V4;
         let dir = tempdir()?;
         let blob_file_path = dir.path().join("0");
 
@@ -345,7 +348,10 @@ mod tests {
         // Corrupt magic bytes at offset 0 (after sfa segment header)
         let mut raw = std::fs::read(&blob_file_path)?;
         // sfa "data" segment header is at the start; find BLOB/BLO4 magic
-        let magic_pos = raw.windows(4).position(|w| w == b"BLO4").unwrap();
+        let magic_pos = raw
+            .windows(BLOB_HEADER_MAGIC_V4.len())
+            .position(|w| w == BLOB_HEADER_MAGIC_V4)
+            .unwrap();
         raw[magic_pos..magic_pos + 4].copy_from_slice(b"XXXX");
         std::fs::write(&blob_file_path, &raw)?;
 
