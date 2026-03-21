@@ -194,8 +194,11 @@ fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
 
     // Verify full scan.
     let expected_scan = oracle.scan(read_seqno);
-    let actual_scan: Vec<(Vec<u8>, Vec<u8>)> =
-        tree.iter(read_seqno, None).map(guard_to_kv).collect();
+    let actual_scan: Vec<(Vec<u8>, Vec<u8>)> = tree
+        .iter(read_seqno, None)
+        .map(guard_to_kv)
+        .collect::<lsm_tree::Result<Vec<_>>>()
+        .map_err(|e| TestCaseError::fail(format!("scan: {e}")))?;
 
     prop_assert_eq!(
         actual_scan.len(),
@@ -216,7 +219,8 @@ fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
         let actual_prefix: Vec<(Vec<u8>, Vec<u8>)> = tree
             .prefix(&prefix, read_seqno, None)
             .map(guard_to_kv)
-            .collect();
+            .collect::<lsm_tree::Result<Vec<_>>>()
+            .map_err(|e| TestCaseError::fail(format!("prefix scan: {e}")))?;
 
         prop_assert_eq!(
             actual_prefix.len(),

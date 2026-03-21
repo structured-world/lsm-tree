@@ -190,8 +190,11 @@ fn run_mvcc_test(ops: Vec<MvccOp>) -> Result<(), TestCaseError> {
 
         // Forward scan.
         let expected_scan = oracle.scan(snap_seqno);
-        let actual_scan: Vec<(Vec<u8>, Vec<u8>)> =
-            tree.iter(snap_seqno, None).map(guard_to_kv).collect();
+        let actual_scan: Vec<(Vec<u8>, Vec<u8>)> = tree
+            .iter(snap_seqno, None)
+            .map(guard_to_kv)
+            .collect::<lsm_tree::Result<Vec<_>>>()
+            .map_err(|e| TestCaseError::fail(format!("scan: {e}")))?;
 
         prop_assert_eq!(
             actual_scan.len(),
@@ -213,8 +216,12 @@ fn run_mvcc_test(ops: Vec<MvccOp>) -> Result<(), TestCaseError> {
         }
 
         // Reverse scan must match forward scan reversed.
-        let actual_rev: Vec<(Vec<u8>, Vec<u8>)> =
-            tree.iter(snap_seqno, None).rev().map(guard_to_kv).collect();
+        let actual_rev: Vec<(Vec<u8>, Vec<u8>)> = tree
+            .iter(snap_seqno, None)
+            .rev()
+            .map(guard_to_kv)
+            .collect::<lsm_tree::Result<Vec<_>>>()
+            .map_err(|e| TestCaseError::fail(format!("rev scan: {e}")))?;
 
         let expected_rev: Vec<_> = actual_scan.into_iter().rev().collect();
 

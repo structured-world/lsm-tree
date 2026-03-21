@@ -208,8 +208,11 @@ fn run_rt_test(ops: Vec<RtOp>) -> Result<(), TestCaseError> {
 
     // Full scan.
     let expected_scan = oracle.scan(read_seqno);
-    let actual_scan: Vec<(Vec<u8>, Vec<u8>)> =
-        tree.iter(read_seqno, None).map(guard_to_kv).collect();
+    let actual_scan: Vec<(Vec<u8>, Vec<u8>)> = tree
+        .iter(read_seqno, None)
+        .map(guard_to_kv)
+        .collect::<lsm_tree::Result<Vec<_>>>()
+        .map_err(|e| TestCaseError::fail(format!("scan: {e}")))?;
 
     prop_assert_eq!(
         actual_scan.len(),
@@ -225,8 +228,12 @@ fn run_rt_test(ops: Vec<RtOp>) -> Result<(), TestCaseError> {
 
     // Reverse scan.
     let expected_rev: Vec<_> = expected_scan.into_iter().rev().collect();
-    let actual_rev: Vec<(Vec<u8>, Vec<u8>)> =
-        tree.iter(read_seqno, None).rev().map(guard_to_kv).collect();
+    let actual_rev: Vec<(Vec<u8>, Vec<u8>)> = tree
+        .iter(read_seqno, None)
+        .rev()
+        .map(guard_to_kv)
+        .collect::<lsm_tree::Result<Vec<_>>>()
+        .map_err(|e| TestCaseError::fail(format!("rev scan: {e}")))?;
 
     prop_assert_eq!(
         actual_rev.len(),
