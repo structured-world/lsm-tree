@@ -811,3 +811,50 @@ fn merge_rt_across_flush_boundary() -> lsm_tree::Result<()> {
 
     Ok(())
 }
+
+/// RT in sealed memtable suppresses base in earlier sealed memtable.
+#[test]
+fn merge_rt_in_sealed_memtable() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    // Base in first sealed memtable
+    tree.insert("counter", 100_i64.to_le_bytes(), 0);
+    tree.seal_active_memtable();
+
+    // RT in second sealed memtable kills base
+    tree.remove_range("counter", "counter\x00", 5);
+    tree.seal_active_memtable();
+
+    // Operand in active memtable above RT
+    tree.merge("counter", 33_i64.to_le_bytes(), 10);
+
+    // base@0 suppressed by RT@5 in sealed memtable, operand@10 survives
+    assert_eq!(Some(33), get_counter(&tree, "counter", 11));
+
+    Ok(())
+}
+
+/// Multiple operands across disk and memtable, RT kills the middle ones.
+#[test]
+fn merge_rt_partial_suppression_across_layers() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    // Base + old operand on disk
+    tree.insert("counter", 100_i64.to_le_bytes(), 0);
+    tree.merge("counter", 10_i64.to_le_bytes(), 1);
+    tree.flush_active_memtable(0)?;
+
+    // RT kills everything at seqno < 5 (base@0 + operand@1)
+    tree.remove_range("counter", "counter\x00", 5);
+
+    // New operands above RT
+    tree.merge("counter", 20_i64.to_le_bytes(), 6);
+    tree.merge("counter", 30_i64.to_le_bytes(), 7);
+
+    // Only op@6 + op@7 survive. merge(None, [20, 30]) = 0 + 20 + 30 = 50
+    assert_eq!(Some(50), get_counter(&tree, "counter", 8));
+
+    Ok(())
+}

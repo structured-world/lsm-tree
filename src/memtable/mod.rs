@@ -689,4 +689,39 @@ mod tests {
             memtable.get(b"abc", 50)
         );
     }
+
+    #[test]
+    fn get_all_for_key_seqno_zero_returns_empty() {
+        let memtable = Memtable::default();
+        memtable.insert(
+            crate::InternalValue::from_components("key", "val", 1, ValueType::Value),
+            0,
+        );
+
+        // seqno=0 means nothing is visible — early return
+        assert!(memtable.get_all_for_key(b"key", 0).is_empty());
+    }
+
+    #[test]
+    fn get_all_for_key_returns_all_versions() {
+        let memtable = Memtable::default();
+        memtable.insert(
+            crate::InternalValue::from_components("key", "op2", 3, ValueType::MergeOperand),
+            0,
+        );
+        memtable.insert(
+            crate::InternalValue::from_components("key", "op1", 2, ValueType::MergeOperand),
+            0,
+        );
+        memtable.insert(
+            crate::InternalValue::from_components("key", "base", 1, ValueType::Value),
+            0,
+        );
+
+        let entries = memtable.get_all_for_key(b"key", 4);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].key.seqno, 3);
+        assert_eq!(entries[1].key.seqno, 2);
+        assert_eq!(entries[2].key.seqno, 1);
+    }
 }
