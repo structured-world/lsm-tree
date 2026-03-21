@@ -14,8 +14,6 @@ use crate::{
 };
 use std::{fs::File, io::BufWriter, sync::Arc};
 
-// NOTE: This trait is pub because the `table::writer` module is pub, but it is
-// NOT re-exported from the crate root — no downstream can implement it.
 // All methods are required (no defaults) by design so that implementations must
 // explicitly handle configuration changes (e.g., filter policies, prefix extractors).
 pub trait FilterWriter<W: std::io::Write> {
