@@ -342,3 +342,52 @@ fn prefix_bloom_many_disjoint_segments() -> lsm_tree::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn prefix_bloom_skip_on_compacted_levels() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = tree_with_prefix_bloom(&folder)?;
+
+    // Create disjoint segments and compact to L1+ where single-table runs
+    // enable the prefix bloom skip path (Ok(false) branch in range.rs).
+    // L0 tables are multi-table runs where bloom is not checked.
+
+    // Batch 1: keys in "aaa:" prefix space
+    for i in 0u64..50 {
+        let key = format!("aaa:{i:04}");
+        tree.insert(key, "v", i);
+    }
+    tree.flush_active_memtable(0)?;
+
+    // Batch 2: keys in "zzz:" prefix space (disjoint from batch 1)
+    for i in 50u64..100 {
+        let key = format!("zzz:{i:04}");
+        tree.insert(key, "v", i);
+    }
+    tree.flush_active_memtable(0)?;
+
+    // Compact to move tables from L0 (multi-run) to L1+ (single-table runs)
+    // Use small target size to keep tables disjoint in L1
+    tree.major_compact(u64::MAX, 0)?;
+
+    // Now tables are in L1+ as single-table runs. Prefix scan for "aaa:"
+    // should skip the "zzz:" table via bloom filter.
+    let results: Vec<_> = tree
+        .create_prefix("aaa:", 100, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 50);
+
+    // And vice versa
+    let results: Vec<_> = tree
+        .create_prefix("zzz:", 100, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 50);
+
+    // Non-existent prefix
+    let results: Vec<_> = tree
+        .create_prefix("mmm:", 100, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 0);
+
+    Ok(())
+}
