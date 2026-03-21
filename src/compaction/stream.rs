@@ -267,6 +267,10 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
 impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for CompactionStream<'a, I, F> {
     type Item = Item;
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "compaction pipeline has many interleaved concerns"
+    )]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             // If there are pending entries (e.g., operands buffered while resolving
