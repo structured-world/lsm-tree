@@ -108,12 +108,11 @@ impl<'a> Reader<'a> {
         // Uses the on-disk CRC value (not recomputed) in data checksum
         // verification so that recomputing header_crc after tampering
         // header fields is still caught by the data checksum.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "real_val_len bounded by MAX_DECOMPRESSION_SIZE"
-        )]
         let stored_header_crc = if frame_is_v4 {
             let crc = reader.read_u32::<LittleEndian>()?;
+            // real_val_len was read as u32 (line above), widened to usize;
+            // cast back is lossless on all targets.
+            #[expect(clippy::cast_possible_truncation)]
             validate_header_crc(seqno, key_len, real_val_len as u32, on_disk_val_len, crc)?;
             Some(crc)
         } else {

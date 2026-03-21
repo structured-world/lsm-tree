@@ -41,10 +41,6 @@ pub const BLOB_HEADER_MAGIC_V3: &[u8] = b"BLOB";
 /// V4 blob frame magic (includes header checksum).
 pub const BLOB_HEADER_MAGIC_V4: &[u8] = b"BLO4";
 
-/// Backwards-compatible alias for V4 blob frame magic.
-/// Prefer `BLOB_HEADER_MAGIC_V4` in new code.
-pub const BLOB_HEADER_MAGIC: &[u8] = BLOB_HEADER_MAGIC_V4;
-
 /// V3 blob frame header length (38 bytes, no `header_crc`).
 pub const BLOB_HEADER_LEN_V3: usize = BLOB_HEADER_MAGIC_V3.len()
     + std::mem::size_of::<u128>() // Checksum
@@ -257,7 +253,7 @@ impl Writer {
         };
 
         // Write header
-        self.writer.write_all(BLOB_HEADER_MAGIC)?;
+        self.writer.write_all(BLOB_HEADER_MAGIC_V4)?;
 
         // Write data checksum
         self.writer.write_u128::<LittleEndian>(checksum)?;
