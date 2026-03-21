@@ -830,13 +830,7 @@ impl Tree {
             let rts = table.range_tombstones();
             let candidate_end = rts.partition_point(|rt| rt.start.as_ref() <= key);
 
-            // SAFETY: partition_point returns 0..=len, so this slice never panics.
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "partition_point guarantees idx <= len"
-            )]
-            let candidates = &rts[..candidate_end];
-            for rt in candidates {
+            for rt in rts.iter().take(candidate_end) {
                 // Binary search already narrowed to start <= key; should_suppress
                 // re-checks contains_key (harmless) and avoids semantic drift.
                 if rt.should_suppress(key, key_seqno, read_seqno) {

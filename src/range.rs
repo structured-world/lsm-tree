@@ -237,9 +237,11 @@ impl TreeIter {
             }
 
             // Sort SST-sourced RTs by start key for binary search in
-            // table-skip below. The full list is re-sorted (with memtable RTs)
-            // later for the RangeTombstoneFilter.
-            all_range_tombstones.sort_by(|a, b| a.0.cmp(&b.0));
+            // table-skip below. Uses explicit start-key comparator so the
+            // partition_point invariant is enforced locally, independent of
+            // RangeTombstone::Ord. The full list is re-sorted (with memtable
+            // RTs) later for the RangeTombstoneFilter.
+            all_range_tombstones.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start));
 
             for table in single_tables {
                 // Table-skip: if a range tombstone fully covers this table
@@ -258,14 +260,10 @@ impl TreeIter {
                 let candidate_end =
                     all_range_tombstones.partition_point(|(rt, _)| rt.start.as_ref() <= table_min);
 
-                // SAFETY: partition_point returns 0..=len, so this slice never panics.
-                #[expect(
-                    clippy::indexing_slicing,
-                    reason = "partition_point guarantees idx <= len"
-                )]
                 let is_covered =
-                    all_range_tombstones[..candidate_end]
+                    all_range_tombstones
                         .iter()
+                        .take(candidate_end)
                         .any(|(rt, cutoff)| {
                             rt.visible_at(*cutoff)
                                 && rt.fully_covers(table_min, table_max)
