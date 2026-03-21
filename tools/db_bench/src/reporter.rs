@@ -29,11 +29,17 @@ impl Reporter {
 
     /// Record a single operation's latency in nanoseconds.
     /// Values exceeding the histogram max (10s) are clamped to avoid silent drops.
+    #[expect(
+        clippy::expect_used,
+        reason = "Histogram::record can only fail for out-of-range values, which we clamp"
+    )]
     #[inline]
     pub fn record(&mut self, nanos: u64) {
         // Clamp to histogram max rather than silently dropping extreme values.
         let clamped = nanos.min(self.histogram.high());
-        let _ = self.histogram.record(clamped);
+        self.histogram
+            .record(clamped)
+            .expect("failed to record latency in histogram");
         self.ops_counted += 1;
     }
 

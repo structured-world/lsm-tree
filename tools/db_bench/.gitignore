@@ -1,1 +1,4 @@
+# Ignore proptest regression output
+proptest-regressions/
+**/proptest-regressions/
 *.proptest-regressions

@@ -106,7 +106,9 @@ pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
     let be_bytes = index.to_be_bytes();
     let mut key = Vec::with_capacity(key_size);
     let copy_len = key_size.min(be_bytes.len());
-    // For small key_size, take the most significant bytes to preserve ordering.
+    // For small key_size, take the most significant bytes to preserve sort order.
+    // MSB-first is intentional: keys remain lexicographically sorted for range scans.
+    // The debug_assert above catches collisions when index exceeds the key space.
     key.extend_from_slice(&be_bytes[..copy_len]);
     key.resize(key_size, 0);
     key
