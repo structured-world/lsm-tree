@@ -5,7 +5,7 @@
 use crate::{
     vlog::{
         blob_file::writer::{
-            BLOB_HEADER_LEN, BLOB_HEADER_LEN_V3, BLOB_HEADER_MAGIC, BLOB_HEADER_MAGIC_V3,
+            validate_header_crc, BLOB_HEADER_LEN, BLOB_HEADER_MAGIC, BLOB_HEADER_MAGIC_V3,
         },
         ValueHandle,
     },
@@ -35,38 +35,6 @@ pub struct Reader<'a> {
     file: &'a File,
 }
 
-/// Validate V4 header CRC: recompute from header fields and compare
-/// against the stored value. Returns the stored CRC on success.
-fn validate_header_crc(
-    seqno: u64,
-    key_len: u16,
-    real_val_len: u32,
-    on_disk_val_len: u32,
-    stored_crc: u32,
-) -> crate::Result<()> {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "intentionally truncated to 4-byte CRC"
-    )]
-    let recomputed_crc = {
-        let mut hasher = xxhash_rust::xxh3::Xxh3::default();
-        hasher.update(&seqno.to_le_bytes());
-        hasher.update(&key_len.to_le_bytes());
-        hasher.update(&real_val_len.to_le_bytes());
-        hasher.update(&on_disk_val_len.to_le_bytes());
-        hasher.digest128() as u32
-    };
-
-    if stored_crc != recomputed_crc {
-        return Err(crate::Error::ChecksumMismatch {
-            got: Checksum::from_raw(u128::from(recomputed_crc)),
-            expected: Checksum::from_raw(u128::from(stored_crc)),
-        });
-    }
-
-    Ok(())
-}
-
 impl<'a> Reader<'a> {
     pub fn new(blob_file: &'a BlobFile, file: &'a File) -> Self {
         Self { blob_file, file }
@@ -82,15 +50,12 @@ impl<'a> Reader<'a> {
             return Err(crate::Error::InvalidHeader("Blob"));
         }
 
-        // Use blob file version to determine header size for the read.
-        let is_v4 = self.blob_file.0.meta.version >= 4;
-        let header_len = if is_v4 {
-            BLOB_HEADER_LEN
-        } else {
-            BLOB_HEADER_LEN_V3
-        };
-
-        let add_size = (header_len as u64) + (key.len() as u64);
+        // Always read with V4 (max) header size so that version detection
+        // is self-describing from the frame magic — no dependency on
+        // metadata version which could be corrupted independently.
+        // For V3 frames, the extra 4 bytes read are harmless (they come
+        // from the next frame or the metadata section).
+        let add_size = (BLOB_HEADER_LEN as u64) + (key.len() as u64);
 
         // Validate the full on-disk read size (header + key + value) against the limit.
         // Allow header+key overhead on top of the data cap.
@@ -123,7 +88,7 @@ impl<'a> Reader<'a> {
         let mut magic = [0u8; 4];
         reader.read_exact(&mut magic)?;
 
-        // Accept both V3 (b"BLOB") and V4 (b"BLO4") magic.
+        // Determine format from frame magic — self-describing, no metadata dependency.
         let frame_is_v4 = magic == BLOB_HEADER_MAGIC;
         if !frame_is_v4 && magic != BLOB_HEADER_MAGIC_V3 {
             return Err(crate::Error::InvalidHeader("Blob"));
@@ -171,6 +136,13 @@ impl<'a> Reader<'a> {
             });
         }
 
+        // Actual header length determined from frame magic, not metadata.
+        let header_len = if frame_is_v4 {
+            BLOB_HEADER_LEN
+        } else {
+            crate::vlog::blob_file::writer::BLOB_HEADER_LEN_V3
+        };
+
         // Zero-copy view of the on-disk key bytes for checksum and cross-check.
         // The full blob record is already in `value`, so slicing avoids an extra
         // allocation vs UserKey::from_reader (upstream #277).
@@ -183,11 +155,8 @@ impl<'a> Reader<'a> {
             return Err(crate::Error::InvalidHeader("Blob"));
         }
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "add_size = header_len + key.len(); key.len() <= u16::MAX and header_len is a small constant, so add_size fits in usize"
-        )]
-        let raw_data = value.slice((add_size as usize)..);
+        let data_offset = header_len + key.len();
+        let raw_data = value.slice(data_offset..);
 
         {
             // Checksum covers on-disk key + raw value data (upstream #277).
@@ -262,6 +231,7 @@ impl<'a> Reader<'a> {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::vlog::blob_file::writer::BLOB_HEADER_LEN_V3;
     use crate::SequenceNumberCounter;
     use test_log::test;
 

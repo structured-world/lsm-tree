@@ -121,10 +121,9 @@ impl Metadata {
         let block = DataBlock::new(block);
 
         let version = {
-            #[expect(clippy::expect_used, reason = "blob_file_version is expected to exist")]
             let bytes = block
                 .point_read(b"blob_file_version", SeqNo::MAX)
-                .expect("blob_file_version should exist");
+                .ok_or(crate::Error::InvalidHeader("BlobFileMeta"))?;
             *bytes
                 .value
                 .first()

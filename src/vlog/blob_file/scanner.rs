@@ -2,7 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use super::writer::{BLOB_HEADER_MAGIC, BLOB_HEADER_MAGIC_V3};
+use super::writer::{validate_header_crc, BLOB_HEADER_MAGIC, BLOB_HEADER_MAGIC_V3};
 use crate::{
     vlog::{blob_file::meta::METADATA_HEADER_MAGIC, BlobFileId},
     Checksum, SeqNo, UserKey, UserValue,
@@ -88,30 +88,16 @@ impl Iterator for Scanner {
 
         let on_disk_val_len = fail_iter!(self.inner.read_u32::<LittleEndian>());
 
-        // V4: read and validate header CRC.
+        // V4: read and validate header CRC using shared validator.
         let stored_header_crc = if frame_is_v4 {
             let crc = fail_iter!(self.inner.read_u32::<LittleEndian>());
-
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "intentionally truncated to 4-byte CRC"
-            )]
-            let recomputed_crc = {
-                let mut hasher = xxhash_rust::xxh3::Xxh3::default();
-                hasher.update(&seqno.to_le_bytes());
-                hasher.update(&key_len.to_le_bytes());
-                hasher.update(&real_val_len.to_le_bytes());
-                hasher.update(&on_disk_val_len.to_le_bytes());
-                hasher.digest128() as u32
-            };
-
-            if crc != recomputed_crc {
-                return Some(Err(crate::Error::ChecksumMismatch {
-                    got: Checksum::from_raw(u128::from(recomputed_crc)),
-                    expected: Checksum::from_raw(u128::from(crc)),
-                }));
-            }
-
+            fail_iter!(validate_header_crc(
+                seqno,
+                key_len,
+                real_val_len,
+                on_disk_val_len,
+                crc
+            ));
             Some(crc)
         } else {
             None
@@ -198,6 +184,66 @@ mod tests {
 
             assert!(scanner.next().is_none());
         }
+
+        Ok(())
+    }
+
+    /// Tamper seqno in first blob frame and verify scanner's V4 header
+    /// CRC catches the corruption.
+    #[test]
+    fn blob_scanner_v4_corrupted_seqno_detected_by_header_crc() -> crate::Result<()> {
+        let dir = tempdir()?;
+        let blob_file_path = dir.path().join("0");
+
+        {
+            let mut writer = BlobFileWriter::new(&blob_file_path, 0, 0)?;
+            writer.write(b"key", 42, &b"v".repeat(100))?;
+            writer.finish()?;
+        }
+
+        // Tamper seqno at offset 0 + magic(4) + checksum(16) = 20
+        let mut raw = std::fs::read(&blob_file_path)?;
+        let seqno_offset = 20;
+        raw[seqno_offset..seqno_offset + 8].copy_from_slice(&99u64.to_le_bytes());
+        std::fs::write(&blob_file_path, &raw)?;
+
+        let mut scanner = Scanner::new(&blob_file_path, 0)?;
+        let result = scanner.next().unwrap();
+        assert!(
+            matches!(result, Err(crate::Error::ChecksumMismatch { .. })),
+            "expected ChecksumMismatch for corrupted seqno, got: {result:?}",
+        );
+
+        Ok(())
+    }
+
+    /// Tamper value payload in blob frame and verify scanner's data
+    /// checksum catches the corruption.
+    #[test]
+    fn blob_scanner_corrupted_value_detected_by_data_checksum() -> crate::Result<()> {
+        use crate::vlog::blob_file::writer::BLOB_HEADER_LEN;
+
+        let dir = tempdir()?;
+        let blob_file_path = dir.path().join("0");
+
+        {
+            let mut writer = BlobFileWriter::new(&blob_file_path, 0, 0)?;
+            writer.write(b"key", 0, &b"v".repeat(100))?;
+            writer.finish()?;
+        }
+
+        // Tamper value payload: header(42) + key(3) = 45
+        let value_offset = BLOB_HEADER_LEN + 3;
+        let mut raw = std::fs::read(&blob_file_path)?;
+        raw[value_offset] ^= 0xFF;
+        std::fs::write(&blob_file_path, &raw)?;
+
+        let mut scanner = Scanner::new(&blob_file_path, 0)?;
+        let result = scanner.next().unwrap();
+        assert!(
+            matches!(result, Err(crate::Error::ChecksumMismatch { .. })),
+            "expected ChecksumMismatch for corrupted value, got: {result:?}",
+        );
 
         Ok(())
     }

@@ -52,6 +52,38 @@ pub const BLOB_HEADER_LEN_V3: usize = BLOB_HEADER_MAGIC_V3.len()
 /// V4 blob frame header length (42 bytes, includes `header_crc`).
 pub const BLOB_HEADER_LEN: usize = BLOB_HEADER_LEN_V3 + std::mem::size_of::<u32>(); // Header CRC
 
+/// Validate V4 header CRC: recompute from header fields and compare
+/// against the stored value.
+pub fn validate_header_crc(
+    seqno: u64,
+    key_len: u16,
+    real_val_len: u32,
+    on_disk_val_len: u32,
+    stored_crc: u32,
+) -> crate::Result<()> {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "intentionally truncated to 4-byte CRC"
+    )]
+    let recomputed_crc = {
+        let mut hasher = xxhash_rust::xxh3::Xxh3::default();
+        hasher.update(&seqno.to_le_bytes());
+        hasher.update(&key_len.to_le_bytes());
+        hasher.update(&real_val_len.to_le_bytes());
+        hasher.update(&on_disk_val_len.to_le_bytes());
+        hasher.digest128() as u32
+    };
+
+    if stored_crc != recomputed_crc {
+        return Err(crate::Error::ChecksumMismatch {
+            got: crate::Checksum::from_raw(u128::from(recomputed_crc)),
+            expected: crate::Checksum::from_raw(u128::from(stored_crc)),
+        });
+    }
+
+    Ok(())
+}
+
 /// Blob file writer
 pub struct Writer {
     pub(crate) tree_id: TreeId,
