@@ -19,6 +19,10 @@ pub struct MvccStream<I: DoubleEndedIterator<Item = crate::Result<InternalValue>
     /// skips entries suppressed by an RT (treats them as a tombstone boundary).
     range_tombstones: Vec<RangeTombstone>,
     read_seqno: SeqNo,
+
+    /// Reusable buffer for reverse-iteration merge resolution. Avoids
+    /// allocating a fresh `Vec` on every `next_back()` call.
+    key_entries_buf: Vec<InternalValue>,
 }
 
 impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> {
@@ -30,6 +34,7 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
             merge_operator,
             range_tombstones: Vec::new(),
             read_seqno: 0,
+            key_entries_buf: Vec::new(),
         }
     }
 
@@ -263,7 +268,7 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
         // so deferring allocation until a MergeOperand is found would lose
         // the base Value needed by the merge function.
         let has_merge_op = self.merge_operator.is_some();
-        let mut key_entries: Vec<InternalValue> = Vec::new();
+        self.key_entries_buf.clear();
 
         loop {
             let tail = fail_iter!(self.inner.next_back()?);
@@ -288,8 +293,9 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
                         && tail.key.value_type.is_merge_operand()
                         && !self.is_rt_suppressed(&tail)
                     {
-                        key_entries.push(tail);
-                        return Some(self.resolve_merge_buffered(key_entries));
+                        self.key_entries_buf.push(tail);
+                        let entries = std::mem::take(&mut self.key_entries_buf);
+                        return Some(self.resolve_merge_buffered(entries));
                     }
                     return Some(Ok(tail));
                 }
@@ -302,8 +308,9 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
                     && tail.key.value_type.is_merge_operand()
                     && !self.is_rt_suppressed(&tail)
                 {
-                    key_entries.push(tail);
-                    return Some(self.resolve_merge_buffered(key_entries));
+                    self.key_entries_buf.push(tail);
+                    let entries = std::mem::take(&mut self.key_entries_buf);
+                    return Some(self.resolve_merge_buffered(entries));
                 }
                 return Some(Ok(tail));
             }
@@ -312,7 +319,7 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> DoubleEndedIte
             // We must buffer ALL types (including Value/Tombstone) because
             // we don't yet know if the newest entry will be a MergeOperand.
             if has_merge_op {
-                key_entries.push(tail);
+                self.key_entries_buf.push(tail);
             }
             // Without merge operator: skip older versions (loop continues)
         }

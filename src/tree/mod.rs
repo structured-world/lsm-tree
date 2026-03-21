@@ -815,6 +815,11 @@ impl Tree {
     /// Collects ALL entries for the key across all storage layers (active memtable,
     /// sealed memtables, disk tables), identifies the base value, and applies the
     /// merge operator. Entries are processed from newest to oldest (descending seqno).
+    ///
+    /// This intentionally duplicates merge-collection logic from `MvccStream`
+    /// because point reads access storage layers directly (memtable, sealed,
+    /// disk) rather than through a merged iterator stream, and need per-entry
+    /// RT suppression via `is_suppressed_by_range_tombstones`.
     fn resolve_merge_get(
         super_version: &SuperVersion,
         key: &[u8],
