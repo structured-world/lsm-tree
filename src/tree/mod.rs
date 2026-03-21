@@ -700,6 +700,13 @@ impl AbstractTree for Tree {
                     Some(ref entry) if entry.key.value_type == ValueType::MergeOperand => {
                         if let Some(merge_op) = &self.config.merge_operator {
                             Self::resolve_merge_get(&super_version, key, seqno, merge_op.as_ref())
+                        } else if Self::is_suppressed_by_range_tombstones(
+                            &super_version,
+                            key,
+                            entry.key.seqno,
+                            seqno,
+                        ) {
+                            Ok(None)
                         } else {
                             Ok(Some(entry.value.clone()))
                         }
