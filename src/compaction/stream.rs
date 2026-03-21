@@ -381,20 +381,15 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                         let drop_weak_tombstone = peeked.key.value_type == ValueType::Value
                             && head.key.value_type == ValueType::WeakTombstone;
 
-                        // If this key's history includes merge operands but we
-                        // don't have a merge operator, we must NOT drain the
-                        // tail. Merge operands are additive deltas and dropping
-                        // them without first collapsing via the merge operator
-                        // would change the logical value.
-                        let has_merge_operands = head.key.value_type.is_merge_operand()
-                            || peeked.key.value_type.is_merge_operand();
-
                         // NOTE: Next item is expired, so the tail of this user
-                        // key is entirely expired, so drain it all — except when
-                        // we would drop merge operands without a merge operator.
-                        if !(has_merge_operands && self.merge_operator.is_none()) {
-                            fail_iter!(self.drain_key(&head.key.user_key));
-                        }
+                        // key is entirely expired, so drain it all.
+                        //
+                        // At this point, `head` is *not* a MergeOperand (those
+                        // cases are handled in the branches above). Even if
+                        // older versions include merge operands, they are all
+                        // below the GC watermark and cannot affect the newest
+                        // visible value, so it is safe to drop them here.
+                        fail_iter!(self.drain_key(&head.key.user_key));
 
                         if drop_weak_tombstone {
                             continue;
@@ -406,6 +401,9 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
             } else if head.key.value_type.is_merge_operand()
                 && head.key.seqno < self.gc_seqno_threshold
             {
+                // Last item in the entire stream is a MergeOperand below GC.
+                // The filter section above (`!head.is_tombstone()`) only applies
+                // the stream filter — it does not consume or skip the entry.
                 if let Some(merge_op) = self.merge_operator.clone() {
                     let merged = fail_iter!(self.resolve_merge_operands(head, merge_op.as_ref()));
                     head = merged;
