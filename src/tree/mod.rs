@@ -870,7 +870,10 @@ impl Tree {
             // Early exit: table.get() returns entries with seqno strictly
             // < read_seqno, so `seqno - 1` is the maximum visible seqno.
             // Once we've found it, no other table can have a higher one.
-            if best.as_ref().is_some_and(|b| b.key.seqno + 1 == seqno) {
+            if best
+                .as_ref()
+                .is_some_and(|b| b.key.seqno == seqno.saturating_sub(1))
+            {
                 break;
             }
         }
