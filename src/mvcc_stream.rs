@@ -157,8 +157,8 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
         let newest = entries.last().ok_or(crate::Error::Unrecoverable)?;
         let mut operands: Vec<UserValue> = Vec::new();
         let mut base_value: Option<UserValue> = None;
-        let mut result_seqno = newest.key.seqno;
-        let mut result_key = newest.key.user_key.clone();
+        let result_seqno = newest.key.seqno;
+        let result_key = newest.key.user_key.clone();
 
         // Process in descending seqno order (newest first) to match forward merge semantics
         let mut saw_indirection = false;
