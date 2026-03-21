@@ -924,6 +924,8 @@ impl Tree {
                         // Table may contain multiple entries for this key
                         // (e.g., after flush with gc_threshold=0).
                         // Fall back to range scan to collect all of them.
+                        // Perf: range scan filters by seqno post-hoc; a seek-based
+                        // approach (#46) would avoid scanning non-visible versions.
                         let range = key_slice.clone()..=key_slice.clone();
                         for item in table.range(range) {
                             let item = item?;
