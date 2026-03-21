@@ -4,15 +4,13 @@
 // at each historical seqno to verify snapshot isolation. Compares
 // forward and reverse iterators for consistency.
 
-use lsm_tree::{AbstractTree, Config, Guard, SequenceNumberCounter};
+mod common;
+
+use common::guard_to_kv;
+use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
 use proptest::prelude::*;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
-
-fn guard_to_kv(guard: impl Guard) -> (Vec<u8>, Vec<u8>) {
-    let (k, v) = guard.into_inner().expect("guard into_inner failed");
-    (k.to_vec(), v.to_vec())
-}
 
 // ---------------------------------------------------------------------------
 // Oracle

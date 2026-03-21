@@ -4,17 +4,13 @@
 // None values represent tombstones. Range tombstones are stored separately
 // and applied during reads.
 
-use lsm_tree::{AbstractTree, Config, Guard, SequenceNumberCounter};
+mod common;
+
+use common::guard_to_kv;
+use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
 use proptest::prelude::*;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
-
-// Duplicated in prop_range_tombstone.rs and prop_mvcc.rs — each test file is
-// a standalone compilation unit; a shared test helper crate is out of scope.
-fn guard_to_kv(guard: impl Guard) -> (Vec<u8>, Vec<u8>) {
-    let (k, v) = guard.into_inner().expect("guard into_inner failed");
-    (k.to_vec(), v.to_vec())
-}
 
 // ---------------------------------------------------------------------------
 // Oracle
