@@ -37,7 +37,7 @@ pub fn prefill_sequential(
 
 /// Prefill a tree with structured prefix keys for prefix scan benchmarks.
 ///
-/// Keys have the format: `{prefix_byte}:{suffix_bytes}`.
+/// Keys have the format: `{prefix_u16_be}{suffix_u16_be}`, zero-padded to `key_size`.
 pub fn prefill_prefix_keys(
     tree: &AnyTree,
     config: &BenchConfig,
@@ -66,7 +66,8 @@ pub fn prefill_prefix_keys(
             let mut key = Vec::with_capacity(config.key_size);
             key.extend_from_slice(&prefix_bytes);
             // Use u16 suffix to keep minimum key size at 4 bytes (2+2).
-            // Break if suffix exceeds u16 range instead of panicking on user input.
+            // Break if suffix exceeds u16 range (> 65535 keys per prefix).
+            // This caps total keys at 256 * 65535 ≈ 16M for NUM_PREFIXES=256.
             let Ok(suffix_u16) = u16::try_from(suffix) else {
                 break;
             };
@@ -111,9 +112,10 @@ pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
         key.extend_from_slice(&be_bytes);
         key.resize(key_size, 0);
     } else {
-        // Callers (mergerandom, prefixscan) validate key_size at workload
-        // level, so collision is caught before reaching this point. The
-        // debug_assert is a development-time safety net only.
+        // SAFETY (release builds): All workloads validate key_size at entry
+        // (mergerandom >= 2, prefixscan >= 4, default 16), so collisions are
+        // rejected before reaching here. The debug_assert below is a dev-time
+        // belt-and-suspenders check and is intentionally compiled out in release.
         debug_assert!(
             index < (1u64 << (key_size * 8)),
             "index {index} exceeds unique key space for key_size {key_size}"

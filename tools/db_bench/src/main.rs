@@ -49,11 +49,11 @@ struct Cli {
     block_size: u32,
 
     /// Use BlobTree (key-value separation) instead of standard Tree.
-    #[arg(long, default_value = "false")]
+    #[arg(long)]
     use_blob_tree: bool,
 
     /// Output results as JSON.
-    #[arg(long, default_value = "false")]
+    #[arg(long)]
     json: bool,
 
     /// Database directory path. If not set, a temporary directory is used.

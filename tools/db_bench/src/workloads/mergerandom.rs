@@ -28,11 +28,11 @@ impl Workload for MergeRandom {
         let hot_keys: u64 = 1024;
         let flush_interval: u64 = 5_000;
 
-        // 1024 hot keys require key_size >= 8 for distinct sequential keys.
-        if config.key_size < 8 {
+        // 1024 hot keys need at least 2 bytes of key space (2^16 = 65536 > 1024).
+        if config.key_size < 2 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "mergerandom requires --key-size >= 8 to preserve hot-key distinctness",
+                "mergerandom requires --key-size >= 2 to preserve hot-key distinctness",
             )
             .into());
         }
