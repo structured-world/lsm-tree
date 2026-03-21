@@ -787,23 +787,11 @@ impl Table {
             return block.maybe_contains_hash(prefix_hash);
         }
 
-        // Partitioned filter — prefix could be in any partition, so check all.
-        // Return Ok(true) if ANY partition might contain the prefix.
-        if let Some(filter_idx) = &self.pinned_filter_index {
-            let iter = filter_idx.iter();
-            for filter_block_handle in iter {
-                let handle = filter_block_handle.materialize(filter_idx.as_slice());
-                let block = self.load_block(
-                    &handle.into_inner(),
-                    BlockType::Filter,
-                    CompressionType::None,
-                )?;
-                let block = FilterBlock::new(block);
-                if block.maybe_contains_hash(prefix_hash)? {
-                    return Ok(true);
-                }
-            }
-            return Ok(false);
+        // Partitioned / TLI filters: the partition index is keyed by user key,
+        // not by prefix hash, so we cannot seek to the right partition without
+        // scanning all of them (expensive). Fall back conservatively.
+        if self.pinned_filter_index.is_some() || self.regions.filter_tli.is_some() {
+            return Ok(true);
         }
 
         // Unpinned full filter — load from disk

@@ -1073,21 +1073,12 @@ impl Tree {
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
     ) -> impl DoubleEndedIterator<Item = crate::Result<KvPair>> + 'static {
+        use crate::prefix::compute_prefix_hash;
         use crate::range::{prefix_to_range, IterState, TreeIter};
-        use crate::table::filter::standard_bloom::Builder;
 
         let prefix_bytes = prefix.as_ref();
 
-        // Only enable bloom-based table skipping when the scan prefix is a
-        // valid boundary for the configured extractor (see trait docs).
-        // Builder::get_hash is intentionally coupled to the bloom filter's
-        // hash function — write path and read path must use the same hash.
-        let prefix_hash = self
-            .config
-            .prefix_extractor
-            .as_ref()
-            .filter(|e| e.is_valid_prefix_boundary(prefix_bytes))
-            .map(|_| Builder::get_hash(prefix_bytes));
+        let prefix_hash = compute_prefix_hash(self.config.prefix_extractor.as_ref(), prefix_bytes);
 
         let range = prefix_to_range(prefix_bytes);
 

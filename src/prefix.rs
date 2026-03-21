@@ -79,6 +79,29 @@ pub trait PrefixExtractor:
     }
 }
 
+/// Computes the prefix hash for bloom-filter-based table skipping.
+///
+/// Returns `Some(hash)` only when the scan prefix is non-empty and is a valid
+/// boundary for the configured extractor. Returns `None` otherwise (no bloom
+/// skip will be attempted).
+///
+/// Used by both `Tree::create_prefix` and `BlobTree::prefix` to avoid
+/// duplicating the boundary-check + hashing logic.
+pub(crate) fn compute_prefix_hash(
+    extractor: Option<&std::sync::Arc<dyn PrefixExtractor>>,
+    prefix_bytes: &[u8],
+) -> Option<u64> {
+    use crate::table::filter::standard_bloom::Builder;
+
+    if prefix_bytes.is_empty() {
+        return None;
+    }
+
+    extractor
+        .filter(|e| e.is_valid_prefix_boundary(prefix_bytes))
+        .map(|_| Builder::get_hash(prefix_bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

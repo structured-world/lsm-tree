@@ -288,6 +288,11 @@ fn prefix_bloom_blob_tree() -> lsm_tree::Result<()> {
     .with_kv_separation(Some(KvSeparationOptions::default()))
     .open()?;
 
+    assert!(
+        matches!(&tree, lsm_tree::AnyTree::Blob(_)),
+        "expected BlobTree variant"
+    );
+
     tree.insert("user:1:name", "Alice", 0);
     tree.insert("user:2:name", "Bob", 1);
     tree.insert("order:1:item", "widget", 2);

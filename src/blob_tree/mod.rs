@@ -236,20 +236,13 @@ impl AbstractTree for BlobTree {
         seqno: SeqNo,
         index: Option<(Arc<Memtable>, SeqNo)>,
     ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static> {
+        use crate::prefix::compute_prefix_hash;
         use crate::range::prefix_to_range;
-        use crate::table::filter::standard_bloom::Builder;
 
         let prefix_bytes = prefix.as_ref();
 
-        // Only enable bloom-based table skipping when the scan prefix is a
-        // valid boundary for the configured extractor (see trait docs).
-        let prefix_hash = self
-            .index
-            .config
-            .prefix_extractor
-            .as_ref()
-            .filter(|e| e.is_valid_prefix_boundary(prefix_bytes))
-            .map(|_| Builder::get_hash(prefix_bytes));
+        let prefix_hash =
+            compute_prefix_hash(self.index.config.prefix_extractor.as_ref(), prefix_bytes);
 
         let super_version = self.index.get_version_for_snapshot(seqno);
         let tree = self.clone();
