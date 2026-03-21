@@ -5,7 +5,7 @@
 use crate::{
     vlog::{
         blob_file::writer::{
-            validate_header_crc, BLOB_HEADER_LEN, BLOB_HEADER_MAGIC, BLOB_HEADER_MAGIC_V3,
+            validate_header_crc, BLOB_HEADER_LEN, BLOB_HEADER_MAGIC_V3, BLOB_HEADER_MAGIC_V4,
         },
         ValueHandle,
     },
@@ -90,7 +90,7 @@ impl<'a> Reader<'a> {
         reader.read_exact(&mut magic)?;
 
         // Determine format from frame magic — self-describing, no metadata dependency.
-        let frame_is_v4 = magic == BLOB_HEADER_MAGIC;
+        let frame_is_v4 = magic == BLOB_HEADER_MAGIC_V4;
         if !frame_is_v4 && magic != BLOB_HEADER_MAGIC_V3 {
             return Err(crate::Error::InvalidHeader("Blob"));
         }

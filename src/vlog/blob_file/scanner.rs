@@ -2,7 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use super::writer::{validate_header_crc, BLOB_HEADER_MAGIC, BLOB_HEADER_MAGIC_V3};
+use super::writer::{validate_header_crc, BLOB_HEADER_MAGIC_V3, BLOB_HEADER_MAGIC_V4};
 use crate::{
     vlog::{blob_file::meta::METADATA_HEADER_MAGIC, BlobFileId},
     Checksum, SeqNo, UserKey, UserValue,
@@ -65,7 +65,7 @@ impl Iterator for Scanner {
         let frame_is_v4;
 
         {
-            let mut buf = [0; BLOB_HEADER_MAGIC.len()];
+            let mut buf = [0; BLOB_HEADER_MAGIC_V4.len()];
             fail_iter!(self.inner.read_exact(&mut buf));
 
             if buf == METADATA_HEADER_MAGIC {
@@ -73,7 +73,7 @@ impl Iterator for Scanner {
                 return None;
             }
 
-            frame_is_v4 = buf == BLOB_HEADER_MAGIC;
+            frame_is_v4 = buf == BLOB_HEADER_MAGIC_V4;
             if !frame_is_v4 && buf != BLOB_HEADER_MAGIC_V3 {
                 return Some(Err(crate::Error::InvalidHeader("Blob")));
             }
