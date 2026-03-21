@@ -424,12 +424,18 @@ fn prefix_bloom_skip_on_compacted_levels() -> lsm_tree::Result<()> {
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 100);
 
-    // "other:" has no keys — bloom skip should reject all tables.
-    // (This can only trigger Ok(false) if the table's key_range
-    // overlaps with "other:" — which it won't since all keys start
-    // with "data:". Still validates correctness.)
+    // "other:" has no keys and its key_range doesn't overlap — skipped by key_range check.
     let results: Vec<_> = tree
         .create_prefix("other:", seqno, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 0);
+
+    // "data:9:" falls WITHIN the table's key_range [data:0:*, data:4:*] but was
+    // never written — no key ever produced "data:9:" as an extracted prefix.
+    // This exercises the Ok(false) bloom-skip branch: key_range says "yes"
+    // but bloom correctly says "no".
+    let results: Vec<_> = tree
+        .create_prefix("data:9:", seqno, None)
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
@@ -465,6 +471,51 @@ fn prefix_bloom_non_boundary_prefix_no_false_negative() -> lsm_tree::Result<()> 
         .create_prefix("adj:", 3, None)
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
+
+    Ok(())
+}
+
+#[test]
+fn prefix_bloom_false_negative_in_key_range_gap() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = tree_with_prefix_bloom(&folder)?;
+
+    // Create a single table with keys spanning a wide range but only two
+    // prefix groups: "aaa:" and "zzz:". After flush, the table's key_range
+    // is [aaa:0, zzz:9]. Any prefix scan for "mmm:" overlaps the key_range
+    // but "mmm:" was never indexed in the bloom → Ok(false) branch fires.
+    for i in 0..10 {
+        tree.insert(format!("aaa:{i}"), "v", i);
+    }
+    for i in 10..20 {
+        tree.insert(format!("zzz:{i}"), "v", i);
+    }
+    tree.flush_active_memtable(0)?;
+
+    // Compact to L1 for single-table runs (bloom check only applies there).
+    tree.major_compact(u64::MAX, 0)?;
+
+    assert_eq!(tree.table_count(), 1, "expect exactly 1 table");
+
+    // "mmm:" falls in the key_range [aaa:0, zzz:9] but was never written.
+    // The bloom filter should report Ok(false) for the prefix hash.
+    // With 20 keys at 10 bpk, the bloom is ~200 bits — FPR for random
+    // prefixes is low enough that "mmm:" should be rejected.
+    let results: Vec<_> = tree
+        .create_prefix("mmm:", 20, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 0);
+
+    // Verify the real prefixes still work
+    let results: Vec<_> = tree
+        .create_prefix("aaa:", 20, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 10);
+
+    let results: Vec<_> = tree
+        .create_prefix("zzz:", 20, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 10);
 
     Ok(())
 }
