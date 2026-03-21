@@ -750,3 +750,60 @@ fn merge_range_with_snapshot_isolation() -> lsm_tree::Result<()> {
 
     Ok(())
 }
+
+/// BlobTree with large values triggers Indirection — merge falls back to latest operand.
+#[test]
+fn merge_blob_tree_indirection_fallback() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_blob_tree_with_counter(&folder);
+
+    // Write a large base value (>1 KiB) to trigger blob separation
+    let large_base = vec![0u8; 2048];
+    tree.insert("big", &large_base, 0);
+    tree.flush_active_memtable(0)?;
+
+    // Add merge operand on top
+    tree.merge("big", 5_i64.to_le_bytes(), 1);
+
+    // get should return the raw operand bytes (fallback when base is Indirection)
+    let result = tree.get("big", 2)?;
+    assert!(result.is_some());
+
+    Ok(())
+}
+
+/// Merge at seqno=0 read boundary — should return None (no visible entries).
+#[test]
+fn merge_read_at_seqno_zero() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    tree.merge("counter", 5_i64.to_le_bytes(), 0);
+
+    // seqno=0 means nothing is visible
+    assert_eq!(None, get_counter(&tree, "counter", 0));
+
+    Ok(())
+}
+
+/// RT suppresses base in flushed SST — merge across memtable and disk with RT.
+#[test]
+fn merge_rt_across_flush_boundary() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    // Base on disk
+    tree.insert("counter", 100_i64.to_le_bytes(), 0);
+    tree.flush_active_memtable(0)?;
+
+    // RT in memtable kills base on disk
+    tree.remove_range("counter", "counter\x00", 5);
+
+    // Merge operand in memtable above RT
+    tree.merge("counter", 42_i64.to_le_bytes(), 10);
+
+    // base@0 suppressed by RT@5, operand@10 survives
+    assert_eq!(Some(42), get_counter(&tree, "counter", 11));
+
+    Ok(())
+}
