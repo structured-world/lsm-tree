@@ -25,33 +25,32 @@ pub trait Workload {
     ) -> lsm_tree::Result<()>;
 }
 
-/// Create a workload by name.
-pub fn create_workload(name: &str) -> Option<Box<dyn Workload>> {
-    match name {
-        "fillseq" => Some(Box::new(fillseq::FillSeq)),
-        "fillrandom" => Some(Box::new(fillrandom::FillRandom)),
-        "readrandom" => Some(Box::new(readrandom::ReadRandom)),
-        "readseq" => Some(Box::new(readseq::ReadSeq)),
-        "seekrandom" => Some(Box::new(seekrandom::SeekRandom)),
-        "prefixscan" => Some(Box::new(prefixscan::PrefixScan)),
-        "overwrite" => Some(Box::new(overwrite::Overwrite)),
-        "mergerandom" => Some(Box::new(mergerandom::MergeRandom)),
-        "readwhilewriting" => Some(Box::new(readwhilewriting::ReadWhileWriting)),
-        _ => None,
-    }
+/// Single source of truth for workload name → type mapping.
+macro_rules! define_workloads {
+    ( $( $name:expr => $ty:path ),+ $(,)? ) => {
+        /// Create a workload by name.
+        pub fn create_workload(name: &str) -> Option<Box<dyn Workload>> {
+            match name {
+                $( $name => Some(Box::new($ty)), )+
+                _ => None,
+            }
+        }
+
+        /// List all available benchmark names.
+        pub fn available_benchmarks() -> &'static [&'static str] {
+            &[ $( $name, )+ ]
+        }
+    };
 }
 
-/// List all available benchmark names.
-pub fn available_benchmarks() -> &'static [&'static str] {
-    &[
-        "fillseq",
-        "fillrandom",
-        "readrandom",
-        "readseq",
-        "seekrandom",
-        "prefixscan",
-        "overwrite",
-        "mergerandom",
-        "readwhilewriting",
-    ]
+define_workloads! {
+    "fillseq" => fillseq::FillSeq,
+    "fillrandom" => fillrandom::FillRandom,
+    "readrandom" => readrandom::ReadRandom,
+    "readseq" => readseq::ReadSeq,
+    "seekrandom" => seekrandom::SeekRandom,
+    "prefixscan" => prefixscan::PrefixScan,
+    "overwrite" => overwrite::Overwrite,
+    "mergerandom" => mergerandom::MergeRandom,
+    "readwhilewriting" => readwhilewriting::ReadWhileWriting,
 }

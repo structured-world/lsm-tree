@@ -50,21 +50,17 @@ impl Workload for MergeRandom {
             reporter.record_duration(t.elapsed());
 
             if (i + 1) % flush_interval == 0 {
-                let t_flush = Instant::now();
+                // Flush/compact are NOT recorded in the per-op histogram —
+                // they are maintenance ops whose latency would skew write P99.
+                // Their cost is reflected in wall-clock `elapsed` (throughput).
                 tree.flush_active_memtable(0)?;
-                reporter.record_duration(t_flush.elapsed());
             }
         }
 
         // Final flush + major compaction to exercise merge.
-        let t_flush = Instant::now();
         tree.flush_active_memtable(0)?;
-        reporter.record_duration(t_flush.elapsed());
-
         let compact_seqno = seqno.load(Ordering::Relaxed);
-        let t_compact = Instant::now();
         tree.major_compact(64 * 1024 * 1024, compact_seqno)?;
-        reporter.record_duration(t_compact.elapsed());
 
         reporter.stop();
 

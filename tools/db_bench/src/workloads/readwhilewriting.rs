@@ -21,11 +21,13 @@ impl Workload for ReadWhileWriting {
         // Prefill the tree with sequential keys.
         prefill_sequential(tree, config, seqno)?;
 
-        // Minimum 2 threads (1 reader + 1 writer). If --threads=1,
-        // we silently use 2 to maintain the concurrent read+write contract.
-        let threads = config.threads.max(2);
-        let reader_count = threads - 1;
-        // Distribute ops across readers, giving remainder to the last reader.
+        // Minimum 2 threads (1 reader + 1 writer). Cap readers so each
+        // spawned reader does useful work (no empty-loop threads).
+        let mut threads = config.threads.max(2);
+        let max_readers = (config.num.max(1)) as usize;
+        let reader_count = std::cmp::min(threads - 1, max_readers);
+        threads = reader_count + 1; // recompute for barrier
+                                    // Distribute ops across readers, giving remainder to the last reader.
         let base_ops = config.num / reader_count as u64;
         let remainder = config.num % reader_count as u64;
         let barrier = Barrier::new(threads);
