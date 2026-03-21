@@ -98,6 +98,8 @@ fn main() {
     let db_path = match &cli.db {
         Some(p) => p.clone(),
         None => {
+            // process::exit skips Drop, but no resources need cleanup at
+            // this point (tree not yet opened, no temp dir to remove).
             _tmpdir = tempfile::tempdir().unwrap_or_else(|e| {
                 eprintln!("Error: failed to create temp directory: {e}");
                 std::process::exit(1);

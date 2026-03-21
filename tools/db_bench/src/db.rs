@@ -66,7 +66,11 @@ pub fn prefill_prefix_keys(
             let mut key = Vec::with_capacity(config.key_size);
             key.extend_from_slice(&prefix_bytes);
             // Use u16 suffix to keep minimum key size at 4 bytes (2+2).
-            let suffix_bytes = (suffix as u16).to_be_bytes();
+            // Panic on overflow rather than silently wrapping.
+            let suffix_u16 = u16::try_from(suffix).expect(
+                "keys_per_prefix exceeds u16::MAX (65535) — reduce --num or increase NUM_PREFIXES",
+            );
+            let suffix_bytes = suffix_u16.to_be_bytes();
             key.extend_from_slice(&suffix_bytes);
             key.resize(config.key_size, 0);
 
@@ -95,27 +99,33 @@ pub fn prefill_prefix_keys(
 
 /// Create a sequential key from a u64 index, padded or truncated to key_size.
 ///
-/// When key_size < 8, the index bytes are truncated to fit (losing high bits),
-/// which limits the unique key space. Callers should use key_size >= 8 for
-/// large datasets.
+/// For key_size >= 8: full BE u64 + zero-padding.
+/// For key_size < 8: trailing (least-significant) bytes so small indices
+/// produce distinct keys (e.g. key_size=4, index=1 → `[0,0,0,1]`).
 #[inline]
 pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
-    debug_assert!(
-        key_size >= 8 || index < (1u64 << (key_size * 8)),
-        "index {index} exceeds unique key space for key_size {key_size}"
-    );
     let be_bytes = index.to_be_bytes();
     let mut key = Vec::with_capacity(key_size);
-    let copy_len = key_size.min(be_bytes.len());
-    // For small key_size, take the most significant bytes to preserve sort order.
-    // MSB-first is intentional: keys remain lexicographically sorted for range scans.
-    // The debug_assert above catches collisions when index exceeds the key space.
-    key.extend_from_slice(&be_bytes[..copy_len]);
-    key.resize(key_size, 0);
+
+    if key_size >= 8 {
+        key.extend_from_slice(&be_bytes);
+        key.resize(key_size, 0);
+    } else {
+        debug_assert!(
+            index < (1u64 << (key_size * 8)),
+            "index {index} exceeds unique key space for key_size {key_size}"
+        );
+        // Use trailing bytes so that sequential indices are distinct.
+        key.extend_from_slice(&be_bytes[8 - key_size..]);
+    }
+
     key
 }
 
 /// Create a random key of the given size.
+///
+/// `rand::rng()` returns a thread-local cached RNG (rand 0.9+), so calling
+/// this in a tight loop does NOT re-seed on each invocation.
 #[inline]
 pub fn make_random_key(key_size: usize) -> Vec<u8> {
     use rand::Rng;

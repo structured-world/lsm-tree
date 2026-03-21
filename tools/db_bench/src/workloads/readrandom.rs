@@ -41,8 +41,10 @@ impl Workload for ReadRandom {
 
         reporter.stop();
 
-        let hit_rate = found as f64 / config.num as f64 * 100.0;
-        eprintln!("Hit rate: {found}/{} ({hit_rate:.1}%)", config.num);
+        if config.num > 0 {
+            let hit_rate = found as f64 / config.num as f64 * 100.0;
+            eprintln!("Hit rate: {found}/{} ({hit_rate:.1}%)", config.num);
+        }
 
         Ok(())
     }
