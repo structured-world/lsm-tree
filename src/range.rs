@@ -382,6 +382,9 @@ impl TreeIter {
             }
 
             let merged = Merger::new(iters);
+            // Clone needed: MvccStream uses the RT set for merge suppression,
+            // while RangeTombstoneFilter below consumes it for post-merge
+            // filtering. An Arc<[_]> could avoid the copy if RT sets grow large.
             let iter = MvccStream::new(merged, lock.merge_operator.clone())
                 .with_range_tombstones(all_range_tombstones.clone(), seqno);
 

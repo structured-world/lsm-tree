@@ -15,10 +15,10 @@ pub struct MvccStream<I: DoubleEndedIterator<Item = crate::Result<InternalValue>
     inner: DoubleEndedPeekable<crate::Result<InternalValue>, I>,
     merge_operator: Option<Arc<dyn MergeOperator>>,
 
-    /// Range tombstones visible at `read_seqno`. When set, merge resolution
-    /// skips entries suppressed by an RT (treats them as a tombstone boundary).
-    range_tombstones: Vec<RangeTombstone>,
-    read_seqno: SeqNo,
+    /// Range tombstones with per-source visibility cutoffs. When set, merge
+    /// resolution skips entries suppressed by an RT (treats them as a
+    /// tombstone boundary). Each tuple is `(tombstone, cutoff_seqno)`.
+    range_tombstones: Vec<(RangeTombstone, SeqNo)>,
 
     /// Reusable buffer for reverse-iteration merge resolution. Avoids
     /// allocating a fresh `Vec` on every `next_back()` call.
@@ -33,7 +33,6 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
             inner: iter.double_ended_peekable(),
             merge_operator,
             range_tombstones: Vec::new(),
-            read_seqno: 0,
             key_entries_buf: Vec::new(),
         }
     }
@@ -43,9 +42,12 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
     /// When set, operands or base values suppressed by a range tombstone are
     /// treated as a deletion boundary (merge stops, base = None).
     #[must_use]
-    pub fn with_range_tombstones(mut self, rts: Vec<RangeTombstone>, read_seqno: SeqNo) -> Self {
+    pub fn with_range_tombstones(
+        mut self,
+        rts: Vec<(RangeTombstone, SeqNo)>,
+        _read_seqno: SeqNo,
+    ) -> Self {
         self.range_tombstones = rts;
-        self.read_seqno = read_seqno;
         self
     }
 
@@ -53,7 +55,7 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
     fn is_rt_suppressed(&self, entry: &InternalValue) -> bool {
         self.range_tombstones
             .iter()
-            .any(|rt| rt.should_suppress(&entry.key.user_key, entry.key.seqno, self.read_seqno))
+            .any(|(rt, cutoff)| rt.should_suppress(&entry.key.user_key, entry.key.seqno, *cutoff))
     }
 
     /// Collects all entries for the given key and applies the merge operator (forward).
@@ -151,21 +153,17 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
         };
 
         // entries are in ascending seqno order (oldest→newest)
-        // The newest entry has the highest seqno — that's our result seqno
+        // The newest entry (last) has the highest seqno — that's our result seqno.
+        let newest = entries.last().ok_or(crate::Error::Unrecoverable)?;
         let mut operands: Vec<UserValue> = Vec::new();
         let mut base_value: Option<UserValue> = None;
-        let mut result_seqno = 0;
-        let mut result_key = UserKey::empty();
+        let mut result_seqno = newest.key.seqno;
+        let mut result_key = newest.key.user_key.clone();
 
         // Process in descending seqno order (newest first) to match forward merge semantics
         let mut saw_indirection = false;
 
         for entry in entries.iter().rev() {
-            if result_seqno == 0 {
-                result_seqno = entry.key.seqno;
-                result_key = entry.key.user_key.clone();
-            }
-
             // RT-suppressed entries are logically deleted — treat as tombstone.
             if self.is_rt_suppressed(entry) {
                 break;
@@ -1316,7 +1314,8 @@ mod tests {
             ];
 
             let iter = Box::new(vec.into_iter().map(Ok));
-            let mut iter = MvccStream::new(iter, merge_op()).with_range_tombstones(vec![rt], 4);
+            let mut iter =
+                MvccStream::new(iter, merge_op()).with_range_tombstones(vec![(rt, 4)], 4);
 
             let item = iter.next().unwrap()?;
             assert_eq!(item.key.value_type, ValueType::Value);
@@ -1343,7 +1342,8 @@ mod tests {
             ];
 
             let iter = Box::new(vec.into_iter().map(Ok));
-            let mut iter = MvccStream::new(iter, merge_op()).with_range_tombstones(vec![rt], 5);
+            let mut iter =
+                MvccStream::new(iter, merge_op()).with_range_tombstones(vec![(rt, 5)], 5);
 
             let item = iter.next().unwrap()?;
             assert_eq!(item.key.value_type, ValueType::Value);
@@ -1368,7 +1368,8 @@ mod tests {
             ];
 
             let iter = Box::new(vec.into_iter().map(Ok));
-            let mut iter = MvccStream::new(iter, merge_op()).with_range_tombstones(vec![rt], 4);
+            let mut iter =
+                MvccStream::new(iter, merge_op()).with_range_tombstones(vec![(rt, 4)], 4);
 
             let item = iter.next_back().unwrap()?;
             assert_eq!(item.key.value_type, ValueType::Value);
@@ -1395,7 +1396,8 @@ mod tests {
             ];
 
             let iter = Box::new(vec.into_iter().map(Ok));
-            let mut iter = MvccStream::new(iter, merge_op()).with_range_tombstones(vec![rt], 6);
+            let mut iter =
+                MvccStream::new(iter, merge_op()).with_range_tombstones(vec![(rt, 6)], 6);
 
             let item = iter.next().unwrap()?;
             // Head is RT-suppressed → merge skipped, head returned as-is
@@ -1420,7 +1422,8 @@ mod tests {
             ];
 
             let iter = Box::new(vec.into_iter().map(Ok));
-            let mut iter = MvccStream::new(iter, merge_op()).with_range_tombstones(vec![rt], 6);
+            let mut iter =
+                MvccStream::new(iter, merge_op()).with_range_tombstones(vec![(rt, 6)], 6);
 
             let item = iter.next_back().unwrap()?;
             // Head is RT-suppressed → merge skipped
