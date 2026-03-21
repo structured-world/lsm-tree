@@ -2,7 +2,7 @@ use crate::config::BenchConfig;
 use crate::db::{prefill_prefix_keys, read_seqno};
 use crate::reporter::Reporter;
 use crate::workloads::Workload;
-use lsm_tree::{AbstractTree, AnyTree};
+use lsm_tree::{AbstractTree, AnyTree, Guard};
 use rand::Rng;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
@@ -33,8 +33,13 @@ impl Workload for PrefixScan {
             let prefix_bytes = prefix_idx.to_be_bytes();
 
             let t = Instant::now();
-            let iter = tree.prefix(&prefix_bytes, read_seq, None);
-            iter.take(SCAN_LIMIT).for_each(|_| {});
+            let mut iter = tree.prefix(prefix_bytes, read_seq, None);
+            for _ in 0..SCAN_LIMIT {
+                let Some(item) = iter.next() else { break };
+                // Force value materialization so the benchmark reflects
+                // actual read I/O, especially with --use-blob-tree.
+                let _ = item.size()?;
+            }
             reporter.record(t.elapsed().as_nanos() as u64);
         }
 

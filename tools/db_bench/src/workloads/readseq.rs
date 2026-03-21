@@ -2,7 +2,7 @@ use crate::config::BenchConfig;
 use crate::db::{prefill_sequential, read_seqno};
 use crate::reporter::Reporter;
 use crate::workloads::Workload;
-use lsm_tree::{AbstractTree, AnyTree};
+use lsm_tree::{AbstractTree, AnyTree, Guard};
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
@@ -29,7 +29,9 @@ impl Workload for ReadSeq {
             let t = Instant::now();
             match iter.next() {
                 Some(item) => {
-                    let _kv = item;
+                    // Force value materialization so read throughput reflects
+                    // actual I/O, especially with --use-blob-tree.
+                    let _size = item.size()?;
                     reporter.record(t.elapsed().as_nanos() as u64);
 
                     count += 1;

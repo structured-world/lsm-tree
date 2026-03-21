@@ -43,8 +43,14 @@ impl Reporter {
     }
 
     /// Merge another reporter's histogram into this one.
+    #[expect(
+        clippy::expect_used,
+        reason = "Histogram::add can only fail with incompatible configurations — programmer error"
+    )]
     pub fn merge(&mut self, other: &Reporter) {
-        let _ = self.histogram.add(&other.histogram);
+        self.histogram
+            .add(&other.histogram)
+            .expect("failed to merge histograms: incompatible configurations");
         self.ops_counted += other.ops_counted;
     }
 

@@ -23,7 +23,9 @@ impl Workload for ReadWhileWriting {
 
         let threads = config.threads.max(2);
         let reader_count = threads - 1;
-        let ops_per_reader = config.num / reader_count as u64;
+        // Distribute ops across readers, giving remainder to the last reader.
+        let base_ops = config.num / reader_count as u64;
+        let remainder = config.num % reader_count as u64;
         let barrier = Barrier::new(threads);
 
         reporter.start();
@@ -31,13 +33,16 @@ impl Workload for ReadWhileWriting {
         std::thread::scope(|s| {
             // Spawn reader threads — borrow barrier by reference.
             let reader_handles: Vec<_> = (0..reader_count)
-                .map(|_| {
-                    s.spawn(|| {
+                .enumerate()
+                .map(|(i, _)| {
+                    let my_ops = base_ops + if (i as u64) < remainder { 1 } else { 0 };
+                    let barrier = &barrier;
+                    s.spawn(move || {
                         let mut local_reporter = Reporter::new();
                         let mut rng = rand::rng();
                         barrier.wait();
 
-                        for _ in 0..ops_per_reader {
+                        for _ in 0..my_ops {
                             let read_seq = read_seqno(seqno);
                             let idx: u64 = rng.random_range(0..config.num);
                             let key = make_sequential_key(idx, config.key_size);
@@ -60,8 +65,8 @@ impl Workload for ReadWhileWriting {
             let writer_handle = s.spawn(|| {
                 barrier.wait();
 
-                let writer_ops = ops_per_reader;
-                for _ in 0..writer_ops {
+                // Writer runs for the full duration (same total as readers).
+                for _ in 0..config.num {
                     let key = make_random_key(config.key_size);
                     let value = make_value(config.value_size);
                     let seq = seqno.fetch_add(1, Ordering::Relaxed);

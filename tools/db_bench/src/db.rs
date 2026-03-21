@@ -44,6 +44,9 @@ pub fn prefill_prefix_keys(
     seqno: &AtomicU64,
     num_prefixes: u16,
 ) -> lsm_tree::Result<()> {
+    // Integer division may leave a remainder — the `total >= config.num` guard
+    // below ensures we insert exactly config.num keys (distributing the remainder
+    // across the first few prefixes via the outer break).
     let mut keys_per_prefix = config.num / num_prefixes as u64;
     if keys_per_prefix == 0 && config.num > 0 {
         keys_per_prefix = 1;
@@ -71,7 +74,7 @@ pub fn prefill_prefix_keys(
             tree.insert(key, value, seq);
 
             total += 1;
-            if total % batch_size == 0 {
+            if total.is_multiple_of(batch_size) {
                 tree.flush_active_memtable(0)?;
             }
         }
@@ -89,11 +92,18 @@ pub fn prefill_prefix_keys(
     Ok(())
 }
 
-/// Create a sequential key from a u64 index, padded to key_size.
+/// Create a sequential key from a u64 index, padded or truncated to key_size.
+///
+/// When key_size < 8, the index bytes are truncated to fit (losing high bits),
+/// which limits the unique key space. Callers should use key_size >= 8 for
+/// large datasets.
 #[inline]
 pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
+    let be_bytes = index.to_be_bytes();
     let mut key = Vec::with_capacity(key_size);
-    key.extend_from_slice(&index.to_be_bytes());
+    let copy_len = key_size.min(be_bytes.len());
+    // For small key_size, take the most significant bytes to preserve ordering.
+    key.extend_from_slice(&be_bytes[..copy_len]);
     key.resize(key_size, 0);
     key
 }
