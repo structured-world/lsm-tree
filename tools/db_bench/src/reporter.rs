@@ -1,0 +1,134 @@
+use hdrhistogram::Histogram;
+use serde::Serialize;
+use std::time::{Duration, Instant};
+
+/// Collects per-operation latencies and computes summary statistics.
+pub struct Reporter {
+    histogram: Histogram<u64>,
+    start: Option<Instant>,
+    elapsed: Duration,
+    ops_counted: u64,
+}
+
+impl Reporter {
+    pub fn new() -> Self {
+        Self {
+            // Record up to 10 seconds (10_000_000_000 ns) with 3 significant digits.
+            histogram: Histogram::new_with_max(10_000_000_000, 3)
+                .expect("failed to create histogram"),
+            start: None,
+            elapsed: Duration::ZERO,
+            ops_counted: 0,
+        }
+    }
+
+    /// Start the measurement timer.
+    pub fn start(&mut self) {
+        self.start = Some(Instant::now());
+    }
+
+    /// Record a single operation's latency in nanoseconds.
+    #[inline]
+    pub fn record(&mut self, nanos: u64) {
+        let _ = self.histogram.record(nanos);
+        self.ops_counted += 1;
+    }
+
+    /// Stop the measurement timer.
+    pub fn stop(&mut self) {
+        if let Some(start) = self.start.take() {
+            self.elapsed = start.elapsed();
+        }
+    }
+
+    /// Reset histogram (used after warmup phase).
+    pub fn reset(&mut self) {
+        self.histogram.reset();
+        self.ops_counted = 0;
+        self.start = Some(Instant::now());
+    }
+
+    /// Merge another reporter's histogram into this one.
+    pub fn merge(&mut self, other: &Reporter) {
+        let _ = self.histogram.add(&other.histogram);
+        self.ops_counted += other.ops_counted;
+    }
+
+    /// Print human-readable results.
+    pub fn print_human(&self, benchmark: &str, entry_size: usize) {
+        let secs = self.elapsed.as_secs_f64();
+        let ops = self.ops_counted;
+        let ops_per_sec = if secs > 0.0 { ops as f64 / secs } else { 0.0 };
+        let mb_per_sec = ops_per_sec * entry_size as f64 / (1024.0 * 1024.0);
+
+        println!(
+            "{benchmark:<20} {ops:>12} ops in {secs:.2}s  ({ops_per_sec:>12.0} ops/sec, {mb_per_sec:.1} MB/sec)"
+        );
+        println!(
+            "{:20} P50: {:.1}us  P99: {:.1}us  P99.9: {:.1}us  P99.99: {:.1}us",
+            "",
+            self.percentile_us(50.0),
+            self.percentile_us(99.0),
+            self.percentile_us(99.9),
+            self.percentile_us(99.99),
+        );
+    }
+
+    /// Produce JSON output.
+    pub fn to_json(&self, benchmark: &str, config: &JsonConfig) -> String {
+        let secs = self.elapsed.as_secs_f64();
+        let ops = self.ops_counted;
+        let ops_per_sec = if secs > 0.0 { ops as f64 / secs } else { 0.0 };
+        let mb_per_sec = ops_per_sec * config.entry_size as f64 / (1024.0 * 1024.0);
+
+        let report = JsonReport {
+            benchmark: benchmark.to_string(),
+            config: config.clone(),
+            elapsed_secs: secs,
+            ops_total: ops,
+            ops_per_sec: ops_per_sec as u64,
+            mb_per_sec,
+            latency_us: LatencyUs {
+                p50: self.percentile_us(50.0),
+                p99: self.percentile_us(99.0),
+                p999: self.percentile_us(99.9),
+                p9999: self.percentile_us(99.99),
+            },
+        };
+
+        serde_json::to_string_pretty(&report).expect("failed to serialize JSON")
+    }
+
+    fn percentile_us(&self, p: f64) -> f64 {
+        self.histogram.value_at_percentile(p) as f64 / 1000.0
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonConfig {
+    pub num: u64,
+    pub key_size: usize,
+    pub value_size: usize,
+    pub entry_size: usize,
+    pub threads: usize,
+    pub compression: String,
+}
+
+#[derive(Serialize)]
+struct JsonReport {
+    benchmark: String,
+    config: JsonConfig,
+    elapsed_secs: f64,
+    ops_total: u64,
+    ops_per_sec: u64,
+    mb_per_sec: f64,
+    latency_us: LatencyUs,
+}
+
+#[derive(Serialize)]
+struct LatencyUs {
+    p50: f64,
+    p99: f64,
+    p999: f64,
+    p9999: f64,
+}
