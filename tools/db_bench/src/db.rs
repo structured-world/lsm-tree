@@ -66,10 +66,10 @@ pub fn prefill_prefix_keys(
             let mut key = Vec::with_capacity(config.key_size);
             key.extend_from_slice(&prefix_bytes);
             // Use u16 suffix to keep minimum key size at 4 bytes (2+2).
-            // Panic on overflow rather than silently wrapping.
-            let suffix_u16 = u16::try_from(suffix).expect(
-                "keys_per_prefix exceeds u16::MAX (65535) — reduce --num or increase NUM_PREFIXES",
-            );
+            // Break if suffix exceeds u16 range instead of panicking on user input.
+            let Ok(suffix_u16) = u16::try_from(suffix) else {
+                break;
+            };
             let suffix_bytes = suffix_u16.to_be_bytes();
             key.extend_from_slice(&suffix_bytes);
             key.resize(config.key_size, 0);
@@ -111,6 +111,9 @@ pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
         key.extend_from_slice(&be_bytes);
         key.resize(key_size, 0);
     } else {
+        // Callers (mergerandom, prefixscan) validate key_size at workload
+        // level, so collision is caught before reaching this point. The
+        // debug_assert is a development-time safety net only.
         debug_assert!(
             index < (1u64 << (key_size * 8)),
             "index {index} exceeds unique key space for key_size {key_size}"

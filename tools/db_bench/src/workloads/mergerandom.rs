@@ -30,8 +30,11 @@ impl Workload for MergeRandom {
 
         // 1024 hot keys require key_size >= 8 for distinct sequential keys.
         if config.key_size < 8 {
-            eprintln!("mergerandom requires --key-size >= 8 to preserve hot-key distinctness");
-            std::process::exit(1);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "mergerandom requires --key-size >= 8 to preserve hot-key distinctness",
+            )
+            .into());
         }
 
         reporter.start();

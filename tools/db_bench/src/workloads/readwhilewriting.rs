@@ -21,6 +21,8 @@ impl Workload for ReadWhileWriting {
         // Prefill the tree with sequential keys.
         prefill_sequential(tree, config, seqno)?;
 
+        // Minimum 2 threads (1 reader + 1 writer). If --threads=1,
+        // we silently use 2 to maintain the concurrent read+write contract.
         let threads = config.threads.max(2);
         let reader_count = threads - 1;
         // Distribute ops across readers, giving remainder to the last reader.
@@ -42,19 +44,24 @@ impl Workload for ReadWhileWriting {
                         let mut rng = rand::rng();
                         barrier.wait();
 
+                        let mut error_count: u64 = 0;
+
                         for _ in 0..my_ops {
                             let read_seq = read_seqno(seqno);
                             let idx: u64 = rng.random_range(0..config.num);
                             let key = make_sequential_key(idx, config.key_size);
 
                             let t = Instant::now();
-                            // Log errors without panicking — a read failure in one
-                            // iteration shouldn't abort the entire benchmark. The error
-                            // is still visible in stderr for debugging.
-                            if let Err(e) = tree.get(&key, read_seq) {
-                                eprintln!("read error: {e}");
+                            // Aggregate errors to avoid skewing latency with
+                            // per-op stderr writes in the hot loop.
+                            if tree.get(&key, read_seq).is_err() {
+                                error_count += 1;
                             }
                             local_reporter.record_duration(t.elapsed());
+                        }
+
+                        if error_count > 0 {
+                            eprintln!("reader thread: {error_count} read errors");
                         }
 
                         local_reporter
@@ -66,7 +73,9 @@ impl Workload for ReadWhileWriting {
             let writer_handle = s.spawn(|| {
                 barrier.wait();
 
-                // Writer runs for the full duration (same total as readers).
+                // Writer inserts new random keys (not overwrites) to create
+                // concurrent write pressure without contending on specific keys.
+                // This matches the RocksDB db_bench readwhilewriting workload.
                 for _ in 0..config.num {
                     let key = make_random_key(config.key_size);
                     let value = make_value(config.value_size);

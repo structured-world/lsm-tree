@@ -22,8 +22,11 @@ impl Workload for PrefixScan {
     ) -> lsm_tree::Result<()> {
         // Prefix keys: 2-byte u16 prefix + 2-byte u16 suffix = 4 bytes minimum.
         if config.key_size < 4 {
-            eprintln!("prefixscan requires --key-size >= 4 (2-byte prefix + 2-byte suffix)");
-            std::process::exit(1);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "prefixscan requires --key-size >= 4 (2-byte prefix + 2-byte suffix)",
+            )
+            .into());
         }
 
         // Prefill with structured prefix keys.
