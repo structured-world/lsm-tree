@@ -78,6 +78,9 @@ impl Reporter {
         let secs = self.elapsed.as_secs_f64();
         let ops = self.ops_counted;
         let ops_per_sec = if secs > 0.0 { ops as f64 / secs } else { 0.0 };
+        // MB/sec = ops_counted * entry_size / elapsed. For mixed workloads
+        // (readwhilewriting), ops_counted reflects only measured ops (reads),
+        // so MB/sec represents read throughput under write pressure.
         let mb_per_sec = ops_per_sec * entry_size as f64 / (1024.0 * 1024.0);
 
         println!(

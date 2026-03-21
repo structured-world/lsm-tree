@@ -168,7 +168,7 @@ fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
                     .map_err(|e| TestCaseError::fail(format!("flush failed: {e}")))?;
             }
             Op::Compact => {
-                tree.major_compact(64 * 1024 * 1024, seqno)
+                tree.major_compact(common::COMPACTION_TARGET, seqno)
                     .map_err(|e| TestCaseError::fail(format!("compact failed: {e}")))?;
             }
         }
@@ -256,7 +256,7 @@ proptest! {
     // Known bug: L0 MVCC resolution returns stale values when active
     // memtable is non-empty. See prop_regression_rt_tombstone.rs.
     #[test]
-    #[ignore = "known bug: L0 MVCC resolution with active memtable"]
+    #[ignore = "known bug: L0 MVCC resolution with active memtable (issue #52)"]
     fn prop_btreemap_oracle_correctness(ops in ops_strategy()) {
         run_oracle_test(ops)?;
     }

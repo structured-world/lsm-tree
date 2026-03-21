@@ -180,7 +180,7 @@ fn run_rt_test(ops: Vec<RtOp>) -> Result<(), TestCaseError> {
                     .map_err(|e| TestCaseError::fail(format!("flush: {e}")))?;
             }
             RtOp::Compact => {
-                tree.major_compact(64 * 1024 * 1024, seqno)
+                tree.major_compact(common::COMPACTION_TARGET, seqno)
                     .map_err(|e| TestCaseError::fail(format!("compact: {e}")))?;
             }
         }
@@ -258,7 +258,7 @@ proptest! {
     // Known bug: point tombstones not visible when RT exists in prior SST.
     // See prop_regression_rt_tombstone.rs for the minimal reproducer.
     #[test]
-    #[ignore = "known bug: RT + point tombstone interaction across SSTs"]
+    #[ignore = "known bug: RT + point tombstone interaction across SSTs (issue #53)"]
     fn prop_range_tombstone_correctness(ops in rt_ops_strategy()) {
         run_rt_test(ops)?;
     }

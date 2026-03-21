@@ -19,6 +19,7 @@ impl Workload for FillRandom {
         reporter.start();
 
         for _ in 0..config.num {
+            // Key/value allocation is outside the timed region (before Instant::now).
             let key = make_random_key(config.key_size);
             let value = make_value(config.value_size);
             let seq = seqno.fetch_add(1, Ordering::Relaxed);
