@@ -155,7 +155,10 @@ fn run_mvcc_test(ops: Vec<MvccOp>) -> Result<(), TestCaseError> {
 
     // Sample snapshot points to keep verification time bounded.
     // Always include the last snapshot to verify the final tree state.
-    let check_points: Vec<u64> = if snapshot_seqnos.len() <= 20 {
+    // If no writes occurred (all ops were Flush), verify the empty state at seqno 1.
+    let check_points: Vec<u64> = if snapshot_seqnos.is_empty() {
+        vec![1]
+    } else if snapshot_seqnos.len() <= 20 {
         snapshot_seqnos.clone()
     } else {
         let step = snapshot_seqnos.len() / 20;

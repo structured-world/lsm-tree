@@ -13,6 +13,16 @@ pub enum Compression {
     Zstd,
 }
 
+impl std::fmt::Display for Compression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Lz4 => f.write_str("lz4"),
+            Self::Zstd => f.write_str("zstd"),
+        }
+    }
+}
+
 impl Compression {
     pub fn to_lsm(self) -> CompressionType {
         match self {

@@ -138,7 +138,7 @@ fn main() {
             value_size: cli.value_size,
             entry_size: bench_config.entry_size(),
             threads: cli.threads,
-            compression: format!("{:?}", cli.compression),
+            compression: cli.compression.to_string(),
         };
         println!("{}", reporter.to_json(&cli.benchmark, &json_config));
     } else {

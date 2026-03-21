@@ -95,6 +95,7 @@ impl Reporter {
             config: config.clone(),
             elapsed_secs: secs,
             ops_total: ops,
+            // Truncate fractional ops/sec for clean JSON integer output.
             ops_per_sec: ops_per_sec as u64,
             mb_per_sec,
             latency_us: LatencyUs {
