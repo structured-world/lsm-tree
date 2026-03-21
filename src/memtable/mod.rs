@@ -155,6 +155,8 @@ impl Memtable {
             return Vec::new();
         }
 
+        // ValueType is not part of InternalKey ordering (only user_key + Reverse(seqno)),
+        // so the value type here is arbitrary — it does not affect seek position.
         let lower_bound = InternalKey::new(key, seqno - 1, ValueType::Value);
 
         self.items

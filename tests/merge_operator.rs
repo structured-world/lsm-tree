@@ -123,7 +123,7 @@ fn merge_no_operator_returns_raw() {
 
     // Open tree WITHOUT merge operator
     let tree = Config::new(
-        folder,
+        &folder,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
@@ -277,7 +277,7 @@ impl MergeOperator for FailingMerge {
 fn merge_error_propagation() {
     let folder = tempfile::tempdir().unwrap();
     let tree = Config::new(
-        folder,
+        &folder,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
