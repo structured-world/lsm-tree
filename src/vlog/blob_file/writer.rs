@@ -56,6 +56,26 @@ pub const BLOB_HEADER_LEN_V3: usize = BLOB_HEADER_MAGIC_V3.len()
 /// V4 blob frame header length (42 bytes, includes `header_crc`).
 pub const BLOB_HEADER_LEN: usize = BLOB_HEADER_LEN_V3 + std::mem::size_of::<u32>(); // Header CRC
 
+/// Compute V4 header CRC from header fields.
+/// Returns a 4-byte truncated xxh3 hash.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "intentionally truncated to 4-byte CRC"
+)]
+pub(super) fn compute_header_crc(
+    seqno: u64,
+    key_len: u16,
+    real_val_len: u32,
+    on_disk_val_len: u32,
+) -> u32 {
+    let mut hasher = xxhash_rust::xxh3::Xxh3::default();
+    hasher.update(&seqno.to_le_bytes());
+    hasher.update(&key_len.to_le_bytes());
+    hasher.update(&real_val_len.to_le_bytes());
+    hasher.update(&on_disk_val_len.to_le_bytes());
+    hasher.digest() as u32
+}
+
 /// Validate V4 header CRC: recompute from header fields and compare
 /// against the stored value.
 pub(super) fn validate_header_crc(
@@ -65,24 +85,12 @@ pub(super) fn validate_header_crc(
     on_disk_val_len: u32,
     stored_crc: u32,
 ) -> crate::Result<()> {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "intentionally truncated to 4-byte CRC"
-    )]
-    let recomputed_crc = {
-        let mut hasher = xxhash_rust::xxh3::Xxh3::default();
-        hasher.update(&seqno.to_le_bytes());
-        hasher.update(&key_len.to_le_bytes());
-        hasher.update(&real_val_len.to_le_bytes());
-        hasher.update(&on_disk_val_len.to_le_bytes());
-        // digest() returns u64 (cheaper than digest128 for a 4-byte CRC)
-        hasher.digest() as u32
-    };
+    let recomputed_crc = compute_header_crc(seqno, key_len, real_val_len, on_disk_val_len);
 
     if stored_crc != recomputed_crc {
         return Err(crate::Error::HeaderCrcMismatch {
-            got: recomputed_crc,
-            expected: stored_crc,
+            recomputed: recomputed_crc,
+            stored: stored_crc,
         });
     }
 
@@ -229,22 +237,13 @@ impl Writer {
         // [...key; ?]
         // [...val; ?]
 
-        // Compute header CRC over variable header fields (seqno, key_len,
-        // real_val_len, on_disk_val_len). Truncated to 4 bytes, same
-        // pattern as table block header checksums.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "intentionally truncated to 4-byte CRC"
-        )]
-        let header_crc = {
-            let mut hasher = xxhash_rust::xxh3::Xxh3::default();
-            hasher.update(&seqno.to_le_bytes());
-            #[expect(clippy::cast_possible_truncation, reason = "keys are u16 length max")]
-            hasher.update(&(key.len() as u16).to_le_bytes());
-            hasher.update(&uncompressed_len.to_le_bytes());
-            hasher.update(&compressed_len_u32.to_le_bytes());
-            hasher.digest() as u32
-        };
+        #[expect(clippy::cast_possible_truncation, reason = "keys are u16 length max")]
+        let header_crc = compute_header_crc(
+            seqno,
+            key.len() as u16,
+            uncompressed_len,
+            compressed_len_u32,
+        );
 
         // Data checksum includes header_crc bytes so that even if an
         // attacker recomputes header_crc after tampering header fields,

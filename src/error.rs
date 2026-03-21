@@ -33,10 +33,10 @@ pub enum Error {
     /// Distinct from `ChecksumMismatch` which covers data payload checksums.
     HeaderCrcMismatch {
         /// CRC recomputed from header fields
-        got: u32,
+        recomputed: u32,
 
         /// CRC stored in the blob frame header
-        expected: u32,
+        stored: u32,
     },
 
     /// Invalid enum tag

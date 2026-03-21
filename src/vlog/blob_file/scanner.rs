@@ -210,11 +210,11 @@ mod tests {
             .position(|w| w == BLOB_HEADER_MAGIC_V4)
             .unwrap();
 
-        // Tamper seqno: frame_start + magic(4) + checksum(16) = +20.
-        // Offset derived from V4 header layout in writer.rs; named constants
-        // are not defined for individual field positions (only total header len).
-        let seqno_offset = frame_start + 20;
-        raw[seqno_offset..seqno_offset + 8].copy_from_slice(&99u64.to_le_bytes());
+        // Tamper seqno: header layout is [magic][checksum][seqno]...
+        let seqno_offset = frame_start + BLOB_HEADER_MAGIC_V4.len() + std::mem::size_of::<u128>();
+        let seqno_len = std::mem::size_of::<u64>();
+        raw[seqno_offset..seqno_offset + seqno_len]
+            .copy_from_slice(&99u64.to_le_bytes()[..seqno_len]);
         std::fs::write(&blob_file_path, &raw)?;
 
         let mut scanner = Scanner::new(&blob_file_path, 0)?;
