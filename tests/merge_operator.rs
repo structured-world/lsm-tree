@@ -812,24 +812,27 @@ fn merge_rt_across_flush_boundary() -> lsm_tree::Result<()> {
     Ok(())
 }
 
-/// RT in sealed memtable suppresses base in earlier sealed memtable.
+/// RT suppresses base across multiple disk tables.
 #[test]
-fn merge_rt_in_sealed_memtable() -> lsm_tree::Result<()> {
+fn merge_rt_across_multiple_flushes() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let tree = open_tree_with_counter(&folder);
 
-    // Base in first sealed memtable
+    // Base in first SST
     tree.insert("counter", 100_i64.to_le_bytes(), 0);
-    tree.seal_active_memtable();
+    tree.flush_active_memtable(0)?;
 
-    // RT in second sealed memtable kills base
+    // Old operand in second SST
+    tree.merge("counter", 10_i64.to_le_bytes(), 1);
+    tree.flush_active_memtable(0)?;
+
+    // RT kills everything at seqno < 5
     tree.remove_range("counter", "counter\x00", 5);
-    tree.seal_active_memtable();
 
-    // Operand in active memtable above RT
+    // New operand above RT
     tree.merge("counter", 33_i64.to_le_bytes(), 10);
 
-    // base@0 suppressed by RT@5 in sealed memtable, operand@10 survives
+    // base@0 and op@1 suppressed, op@10 survives: merge(None, [33]) = 33
     assert_eq!(Some(33), get_counter(&tree, "counter", 11));
 
     Ok(())

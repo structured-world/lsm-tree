@@ -692,7 +692,7 @@ mod tests {
 
     #[test]
     fn get_all_for_key_seqno_zero_returns_empty() {
-        let memtable = Memtable::default();
+        let memtable = Memtable::new(0);
         memtable.insert(
             crate::InternalValue::from_components("key", "val", 1, ValueType::Value),
             0,
@@ -704,7 +704,7 @@ mod tests {
 
     #[test]
     fn get_all_for_key_returns_all_versions() {
-        let memtable = Memtable::default();
+        let memtable = Memtable::new(0);
         memtable.insert(
             crate::InternalValue::from_components("key", "op2", 3, ValueType::MergeOperand),
             0,
