@@ -203,7 +203,8 @@ mod tests {
             writer.finish()?;
         }
 
-        // Find frame start by searching for magic (robust against sfa framing).
+        // Find frame start by searching for magic. Safe: test payloads
+        // (b"v" * 100) cannot contain b"BLO4", so no false match.
         let mut raw = std::fs::read(&blob_file_path)?;
         let frame_start = raw
             .windows(4)
@@ -242,7 +243,8 @@ mod tests {
             writer.finish()?;
         }
 
-        // Find frame start by searching for magic (robust against sfa framing).
+        // Find frame start by searching for magic. Safe: test payloads
+        // (b"v" * 100) cannot contain b"BLO4", so no false match.
         let mut raw = std::fs::read(&blob_file_path)?;
         let frame_start = raw
             .windows(4)

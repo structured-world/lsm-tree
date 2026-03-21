@@ -159,6 +159,8 @@ impl<'a> Reader<'a> {
         // Slice exactly on_disk_val_len bytes — important for V3 backward
         // compat where the read buffer is 4 bytes larger than the actual frame
         // (over-read from using V4 max header size).
+        // No usize overflow: on_disk_val_len is u32, data_offset is ~42+key_len,
+        // and total is bounded by MAX_DECOMPRESSION_SIZE (256 MiB) cap check above.
         let data_offset = header_len + key.len();
         let raw_data = value.slice(data_offset..data_offset + on_disk_val_len as usize);
 
