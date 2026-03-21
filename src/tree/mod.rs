@@ -817,7 +817,7 @@ impl Tree {
         // `metadata.key_range.contains_key(key)` a sound early reject here and
         // avoids scanning RT blocks for unrelated SSTs on point reads.
         //
-        // Per-table RT lists are sorted by (start asc, seqno desc) on load,
+        // Per-table RT lists are sorted by start key on load,
         // so binary search narrows candidates to RTs with start <= key.
         for table in super_version
             .version

@@ -580,10 +580,12 @@ impl Table {
             }
 
             let mut rts = Self::decode_range_tombstones(&block)?;
-            // Sort range tombstones by (start asc) to enable binary search
-            // in point-read suppression paths. Uses explicit comparator so
-            // the partition_point invariant is independent of Ord changes.
-            rts.sort_by(|a, b| a.start.cmp(&b.start));
+            // Sort range tombstones by (start asc, seqno desc) to enable
+            // binary search in point-read suppression paths. Uses explicit
+            // comparator so the partition_point invariant is independent of
+            // Ord changes. The seqno desc tiebreaker lets suppression checks
+            // short-circuit on the highest-seqno RT for a given start key.
+            rts.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.seqno.cmp(&a.seqno)));
             rts
         } else {
             Vec::new()
