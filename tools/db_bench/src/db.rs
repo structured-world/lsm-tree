@@ -65,7 +65,8 @@ pub fn prefill_prefix_keys(
             }
             let mut key = Vec::with_capacity(config.key_size);
             key.extend_from_slice(&prefix_bytes);
-            let suffix_bytes = suffix.to_be_bytes();
+            // Use u16 suffix to keep minimum key size at 4 bytes (2+2).
+            let suffix_bytes = (suffix as u16).to_be_bytes();
             key.extend_from_slice(&suffix_bytes);
             key.resize(config.key_size, 0);
 

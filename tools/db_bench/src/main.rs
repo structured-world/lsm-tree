@@ -88,6 +88,11 @@ fn main() {
         use_blob_tree: cli.use_blob_tree,
     };
 
+    if bench_config.num == 0 {
+        eprintln!("Error: --num must be > 0");
+        std::process::exit(1);
+    }
+
     // Use provided path or create a temp directory.
     let _tmpdir;
     let db_path = match &cli.db {

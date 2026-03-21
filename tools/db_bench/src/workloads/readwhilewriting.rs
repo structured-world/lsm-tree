@@ -48,6 +48,9 @@ impl Workload for ReadWhileWriting {
                             let key = make_sequential_key(idx, config.key_size);
 
                             let t = Instant::now();
+                            // Log errors without panicking — a read failure in one
+                            // iteration shouldn't abort the entire benchmark. The error
+                            // is still visible in stderr for debugging.
                             if let Err(e) = tree.get(&key, read_seq) {
                                 eprintln!("read error: {e}");
                             }
