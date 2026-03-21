@@ -289,11 +289,9 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                         // Preserve MergeOperand type when filter replaces a value:
                         // turning a MergeOperand into a Value/Indirection would shadow
                         // the real base in lower levels and break merge resolution.
-                        if head.key.value_type.is_merge_operand()
-                            && (new_type == ValueType::Value || new_type == ValueType::Indirection)
-                        {
-                            // Keep as MergeOperand — only update the value bytes.
-                        } else {
+                        let preserve_merge_type = head.key.value_type.is_merge_operand()
+                            && (new_type == ValueType::Value || new_type == ValueType::Indirection);
+                        if !preserve_merge_type {
                             head.key.value_type = new_type;
                         }
                     }
@@ -355,16 +353,9 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                             return Some(Ok(merged));
                         }
 
-                        // No merge operator — DO NOT drain merge operands.
-                        // They are additive deltas, not superseding versions.
-                        // The read path will resolve them on-the-fly.
+                        // No merge operator — read path resolves operands on-the-fly
                     } else if head.key.value_type.is_merge_operand() {
-                        // Head is a MergeOperand at or above the GC watermark,
-                        // while the next version is below the watermark.
-                        // It is NOT safe to drain the remaining versions: they
-                        // may contain merge operands that still contribute to
-                        // the merged value for future snapshots. Emit head as-is
-                        // and leave the tail for later processing.
+                        // Head MergeOperand above GC — preserve tail for future merge
                     } else {
                         if head.key.value_type == ValueType::Tombstone && self.evict_tombstones {
                             fail_iter!(self.drain_key(&head.key.user_key));
@@ -381,7 +372,8 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                             continue;
                         }
                     }
-                } else if head.is_tombstone() && self.evict_tombstones {
+                }
+            } else if head.is_tombstone() && self.evict_tombstones {
                 continue;
             } else if head.key.value_type.is_merge_operand()
                 && head.key.seqno < self.gc_seqno_threshold
