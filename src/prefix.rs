@@ -74,6 +74,8 @@ pub trait PrefixExtractor:
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Shadows std's #[test] with test_log's version for structured logging.
+    // This IS used — #[test] on each function below resolves to this import.
     use test_log::test;
 
     struct ColonSeparatedPrefix;
