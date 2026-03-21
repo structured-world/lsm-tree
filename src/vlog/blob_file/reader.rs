@@ -111,7 +111,7 @@ impl<'a> Reader<'a> {
         let stored_header_crc = if frame_is_v4 {
             let crc = reader.read_u32::<LittleEndian>()?;
             // real_val_len was read as u32 (line above), widened to usize;
-            // cast back is lossless on all targets.
+            // cast back is lossless on supported targets (>= 32-bit usize).
             #[expect(clippy::cast_possible_truncation)]
             validate_header_crc(seqno, key_len, real_val_len as u32, on_disk_val_len, crc)?;
             Some(crc)

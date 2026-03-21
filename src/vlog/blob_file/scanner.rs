@@ -2,6 +2,8 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
+// Format constants live in writer (the format definition site).
+// Extracting to a shared module is an upstream structural decision.
 use super::writer::{validate_header_crc, BLOB_HEADER_MAGIC_V3, BLOB_HEADER_MAGIC_V4};
 use crate::{
     vlog::{blob_file::meta::METADATA_HEADER_MAGIC, BlobFileId},
