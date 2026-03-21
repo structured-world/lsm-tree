@@ -90,10 +90,11 @@ impl Workload for ReadWhileWriting {
                 reporter.merge(&local_reporter);
             }
 
+            // Stop timing once readers have finished; writer may still be running.
+            reporter.stop();
+
             writer_handle.join().expect("writer thread panicked");
         });
-
-        reporter.stop();
 
         Ok(())
     }
