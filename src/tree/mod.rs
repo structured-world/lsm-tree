@@ -1080,25 +1080,14 @@ impl Tree {
 
         let prefix_bytes = prefix.as_ref();
 
-        // Compute prefix hash for bloom-filter-based table skipping *only* when
-        // the scan prefix is a valid boundary for the configured PrefixExtractor.
-        //
-        // A custom extractor may index only a subset of possible prefixes (e.g.,
-        // only colon-terminated segments). Blindly hashing any user-supplied prefix
-        // could cause false negatives (tables skipped despite containing matching
-        // keys). By verifying that `prefix_bytes` appears among the extractor's
-        // output, we ensure the hash corresponds to something actually indexed.
-        let prefix_hash = if let Some(extractor) = &self.config.prefix_extractor {
-            if !prefix_bytes.is_empty()
-                && extractor.prefixes(prefix_bytes).any(|p| p == prefix_bytes)
-            {
-                Some(Builder::get_hash(prefix_bytes))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        // Only enable bloom-based table skipping when the scan prefix is a
+        // valid boundary for the configured extractor (see trait docs).
+        let prefix_hash = self
+            .config
+            .prefix_extractor
+            .as_ref()
+            .filter(|e| e.is_valid_prefix_boundary(prefix_bytes))
+            .map(|_| Builder::get_hash(prefix_bytes));
 
         let range = prefix_to_range(prefix_bytes);
 

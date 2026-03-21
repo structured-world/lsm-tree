@@ -23,7 +23,7 @@
 /// /// Extracts prefixes at each ':' separator boundary.
 /// ///
 /// /// For key `adj:out:42:KNOWS`, yields:
-/// ///   `adj:`, `adj:out:`, `adj:out:42:`, `adj:out:42:KNOWS`
+/// ///   `adj:`, `adj:out:`, `adj:out:42:`
 /// struct ColonSeparatedPrefix;
 ///
 /// impl PrefixExtractor for ColonSeparatedPrefix {
@@ -32,8 +32,7 @@
 ///             key.iter()
 ///                 .enumerate()
 ///                 .filter(|(_, b)| **b == b':')
-///                 .map(move |(i, _)| &key[..=i])
-///                 .chain(std::iter::once(key)),
+///                 .map(move |(i, _)| &key[..=i]),
 ///         )
 ///     }
 /// }
@@ -48,8 +47,8 @@ pub trait PrefixExtractor:
     /// checked against the bloom — segments without a match are skipped.
     ///
     /// Implementations should return prefixes from shortest to longest.
-    /// The full key itself may or may not be included (it is always indexed
-    /// separately by the standard bloom path).
+    /// Do **not** include the full key itself — it is always indexed
+    /// separately by the standard bloom path.
     ///
     /// # Performance note
     ///
@@ -57,6 +56,19 @@ pub trait PrefixExtractor:
     /// Most extractors yield 1–5 prefixes per key, so the allocation is negligible
     /// compared to the bloom hash + I/O cost.
     fn prefixes<'a>(&self, key: &'a [u8]) -> Box<dyn Iterator<Item = &'a [u8]> + 'a>;
+
+    /// Returns `true` if `prefix` is a valid scan boundary for this extractor.
+    ///
+    /// Bloom-based table skipping is only safe when the scan prefix was
+    /// actually indexed at write time. This default implementation checks
+    /// whether `prefixes(prefix)` emits `prefix` itself — i.e., whether
+    /// the extractor considers this byte sequence a boundary.
+    ///
+    /// Override this method only if you need a more efficient check
+    /// (e.g., checking a sentinel byte instead of iterating).
+    fn is_valid_prefix_boundary(&self, prefix: &[u8]) -> bool {
+        !prefix.is_empty() && self.prefixes(prefix).any(|p| p == prefix)
+    }
 }
 
 #[cfg(test)]
