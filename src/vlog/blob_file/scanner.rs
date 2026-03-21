@@ -203,13 +203,10 @@ mod tests {
             writer.finish()?;
         }
 
-        // Find frame start by searching for magic. Safe: test payloads
-        // (b"v" * 100) cannot contain b"BLO4", so no false match.
+        // BlobFileWriter writes the first frame at file offset 0
+        // (sfa has no inline section headers), so use deterministic offset.
         let mut raw = std::fs::read(&blob_file_path)?;
-        let frame_start = raw
-            .windows(4)
-            .position(|w| w == BLOB_HEADER_MAGIC_V4)
-            .unwrap();
+        let frame_start = 0usize;
 
         // Tamper seqno: header layout is [magic][checksum][seqno]...
         let seqno_offset = frame_start + BLOB_HEADER_MAGIC_V4.len() + std::mem::size_of::<u128>();
@@ -243,13 +240,10 @@ mod tests {
             writer.finish()?;
         }
 
-        // Find frame start by searching for magic. Safe: test payloads
-        // (b"v" * 100) cannot contain b"BLO4", so no false match.
+        // BlobFileWriter writes the first frame at file offset 0
+        // (sfa has no inline section headers), so use deterministic offset.
         let mut raw = std::fs::read(&blob_file_path)?;
-        let frame_start = raw
-            .windows(4)
-            .position(|w| w == BLOB_HEADER_MAGIC_V4)
-            .unwrap();
+        let frame_start = 0usize;
 
         // Tamper value payload: frame_start + header(42) + key(3)
         let value_offset = frame_start + BLOB_HEADER_LEN + 3;
@@ -349,12 +343,8 @@ mod tests {
 
         // Corrupt magic bytes at offset 0 (after sfa segment header)
         let mut raw = std::fs::read(&blob_file_path)?;
-        // sfa "data" segment header is at the start; find BLOB/BLO4 magic
-        let magic_pos = raw
-            .windows(BLOB_HEADER_MAGIC_V4.len())
-            .position(|w| w == BLOB_HEADER_MAGIC_V4)
-            .unwrap();
-        raw[magic_pos..magic_pos + 4].copy_from_slice(b"XXXX");
+        // First frame starts at offset 0 (sfa has no inline headers).
+        raw[0..4].copy_from_slice(b"XXXX");
         std::fs::write(&blob_file_path, &raw)?;
 
         let mut scanner = Scanner::new(&blob_file_path, 0)?;
