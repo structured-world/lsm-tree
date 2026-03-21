@@ -35,14 +35,22 @@ fn check_size_cap(len: usize) -> crate::Result<()> {
     Ok(())
 }
 
-pub const BLOB_HEADER_MAGIC: &[u8] = b"BLOB";
+/// V3 blob frame magic (no header checksum).
+pub const BLOB_HEADER_MAGIC_V3: &[u8] = b"BLOB";
 
-pub const BLOB_HEADER_LEN: usize = BLOB_HEADER_MAGIC.len()
+/// V4 blob frame magic (includes header checksum).
+pub const BLOB_HEADER_MAGIC: &[u8] = b"BLO4";
+
+/// V3 blob frame header length (38 bytes, no `header_crc`).
+pub const BLOB_HEADER_LEN_V3: usize = BLOB_HEADER_MAGIC_V3.len()
     + std::mem::size_of::<u128>() // Checksum
     + std::mem::size_of::<u64>() // SeqNo
     + std::mem::size_of::<u16>() // Key length
     + std::mem::size_of::<u32>() // Real value length
     + std::mem::size_of::<u32>(); // On-disk value length
+
+/// V4 blob frame header length (42 bytes, includes `header_crc`).
+pub const BLOB_HEADER_LEN: usize = BLOB_HEADER_LEN_V3 + std::mem::size_of::<u32>(); // Header CRC
 
 /// Blob file writer
 pub struct Writer {
@@ -172,28 +180,50 @@ impl Writer {
         self.uncompressed_bytes += u64::from(uncompressed_len);
 
         // NOTE:
-        // BLOB HEADER LAYOUT
+        // V4 BLOB HEADER LAYOUT
         //
-        // [MAGIC_BYTES; 4B]
-        // [Checksum; 16B]
+        // [MAGIC_BYTES; 4B]    - b"BLO4"
+        // [Checksum; 16B]      - xxh3_128(key + value + header_crc_le)
         // [Seqno; 8B]
         // [key len; 2B]
         // [real val len; 4B]
         // [on-disk val len; 4B]
+        // [header_crc; 4B]     - truncated xxh3(seqno + key_len + real_val_len + on_disk_val_len)
         // [...key; ?]
         // [...val; ?]
 
-        // Write header
-        self.writer.write_all(BLOB_HEADER_MAGIC)?;
+        // Compute header CRC over variable header fields (seqno, key_len,
+        // real_val_len, on_disk_val_len). Truncated to 4 bytes, same
+        // pattern as table block header checksums.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "intentionally truncated to 4-byte CRC"
+        )]
+        let header_crc = {
+            let mut hasher = xxhash_rust::xxh3::Xxh3::default();
+            hasher.update(&seqno.to_le_bytes());
+            #[expect(clippy::cast_possible_truncation, reason = "keys are u16 length max")]
+            hasher.update(&(key.len() as u16).to_le_bytes());
+            hasher.update(&uncompressed_len.to_le_bytes());
+            hasher.update(&compressed_len_u32.to_le_bytes());
+            hasher.digest128() as u32
+        };
 
+        // Data checksum includes header_crc bytes so that even if an
+        // attacker recomputes header_crc after tampering header fields,
+        // the data checksum still detects the change.
         let checksum = {
             let mut hasher = xxhash_rust::xxh3::Xxh3::default();
             hasher.update(key);
             hasher.update(&value);
+            hasher.update(&header_crc.to_le_bytes());
             hasher.digest128()
         };
 
-        // Write checksum
+        // Write header
+        self.writer.write_all(BLOB_HEADER_MAGIC)?;
+
+        // Write data checksum
         self.writer.write_u128::<LittleEndian>(checksum)?;
 
         // Write seqno
@@ -208,18 +238,14 @@ impl Writer {
         // Write compressed (on-disk) value length
         self.writer.write_u32::<LittleEndian>(compressed_len_u32)?;
 
+        // Write header CRC
+        self.writer.write_u32::<LittleEndian>(header_crc)?;
+
         self.writer.write_all(key)?;
         self.writer.write_all(&value)?;
 
         // Update offset
-        self.offset += BLOB_HEADER_MAGIC.len() as u64;
-        self.offset += std::mem::size_of::<u128>() as u64;
-        self.offset += std::mem::size_of::<u64>() as u64;
-
-        self.offset += std::mem::size_of::<u16>() as u64;
-        self.offset += std::mem::size_of::<u32>() as u64;
-        self.offset += std::mem::size_of::<u32>() as u64;
-
+        self.offset += BLOB_HEADER_LEN as u64;
         self.offset += key.len() as u64;
         self.offset += value.len() as u64;
 
@@ -257,6 +283,7 @@ impl Writer {
         // Write metadata
         let metadata = Metadata {
             id: self.blob_file_id,
+            version: 4,
             created_at: unix_timestamp().as_nanos(),
             item_count: self.item_count,
             total_compressed_bytes: self.written_blob_bytes,

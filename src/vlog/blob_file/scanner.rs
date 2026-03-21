@@ -2,7 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use super::writer::BLOB_HEADER_MAGIC;
+use super::writer::{BLOB_HEADER_MAGIC, BLOB_HEADER_MAGIC_V3};
 use crate::{
     vlog::{blob_file::meta::METADATA_HEADER_MAGIC, BlobFileId},
     Checksum, SeqNo, UserKey, UserValue,
@@ -62,6 +62,8 @@ impl Iterator for Scanner {
 
         let offset = fail_iter!(self.inner.stream_position());
 
+        let frame_is_v4;
+
         {
             let mut buf = [0; BLOB_HEADER_MAGIC.len()];
             fail_iter!(self.inner.read_exact(&mut buf));
@@ -71,7 +73,8 @@ impl Iterator for Scanner {
                 return None;
             }
 
-            if buf != BLOB_HEADER_MAGIC {
+            frame_is_v4 = buf == BLOB_HEADER_MAGIC;
+            if !frame_is_v4 && buf != BLOB_HEADER_MAGIC_V3 {
                 return Some(Err(crate::Error::InvalidHeader("Blob")));
             }
         }
@@ -85,6 +88,35 @@ impl Iterator for Scanner {
 
         let on_disk_val_len = fail_iter!(self.inner.read_u32::<LittleEndian>());
 
+        // V4: read and validate header CRC.
+        let stored_header_crc = if frame_is_v4 {
+            let crc = fail_iter!(self.inner.read_u32::<LittleEndian>());
+
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "intentionally truncated to 4-byte CRC"
+            )]
+            let recomputed_crc = {
+                let mut hasher = xxhash_rust::xxh3::Xxh3::default();
+                hasher.update(&seqno.to_le_bytes());
+                hasher.update(&key_len.to_le_bytes());
+                hasher.update(&real_val_len.to_le_bytes());
+                hasher.update(&on_disk_val_len.to_le_bytes());
+                hasher.digest128() as u32
+            };
+
+            if crc != recomputed_crc {
+                return Some(Err(crate::Error::ChecksumMismatch {
+                    got: Checksum::from_raw(u128::from(recomputed_crc)),
+                    expected: Checksum::from_raw(u128::from(crc)),
+                }));
+            }
+
+            Some(crc)
+        } else {
+            None
+        };
+
         let key = fail_iter!(UserKey::from_reader(&mut self.inner, key_len as usize));
 
         let value = fail_iter!(UserValue::from_reader(
@@ -97,6 +129,9 @@ impl Iterator for Scanner {
                 let mut hasher = xxhash_rust::xxh3::Xxh3::default();
                 hasher.update(&key);
                 hasher.update(&value);
+                if let Some(hcrc) = stored_header_crc {
+                    hasher.update(&hcrc.to_le_bytes());
+                }
                 hasher.digest128()
             };
 
