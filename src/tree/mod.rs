@@ -815,10 +815,6 @@ impl Tree {
     /// Collects ALL entries for the key across all storage layers (active memtable,
     /// sealed memtables, disk tables), identifies the base value, and applies the
     /// merge operator. Entries are processed from newest to oldest (descending seqno).
-    ///
-    // TODO: range tombstone suppression is not applied here — operands or base
-    // values that are logically deleted by a range tombstone may still be merged.
-    // This requires passing range tombstone state into the scan loop.
     fn resolve_merge_get(
         super_version: &SuperVersion,
         key: &[u8],
@@ -853,8 +849,19 @@ impl Tree {
             }
         };
 
+        // Check if an entry is suppressed by a range tombstone. RT-suppressed
+        // entries are logically deleted and must not participate in merge
+        // resolution — treat them as a tombstone boundary.
+        let is_rt_suppressed = |entry: &InternalValue| -> bool {
+            Self::is_suppressed_by_range_tombstones(super_version, key, entry.key.seqno, seqno)
+        };
+
         // 1. Scan active memtable — returns all entries for key in desc seqno order
         for entry in &super_version.active_memtable.get_all_for_key(key, seqno) {
+            if is_rt_suppressed(entry) {
+                found_base = true;
+                break;
+            }
             if process_entry(entry) {
                 found_base = true;
                 break;
@@ -865,6 +872,10 @@ impl Tree {
         if !found_base {
             'sealed: for mt in super_version.sealed_memtables.iter().rev() {
                 for entry in &mt.get_all_for_key(key, seqno) {
+                    if is_rt_suppressed(entry) {
+                        found_base = true;
+                        break 'sealed;
+                    }
                     if process_entry(entry) {
                         found_base = true;
                         break 'sealed;
@@ -886,7 +897,9 @@ impl Tree {
             {
                 // Use bloom-filtered point lookup first (fast path)
                 if let Some(entry) = table.get(key, seqno, key_hash)? {
-                    if entry.key.value_type.is_merge_operand() {
+                    if is_rt_suppressed(&entry) {
+                        found_base = true;
+                    } else if entry.key.value_type.is_merge_operand() {
                         // Table may contain multiple entries for this key
                         // (e.g., after flush with gc_threshold=0).
                         // Fall back to range scan to collect all of them.
@@ -895,6 +908,10 @@ impl Tree {
                             let item = item?;
                             if item.key.seqno >= seqno {
                                 continue;
+                            }
+                            if is_rt_suppressed(&item) {
+                                found_base = true;
+                                break;
                             }
                             if process_entry(&item) {
                                 found_base = true;

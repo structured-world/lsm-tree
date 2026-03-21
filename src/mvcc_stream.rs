@@ -4,7 +4,8 @@
 
 use crate::double_ended_peekable::{DoubleEndedPeekable, DoubleEndedPeekableExt};
 use crate::merge_operator::MergeOperator;
-use crate::{InternalValue, UserKey, UserValue, ValueType};
+use crate::range_tombstone::RangeTombstone;
+use crate::{InternalValue, SeqNo, UserKey, UserValue, ValueType};
 use std::sync::Arc;
 
 /// Consumes a stream of KVs and emits a new stream according to MVCC and tombstone rules
@@ -13,6 +14,11 @@ use std::sync::Arc;
 pub struct MvccStream<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> {
     inner: DoubleEndedPeekable<crate::Result<InternalValue>, I>,
     merge_operator: Option<Arc<dyn MergeOperator>>,
+
+    /// Range tombstones visible at `read_seqno`. When set, merge resolution
+    /// skips entries suppressed by an RT (treats them as a tombstone boundary).
+    range_tombstones: Vec<RangeTombstone>,
+    read_seqno: SeqNo,
 }
 
 impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> {
@@ -22,7 +28,27 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
         Self {
             inner: iter.double_ended_peekable(),
             merge_operator,
+            range_tombstones: Vec::new(),
+            read_seqno: 0,
         }
+    }
+
+    /// Installs range tombstones for merge-resolution awareness.
+    ///
+    /// When set, operands or base values suppressed by a range tombstone are
+    /// treated as a deletion boundary (merge stops, base = None).
+    #[must_use]
+    pub fn with_range_tombstones(mut self, rts: Vec<RangeTombstone>, read_seqno: SeqNo) -> Self {
+        self.range_tombstones = rts;
+        self.read_seqno = read_seqno;
+        self
+    }
+
+    /// Returns true if the entry is suppressed by any installed range tombstone.
+    fn is_rt_suppressed(&self, entry: &InternalValue) -> bool {
+        self.range_tombstones
+            .iter()
+            .any(|rt| rt.should_suppress(&entry.key.user_key, entry.key.seqno, self.read_seqno))
     }
 
     /// Collects all entries for the given key and applies the merge operator (forward).
@@ -50,6 +76,13 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
             };
 
             let next = next?;
+
+            // Range tombstone suppression: an RT-suppressed entry is logically
+            // deleted — treat it as a tombstone boundary (no base value).
+            if self.is_rt_suppressed(&next) {
+                found_base = true;
+                break;
+            }
 
             match next.key.value_type {
                 ValueType::MergeOperand => {
@@ -126,6 +159,11 @@ impl<I: DoubleEndedIterator<Item = crate::Result<InternalValue>>> MvccStream<I> 
             if result_seqno == 0 {
                 result_seqno = entry.key.seqno;
                 result_key = entry.key.user_key.clone();
+            }
+
+            // RT-suppressed entries are logically deleted — treat as tombstone.
+            if self.is_rt_suppressed(entry) {
+                break;
             }
 
             match entry.key.value_type {
@@ -1246,6 +1284,84 @@ mod tests {
             assert_eq!(&*item.value, b"op1");
 
             assert!(iter.next().is_none());
+            Ok(())
+        }
+
+        /// Forward: RT-suppressed base value is excluded from merge.
+        #[test]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
+        fn merge_forward_rt_suppresses_base() -> crate::Result<()> {
+            use crate::range_tombstone::RangeTombstone;
+
+            // RT covers key "a" at seqno 2 → base@1 is suppressed
+            let rt = RangeTombstone::new(b"a".to_vec().into(), b"b".to_vec().into(), 2);
+
+            let vec = vec![
+                InternalValue::from_components("a", "op1", 3, ValueType::MergeOperand),
+                InternalValue::from_components("a", "base", 1, ValueType::Value),
+            ];
+
+            let iter = Box::new(vec.into_iter().map(Ok));
+            let mut iter = MvccStream::new(iter, merge_op()).with_range_tombstones(vec![rt], 4);
+
+            let item = iter.next().unwrap()?;
+            assert_eq!(item.key.value_type, ValueType::Value);
+            // base@1 is RT-suppressed → merge with no base
+            assert_eq!(&*item.value, b"op1");
+
+            assert!(iter.next().is_none());
+            Ok(())
+        }
+
+        /// Forward: RT-suppressed operand stops collection (treated as boundary).
+        #[test]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
+        fn merge_forward_rt_suppresses_operand() -> crate::Result<()> {
+            use crate::range_tombstone::RangeTombstone;
+
+            // RT at seqno 3 → operand@2 and base@1 are suppressed
+            let rt = RangeTombstone::new(b"a".to_vec().into(), b"b".to_vec().into(), 3);
+
+            let vec = vec![
+                InternalValue::from_components("a", "op2", 4, ValueType::MergeOperand),
+                InternalValue::from_components("a", "op1", 2, ValueType::MergeOperand),
+                InternalValue::from_components("a", "base", 1, ValueType::Value),
+            ];
+
+            let iter = Box::new(vec.into_iter().map(Ok));
+            let mut iter = MvccStream::new(iter, merge_op()).with_range_tombstones(vec![rt], 5);
+
+            let item = iter.next().unwrap()?;
+            assert_eq!(item.key.value_type, ValueType::Value);
+            // Only op2 survives; op1 and base are RT-suppressed
+            assert_eq!(&*item.value, b"op2");
+
+            assert!(iter.next().is_none());
+            Ok(())
+        }
+
+        /// Reverse: RT-suppressed entries are excluded from merge.
+        #[test]
+        #[expect(clippy::unwrap_used, reason = "test assertion")]
+        fn merge_reverse_rt_suppresses_base() -> crate::Result<()> {
+            use crate::range_tombstone::RangeTombstone;
+
+            let rt = RangeTombstone::new(b"a".to_vec().into(), b"b".to_vec().into(), 2);
+
+            let vec = vec![
+                InternalValue::from_components("a", "op1", 3, ValueType::MergeOperand),
+                InternalValue::from_components("a", "base", 1, ValueType::Value),
+            ];
+
+            let iter = Box::new(vec.into_iter().map(Ok));
+            let mut iter = MvccStream::new(iter, merge_op()).with_range_tombstones(vec![rt], 4);
+
+            let item = iter.next_back().unwrap()?;
+            assert_eq!(item.key.value_type, ValueType::Value);
+            // base@1 suppressed → merge with no base
+            assert_eq!(&*item.value, b"op1");
+
+            assert!(iter.next_back().is_none());
             Ok(())
         }
     }

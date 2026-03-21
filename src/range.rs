@@ -382,10 +382,8 @@ impl TreeIter {
             }
 
             let merged = Merger::new(iters);
-            // TODO: MvccStream runs merge resolution before RangeTombstoneFilter,
-            // so operands suppressed by a range tombstone may still be merged.
-            // Fixing this requires passing RT state into MvccStream.
-            let iter = MvccStream::new(merged, lock.merge_operator.clone());
+            let iter = MvccStream::new(merged, lock.merge_operator.clone())
+                .with_range_tombstones(all_range_tombstones.clone(), seqno);
 
             let iter = iter.filter(|x| match x {
                 Ok(value) => !value.key.is_tombstone(),

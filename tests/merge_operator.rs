@@ -639,6 +639,78 @@ fn merge_major_compaction_resolves_all() -> lsm_tree::Result<()> {
     Ok(())
 }
 
+/// Range tombstone between base and operand: base is suppressed, operand survives.
+#[test]
+fn merge_rt_kills_base_preserves_operand() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    // base@seqno=0
+    tree.insert("counter", 100_i64.to_le_bytes(), 0);
+
+    // RT [counter, counter\x00) at seqno=5 → kills base@0
+    tree.remove_range("counter", "counter\x00", 5);
+
+    // Merge operand@seqno=10 (above RT@5 → survives)
+    tree.merge("counter", 7_i64.to_le_bytes(), 10);
+
+    // get@11: base@0 suppressed by RT@5, operand@10 survives
+    // merge(key, None, [7]) = 0 + 7 = 7
+    assert_eq!(Some(7), get_counter(&tree, "counter", 11));
+
+    Ok(())
+}
+
+/// Range tombstone kills all versions — key appears deleted.
+#[test]
+fn merge_rt_kills_all() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    tree.insert("counter", 100_i64.to_le_bytes(), 0);
+    tree.merge("counter", 5_i64.to_le_bytes(), 1);
+
+    // RT at seqno=10 covers "counter" → kills base@0 and operand@1
+    tree.remove_range("counter", "counter\x00", 10);
+
+    // All versions suppressed → key not found
+    assert_eq!(None, get_counter(&tree, "counter", 11));
+
+    Ok(())
+}
+
+/// Range tombstone + merge in range scan: RT-suppressed operands excluded.
+#[test]
+fn merge_rt_in_range_scan() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    tree.insert("a", 10_i64.to_le_bytes(), 0);
+    tree.insert("b", 100_i64.to_le_bytes(), 1);
+    tree.merge("b", 5_i64.to_le_bytes(), 2);
+
+    // RT at seqno=8 covers "b" → kills base@1 and operand@2
+    tree.remove_range("b", "b\x00", 8);
+
+    // Merge operand above RT
+    tree.merge("b", 7_i64.to_le_bytes(), 10);
+
+    // Range scan: a=10, b=7 (base@1 and op@2 killed by RT, op@10 survives)
+    let items: Vec<_> = tree
+        .iter(11, None)
+        .map(|guard| {
+            let (_k, v): (lsm_tree::UserKey, lsm_tree::UserValue) = guard.into_inner().unwrap();
+            i64::from_le_bytes((*v).try_into().unwrap())
+        })
+        .collect();
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0], 10); // a: untouched
+    assert_eq!(items[1], 7); // b: only op@10, base+op@2 killed by RT
+
+    Ok(())
+}
+
 /// Merge operands with range iteration and snapshot isolation.
 #[test]
 fn merge_range_with_snapshot_isolation() -> lsm_tree::Result<()> {
