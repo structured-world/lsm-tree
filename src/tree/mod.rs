@@ -854,8 +854,6 @@ impl Tree {
         // the run layout.
         let mut best: Option<InternalValue> = None;
 
-        // No short-circuit on `best.seqno == seqno`: table.get() returns
-        // entries with seqno strictly < read_seqno, so equality never holds.
         for table in version
             .iter_levels()
             .flat_map(|lvl| lvl.iter())
@@ -867,6 +865,13 @@ impl Tree {
                 if !dominated {
                     best = Some(item);
                 }
+            }
+
+            // Early exit: table.get() returns entries with seqno strictly
+            // < read_seqno, so `seqno - 1` is the maximum visible seqno.
+            // Once we've found it, no other table can have a higher one.
+            if best.as_ref().is_some_and(|b| b.key.seqno + 1 == seqno) {
+                break;
             }
         }
 
