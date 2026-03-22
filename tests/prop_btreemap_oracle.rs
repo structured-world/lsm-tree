@@ -47,9 +47,9 @@ impl Oracle {
         }
         // Exclusive: find entries with seqno < read_seqno (i.e., <= read_seqno - 1)
         let start = (key.to_vec(), Reverse(read_seqno - 1));
-        let end_exclusive = (key.to_vec(), Reverse(0));
+        let end_inclusive = (key.to_vec(), Reverse(0));
 
-        for ((k, _), val) in self.data.range(start..=end_exclusive) {
+        for ((k, _), val) in self.data.range(start..=end_inclusive) {
             if k != key {
                 break;
             }
