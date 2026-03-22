@@ -81,9 +81,10 @@ pub fn load_block(
         #[cfg(feature = "metrics")]
         metrics.table_file_opened_uncached.fetch_add(1, Relaxed);
 
-        // Unsizing coercion: the if-branch returns Arc<dyn FsFile> from
-        // the descriptor table, so the else-branch needs an explicit cast.
-        (Arc::new(fd) as Arc<dyn FsFile>, true)
+        // the descriptor table, so the else-branch needs an explicit
+        // type annotation to trigger coercion.
+        let fd: Arc<dyn FsFile> = Arc::new(fd);
+        (fd, true)
     };
 
     let block = Block::from_file(&*fd, *handle, compression, encryption)?;
