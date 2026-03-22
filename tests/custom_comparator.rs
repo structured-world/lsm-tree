@@ -219,3 +219,63 @@ fn default_comparator_unchanged_behavior() -> lsm_tree::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn reverse_comparator_bounded_range_scan() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let cmp: SharedComparator = Arc::new(ReverseComparator);
+
+    let tree = Config::new(folder, Default::default(), Default::default())
+        .comparator(cmp)
+        .open()?;
+
+    tree.insert("a", "1", 0);
+    tree.insert("b", "2", 1);
+    tree.insert("c", "3", 2);
+    tree.insert("d", "4", 3);
+    tree.insert("e", "5", 4);
+
+    // Reverse order: e, d, c, b, a
+    // Range "d"..="b" in reverse comparator means: items where cmp says key >= "d" && key <= "b"
+    // In reverse: "d" < "c" < "b" (reversed), so range "d"..="b" should yield d, c, b
+    let items: Vec<_> = tree
+        .range("d"..="b", 5, None)
+        .map(|g| {
+            let (k, _) = g.into_inner().unwrap();
+            String::from_utf8(k.to_vec()).unwrap()
+        })
+        .collect();
+
+    assert_eq!(items, vec!["d", "c", "b"]);
+
+    Ok(())
+}
+
+#[test]
+fn u64_comparator_bounded_range_scan() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let cmp: SharedComparator = Arc::new(U64BigEndianComparator);
+
+    let tree = Config::new(folder, Default::default(), Default::default())
+        .comparator(cmp)
+        .open()?;
+
+    for &key in &[10u64, 50, 100, 500, 1000] {
+        tree.insert(key.to_be_bytes(), format!("v{key}"), key);
+    }
+
+    // Range scan: 50..=500 should yield 50, 100, 500
+    let lo = 50u64.to_be_bytes();
+    let hi = 500u64.to_be_bytes();
+    let items: Vec<u64> = tree
+        .range(lo..=hi, 1001, None)
+        .map(|g| {
+            let (k, _) = g.into_inner().unwrap();
+            u64::from_be_bytes(k[..8].try_into().unwrap())
+        })
+        .collect();
+
+    assert_eq!(items, vec![50, 100, 500]);
+
+    Ok(())
+}
