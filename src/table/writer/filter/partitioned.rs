@@ -181,10 +181,7 @@ impl<W: std::io::Write + std::io::Seek> FilterWriter<W> for PartitionedFilterWri
         // Table::maybe_contains_prefix returns Ok(true) for partitioned/TLI
         // filters (partition index is keyed by user key, not prefix hash),
         // so prefix hashes would only increase CPU and filter size with no
-        // read-side benefit. The prefix_extractor field is still accepted to
-        // keep the writer API uniform; it will be used once partitioned-prefix
-        // checks are implemented.
-        let _ = &self.prefix_extractor;
+        // read-side benefit.
 
         self.approx_filter_size = self
             .bloom_policy
