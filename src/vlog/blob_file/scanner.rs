@@ -43,7 +43,8 @@ impl Scanner {
     pub fn new<P: AsRef<Path>>(path: P, blob_file_id: BlobFileId) -> crate::Result<Self> {
         let path = path.as_ref();
 
-        let sfa_reader = sfa::Reader::new(path)?;
+        let mut file = File::open(path)?;
+        let sfa_reader = sfa::Reader::from_reader(&mut file)?;
         let data_section = sfa_reader
             .toc()
             .section(b"data")
@@ -58,8 +59,8 @@ impl Scanner {
                     "BlobFile: data section offset overflow",
                 ))?;
 
-        let mut file_reader = BufReader::with_capacity(32_000, File::open(path)?);
-        file_reader.seek(std::io::SeekFrom::Start(data_start))?;
+        file.seek(std::io::SeekFrom::Start(data_start))?;
+        let file_reader = BufReader::with_capacity(32_000, file);
 
         Ok(Self {
             blob_file_id,
@@ -403,6 +404,8 @@ mod tests {
     /// corruption matching those bytes caused silent data loss.
     #[test]
     fn blob_scanner_meta_corruption_is_not_silent_eof() -> crate::Result<()> {
+        use crate::vlog::blob_file::writer::BLOB_HEADER_LEN_V4;
+
         let dir = tempdir()?;
         let blob_file_path = dir.path().join("0");
 
@@ -413,17 +416,28 @@ mod tests {
             writer.finish()?;
         }
 
-        // Read the raw file and find the start of the second frame by
-        // scanning for the V4 magic after the first frame.
-        let mut raw = std::fs::read(&blob_file_path)?;
-        let second_frame_offset = {
-            use crate::vlog::blob_file::writer::BLOB_HEADER_LEN_V4;
-            // First frame: header + key("a") + value(50 bytes)
-            BLOB_HEADER_LEN_V4 + 1 + 50
+        // Get data section start from SFA TOC so the offset calculation
+        // stays correct even if SFA ever places data at non-zero offset.
+        let data_start = {
+            let sfa_reader = sfa::Reader::new(&blob_file_path)?;
+            let section = sfa_reader.toc().section(b"data").unwrap();
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "test blob file is tiny, pos fits in usize"
+            )]
+            {
+                section.pos() as usize
+            }
         };
 
+        let mut raw = std::fs::read(&blob_file_path)?;
+        // Second frame offset: data_start + first frame (header + key + value).
+        let second_frame_offset = data_start + BLOB_HEADER_LEN_V4 + 1 + 50;
+
         // Corrupt the second frame's magic to b"META".
-        raw[second_frame_offset..second_frame_offset + 4].copy_from_slice(b"META");
+        raw.get_mut(second_frame_offset..second_frame_offset + 4)
+            .unwrap()
+            .copy_from_slice(b"META");
         std::fs::write(&blob_file_path, &raw)?;
 
         let mut scanner = Scanner::new(&blob_file_path, 0)?;
@@ -434,9 +448,7 @@ mod tests {
 
         // Second frame has corrupted magic — scanner must return an
         // error, NOT silently terminate.
-        let second = scanner
-            .next()
-            .expect("scanner must not silently terminate on META-corrupted magic");
+        let second = scanner.next().unwrap();
         assert!(
             matches!(second, Err(crate::Error::InvalidHeader("Blob"))),
             "expected InvalidHeader for META-corrupted magic, got: {second:?}",
