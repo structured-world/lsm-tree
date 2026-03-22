@@ -121,25 +121,56 @@ impl Aes256GcmProvider {
     }
 }
 
-/// Access a thread-local CSPRNG seeded once from the OS RNG.
+/// Access a thread-local CSPRNG seeded from the OS RNG in a fork-safe way.
 ///
 /// Using a thread-local [`ChaCha20Rng`](rand_chacha::ChaCha20Rng) avoids a
 /// `getrandom` syscall on every nonce generation, which saves 1-10 µs per
 /// block under contention. The RNG is cryptographically secure and seeded
-/// from `OsRng` on first access per thread.
+/// from `OsRng` on first access per thread, and is automatically reseeded
+/// if the process ID changes (e.g., after a `fork()`).
 #[cfg(feature = "encryption")]
 fn thread_local_rng<R>(f: impl FnOnce(&mut rand_chacha::ChaCha20Rng) -> R) -> R {
-    use std::cell::RefCell;
+    fn new_chacha_rng() -> rand_chacha::ChaCha20Rng {
+        use rand_core::SeedableRng;
 
-    thread_local! {
-        static RNG: RefCell<rand_chacha::ChaCha20Rng> = RefCell::new({
-            use rand_core::SeedableRng;
-            rand_chacha::ChaCha20Rng::from_rng(rand_core::OsRng)
-                .expect("OS RNG should be available for initial CSPRNG seed")
-        });
+        #[expect(
+            clippy::expect_used,
+            reason = "OsRng infallible on supported platforms"
+        )]
+        rand_chacha::ChaCha20Rng::from_rng(rand_core::OsRng)
+            .expect("OS RNG should be available for initial CSPRNG seed")
     }
 
-    RNG.with(|cell| f(&mut cell.borrow_mut()))
+    struct ForkSafeRng {
+        pid: std::cell::Cell<u32>,
+        rng: std::cell::RefCell<rand_chacha::ChaCha20Rng>,
+    }
+
+    impl ForkSafeRng {
+        fn new() -> Self {
+            Self {
+                pid: std::cell::Cell::new(std::process::id()),
+                rng: std::cell::RefCell::new(new_chacha_rng()),
+            }
+        }
+
+        fn with_rng<R>(&self, f: impl FnOnce(&mut rand_chacha::ChaCha20Rng) -> R) -> R {
+            let current_pid = std::process::id();
+            if self.pid.get() != current_pid {
+                // Process was forked; reseed RNG to avoid nonce reuse across PIDs.
+                self.pid.set(current_pid);
+                *self.rng.borrow_mut() = new_chacha_rng();
+            }
+
+            f(&mut self.rng.borrow_mut())
+        }
+    }
+
+    thread_local! {
+        static RNG: ForkSafeRng = ForkSafeRng::new();
+    }
+
+    RNG.with(|state| state.with_rng(f))
 }
 
 #[cfg(feature = "encryption")]
