@@ -121,6 +121,51 @@ impl Aes256GcmProvider {
     }
 }
 
+/// Create a new [`ChaCha20Rng`](rand_chacha::ChaCha20Rng) seeded from the OS RNG.
+#[cfg(feature = "encryption")]
+fn new_chacha_rng() -> rand_chacha::ChaCha20Rng {
+    use rand_core::SeedableRng;
+
+    #[expect(
+        clippy::expect_used,
+        reason = "OsRng infallible on supported platforms"
+    )]
+    rand_chacha::ChaCha20Rng::from_rng(rand_core::OsRng)
+        .expect("OS RNG should be available for initial CSPRNG seed")
+}
+
+/// Thread-local CSPRNG wrapper with fork-aware PID tracking.
+///
+/// On each access, compares the stored PID with `std::process::id()`.
+/// If they differ (i.e. the process was forked), the RNG is reseeded
+/// from `OsRng` to avoid nonce reuse across processes.
+#[cfg(feature = "encryption")]
+struct ForkAwareRng {
+    pid: std::cell::Cell<u32>,
+    rng: std::cell::RefCell<rand_chacha::ChaCha20Rng>,
+}
+
+#[cfg(feature = "encryption")]
+impl ForkAwareRng {
+    fn new() -> Self {
+        Self {
+            pid: std::cell::Cell::new(std::process::id()),
+            rng: std::cell::RefCell::new(new_chacha_rng()),
+        }
+    }
+
+    fn with_rng<R>(&self, f: impl FnOnce(&mut rand_chacha::ChaCha20Rng) -> R) -> R {
+        let current_pid = std::process::id();
+        if self.pid.get() != current_pid {
+            // Process was forked; reseed RNG to avoid nonce reuse across PIDs.
+            self.pid.set(current_pid);
+            *self.rng.borrow_mut() = new_chacha_rng();
+        }
+
+        f(&mut self.rng.borrow_mut())
+    }
+}
+
 /// Access a thread-local CSPRNG seeded from the OS RNG in a fork-aware way.
 ///
 /// Using a thread-local [`ChaCha20Rng`](rand_chacha::ChaCha20Rng) avoids a
@@ -131,44 +176,8 @@ impl Aes256GcmProvider {
 /// the risk of nonce reuse across processes.
 #[cfg(feature = "encryption")]
 fn thread_local_rng<R>(f: impl FnOnce(&mut rand_chacha::ChaCha20Rng) -> R) -> R {
-    fn new_chacha_rng() -> rand_chacha::ChaCha20Rng {
-        use rand_core::SeedableRng;
-
-        #[expect(
-            clippy::expect_used,
-            reason = "OsRng infallible on supported platforms"
-        )]
-        rand_chacha::ChaCha20Rng::from_rng(rand_core::OsRng)
-            .expect("OS RNG should be available for initial CSPRNG seed")
-    }
-
-    struct ForkSafeRng {
-        pid: std::cell::Cell<u32>,
-        rng: std::cell::RefCell<rand_chacha::ChaCha20Rng>,
-    }
-
-    impl ForkSafeRng {
-        fn new() -> Self {
-            Self {
-                pid: std::cell::Cell::new(std::process::id()),
-                rng: std::cell::RefCell::new(new_chacha_rng()),
-            }
-        }
-
-        fn with_rng<R>(&self, f: impl FnOnce(&mut rand_chacha::ChaCha20Rng) -> R) -> R {
-            let current_pid = std::process::id();
-            if self.pid.get() != current_pid {
-                // Process was forked; reseed RNG to avoid nonce reuse across PIDs.
-                self.pid.set(current_pid);
-                *self.rng.borrow_mut() = new_chacha_rng();
-            }
-
-            f(&mut self.rng.borrow_mut())
-        }
-    }
-
     thread_local! {
-        static RNG: ForkSafeRng = ForkSafeRng::new();
+        static RNG: ForkAwareRng = ForkAwareRng::new();
     }
 
     RNG.with(|state| state.with_rng(f))
@@ -389,6 +398,35 @@ mod tests {
                 );
             }
             Ok(())
+        }
+
+        /// Verify ForkAwareRng reseeds when it detects a PID change,
+        /// producing different RNG output than before the simulated fork.
+        #[test]
+        fn fork_aware_rng_reseeds_on_pid_change() {
+            use rand_core::RngCore;
+
+            let rng = ForkAwareRng::new();
+
+            // Generate a value with the current PID.
+            let before: u64 = rng.with_rng(|r| r.next_u64());
+
+            // Simulate fork by setting a fake PID that differs from the real one.
+            let fake_pid = std::process::id().wrapping_add(1);
+            rng.pid.set(fake_pid);
+
+            // Next call sees real PID != fake PID → reseeds from OsRng.
+            let after: u64 = rng.with_rng(|r| r.next_u64());
+
+            // After reseed, the RNG state is completely new (from OsRng).
+            // Probability of collision: 1/2^64 — effectively impossible.
+            assert_ne!(
+                before, after,
+                "RNG should produce different output after reseed"
+            );
+
+            // PID should be restored to the real process ID.
+            assert_eq!(rng.pid.get(), std::process::id());
         }
     }
 }
