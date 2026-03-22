@@ -1,14 +1,11 @@
-// Regression tests found by prop_btreemap_oracle proptest.
+// Regression tests found by prop_btreemap_oracle proptest (PR #45).
+// Both bugs were fixed in PR #56 (issues #52, #53).
 //
-// BUG 1 (regression_overwrite_across_ssts): When there are 3+ L0 SSTs and
-// an active memtable with data for a DIFFERENT key, point reads for keys
-// across SSTs return stale values. The L0 merge resolution doesn't correctly
-// pick the newest version when the active memtable is non-empty.
+// BUG 1 (regression_overwrite_across_ssts): L0 merge resolution returned
+// stale values when 3+ SSTs existed and the active memtable was non-empty.
 //
-// BUG 2 (regression_remove_range_then_insert_then_remove): Range tombstone +
-// point tombstone interaction across SSTs — the point tombstone is not visible.
-//
-// Fixed in PR #56: L0 MVCC resolution and RT + point tombstone interaction.
+// BUG 2 (regression_remove_range_then_insert_then_remove): Point tombstone
+// was invisible when a range tombstone existed in a prior SST.
 
 use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
 
