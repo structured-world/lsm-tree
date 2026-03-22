@@ -65,6 +65,9 @@ pub trait PrefixExtractor:
     /// surface; consider adding it if profiling shows measurable overhead.
     fn prefixes<'a>(&self, key: &'a [u8]) -> Box<dyn Iterator<Item = &'a [u8]> + 'a>;
 
+    // NOTE: Renamed from `is_valid_prefix_boundary` (added in PR #43, never
+    // released). No deprecated shim needed — no downstream consumers exist.
+
     /// Returns `true` if `prefix` is a valid scan boundary for this extractor.
     ///
     /// A scan boundary is valid when **every key** that would be matched by the
@@ -205,8 +208,8 @@ mod tests {
 
     impl PrefixExtractor for FixedLengthPrefix {
         fn prefixes<'a>(&self, key: &'a [u8]) -> Box<dyn Iterator<Item = &'a [u8]> + 'a> {
-            if key.len() >= 4 {
-                Box::new(std::iter::once(&key[..4]))
+            if let Some(prefix) = key.get(..4) {
+                Box::new(std::iter::once(prefix))
             } else {
                 Box::new(std::iter::empty())
             }
@@ -215,6 +218,22 @@ mod tests {
         fn is_valid_scan_boundary(&self, prefix: &[u8]) -> bool {
             prefix.len() == 4
         }
+    }
+
+    #[test]
+    fn fixed_length_prefixes() {
+        let extractor = FixedLengthPrefix;
+        // Key longer than 4 bytes yields a single 4-byte prefix
+        let prefixes: Vec<&[u8]> = extractor.prefixes(b"usr:data").collect();
+        assert_eq!(prefixes, vec![b"usr:" as &[u8]]);
+
+        // Key shorter than 4 bytes yields nothing
+        let prefixes: Vec<&[u8]> = extractor.prefixes(b"ab").collect();
+        assert!(prefixes.is_empty());
+
+        // Key exactly 4 bytes yields itself
+        let prefixes: Vec<&[u8]> = extractor.prefixes(b"abcd").collect();
+        assert_eq!(prefixes, vec![b"abcd" as &[u8]]);
     }
 
     #[test]
