@@ -38,7 +38,7 @@ impl Workload for ReadWhileWriting {
         // barrier would require sharing the reporter across threads.
         reporter.start();
 
-        std::thread::scope(|s| {
+        let scope_result: lsm_tree::Result<()> = std::thread::scope(|s| {
             // Spawn reader threads — borrow barrier by reference.
             let reader_handles: Vec<_> = (0..reader_count)
                 .enumerate()
@@ -69,8 +69,6 @@ impl Workload for ReadWhileWriting {
             let writer_handle = s.spawn(|| {
                 barrier.wait();
 
-                // Writer inserts new random keys (not overwrites) to create
-                // concurrent write pressure without contending on specific keys.
                 // Writer inserts a fixed config.num keys — it may finish before
                 // readers, which is intentional (fixed write volume, measured read
                 // throughput). This matches RocksDB db_bench readwhilewriting.
@@ -86,7 +84,6 @@ impl Workload for ReadWhileWriting {
             // this is a read throughput benchmark with concurrent write pressure,
             // matching RocksDB db_bench semantics.
             for handle in reader_handles {
-                // Reader panic = broken benchmark, not recoverable.
                 #[expect(clippy::expect_used, reason = "reader panic is unrecoverable")]
                 let local_reporter = handle.join().expect("reader thread panicked")?;
                 reporter.merge(&local_reporter);
@@ -95,10 +92,13 @@ impl Workload for ReadWhileWriting {
             // Stop timing once readers have finished; writer may still be running.
             reporter.stop();
 
-            // Writer panic = broken benchmark, not recoverable.
             #[expect(clippy::expect_used, reason = "writer panic is unrecoverable")]
             writer_handle.join().expect("writer thread panicked");
+
+            Ok(())
         });
+
+        scope_result?;
 
         Ok(())
     }

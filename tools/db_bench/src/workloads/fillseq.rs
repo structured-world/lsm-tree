@@ -2,7 +2,7 @@ use crate::config::BenchConfig;
 use crate::db::{make_sequential_key, make_value};
 use crate::reporter::Reporter;
 use crate::workloads::Workload;
-use lsm_tree::AnyTree;
+use lsm_tree::{AbstractTree, AnyTree}; // AbstractTree required for insert()
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
