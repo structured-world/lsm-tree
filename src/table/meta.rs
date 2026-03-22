@@ -196,7 +196,10 @@ impl ParsedMeta {
         };
 
         // Optional field introduced for table-skip optimization.
-        // Old tables lack this key; fall back to overall max (conservative).
+        // Old tables lack this key; fall back to overall max seqno
+        // (conservative: table-skip compares rt.seqno > highest_kv_seqno,
+        // so falling back to the higher overall max just disables the
+        // optimization for legacy tables — correct but not optimal).
         // If the key exists but is truncated, propagate the I/O error to
         // surface metadata corruption rather than silently falling back.
         let highest_kv_seqno = if let Some(item) = block.point_read(b"seqno#kv_max", SeqNo::MAX) {

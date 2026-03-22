@@ -303,6 +303,9 @@ impl Writer {
 
         self.meta.lowest_seqno = self.meta.lowest_seqno.min(seqno);
         self.meta.highest_seqno = self.meta.highest_seqno.max(seqno);
+        // All item types (values, point tombstones, weak tombstones) are KV
+        // entries stored in data blocks. Only range tombstones (written via
+        // write_range_tombstone) are excluded from highest_kv_seqno.
         self.meta.highest_kv_seqno = self.meta.highest_kv_seqno.max(seqno);
 
         Ok(())

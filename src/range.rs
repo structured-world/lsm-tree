@@ -242,7 +242,7 @@ impl TreeIter {
             // RTs are collected), so only SST RTs are present. The later sort
             // covers the complete list. Both sorts are O(n log n) on their
             // respective subsets; the SST-only subset is typically small.
-            all_range_tombstones.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start));
+            all_range_tombstones.sort_unstable_by(|(a, _), (b, _)| a.start.cmp(&b.start));
 
             for table in single_tables {
                 // Table-skip: if a range tombstone fully covers this table
@@ -254,6 +254,8 @@ impl TreeIter {
                 // Binary search on sorted RT list: partition_point finds the
                 // first RT with start > table_min; only the prefix [0..idx]
                 // can have start <= table_min (required for fully_covers).
+                // key_range.max() is inclusive; fully_covers checks max < rt.end
+                // (half-open), so this is correct for inclusive upper bounds.
                 let table_min: &[u8] = table.metadata.key_range.min().as_ref();
                 let table_max: &[u8] = table.metadata.key_range.max().as_ref();
                 let table_kv_seqno = table.get_highest_kv_seqno();

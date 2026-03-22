@@ -585,7 +585,7 @@ impl Table {
             // comparator so the partition_point invariant is independent of
             // Ord changes. The seqno desc tiebreaker lets suppression checks
             // short-circuit on the highest-seqno RT for a given start key.
-            rts.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.seqno.cmp(&a.seqno)));
+            rts.sort_unstable_by(|a, b| a.start.cmp(&b.start).then_with(|| b.seqno.cmp(&a.seqno)));
             rts
         } else {
             Vec::new()
