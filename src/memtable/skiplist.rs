@@ -471,6 +471,7 @@ impl SkipMap {
     }
 
     /// Loads the next-pointer at `level` for `node`.
+    /// Returns UNSET (0) if no next node.
     fn next_at(&self, node: u32, level: usize) -> u32 {
         // SAFETY: next_at is only called with levels within the node's height
         // or the head sentinel's MAX_HEIGHT.
@@ -569,21 +570,13 @@ impl SkipMap {
             self.head
         };
 
-        // Walk down from the list height to the target level, narrowing
-        // Walk down from the list height, narrowing the search window at
-        // each level above `level`.  `node` starts at preds[level+1] (or
-        // head) whose height >= level+1; we only advance to nodes reachable
-        // at level `lv`, so every node touched has height > lv.
-        let list_h = self.height.load(Ordering::Acquire);
-        for lv in (level + 1..list_h).rev() {
-            let mut next = self.next_at(node, lv);
-            while next != UNSET && self.compare_key(next, key) == CmpOrdering::Less {
-                node = next;
-                next = self.next_at(node, lv);
-            }
-        }
-
-        // Now search at the target level — track successor from the loop.
+        // Search directly at the target level from the starting node.
+        // We don't walk down from higher levels because `node` (preds[level+1])
+        // may have a tower height of only level+2 — reading higher levels
+        // would be an out-of-bounds arena read.
+        //
+        // This is correct because: the starting node is already the best
+        // predecessor at level+1, so searching at level from it is sufficient.
         let mut next = self.next_at(node, level);
         while next != UNSET && self.compare_key(next, key) == CmpOrdering::Less {
             node = next;
@@ -1262,5 +1255,66 @@ mod tests {
         assert_eq!(&*entry.key().user_key, b"only");
         assert!(iter.next().is_none());
         assert!(iter.next_back().is_none());
+    }
+
+    /// Regression test for SIGBUS on aarch64: concurrent inserts + reads
+    /// caused misaligned AtomicU32 access when a skiplist next-pointer
+    /// contained a key-data offset (align=1) instead of a node offset
+    /// (align=4).
+    ///
+    /// The test stresses concurrent insert + iteration to surface the
+    /// race.  Prior to the fix, this would SIGBUS on Apple Silicon.
+    #[test]
+    fn concurrent_insert_and_iter_no_sigbus() {
+        use std::sync::{Arc, Barrier};
+
+        let map = Arc::new(new_map());
+        let barrier = Arc::new(Barrier::new(9)); // 8 writers + 1 reader
+
+        // 8 writer threads
+        let writers: Vec<_> = (0..8)
+            .map(|t| {
+                let map = Arc::clone(&map);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for i in 0..500 {
+                        let key = format!("t{t:02}_k{i:04}");
+                        map.insert(&make_key(key.as_bytes(), i as u64), &make_value(b"val"));
+                    }
+                })
+            })
+            .collect();
+
+        // 1 reader thread doing concurrent iteration
+        let reader = {
+            let map = Arc::clone(&map);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                let mut count = 0u64;
+                for _ in 0..100 {
+                    // Iterate the skiplist while writers are active.
+                    // This exercises tower_atomic / next_at on every node.
+                    for entry in map.iter() {
+                        let _ = entry.key();
+                        let _ = entry.value();
+                        count += 1;
+                    }
+                }
+                count
+            })
+        };
+
+        for w in writers {
+            w.join().expect("writer panicked");
+        }
+        let reads = reader.join().expect("reader panicked");
+
+        // Sanity: all entries inserted
+        assert_eq!(map.len(), 4000);
+        // Reader count may be 0 if writers finished before reader iterated.
+        // The key assertion is that no SIGBUS/panic occurred during iteration.
+        let _ = reads;
     }
 }
