@@ -74,7 +74,7 @@ impl Workload for MergeRandom {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "cache size overflows u64")
         })?;
         let cache = Arc::new(Cache::with_capacity_bytes(cache_bytes));
-        let tree = Config::new(
+        let mut builder = Config::new(
             tmpdir.path(),
             SequenceNumberCounter::default(),
             SequenceNumberCounter::default(),
@@ -82,8 +82,11 @@ impl Workload for MergeRandom {
         .data_block_size_policy(BlockSizePolicy::all(config.block_size))
         .data_block_compression_policy(CompressionPolicy::all(config.compression.to_lsm()))
         .use_cache(cache)
-        .with_merge_operator(Some(Arc::new(CounterMerge)))
-        .open()?;
+        .with_merge_operator(Some(Arc::new(CounterMerge)));
+        if config.use_blob_tree {
+            builder = builder.with_kv_separation(Some(Default::default()));
+        }
+        let tree = builder.open()?;
 
         reporter.start();
 

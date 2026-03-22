@@ -159,7 +159,8 @@ fn run_mvcc_test(ops: Vec<MvccOp>) -> Result<(), TestCaseError> {
     } else if snapshot_seqnos.len() <= 20 {
         snapshot_seqnos.clone()
     } else {
-        let step = snapshot_seqnos.len() / 20;
+        // Ceiling division so step >= 2 when len > 20, bounding to ~20 checks.
+        let step = (snapshot_seqnos.len() + 19) / 20;
         let mut points: Vec<u64> = snapshot_seqnos.iter().step_by(step).copied().collect();
         if let Some(&last) = snapshot_seqnos.last() {
             if points.last() != Some(&last) {
