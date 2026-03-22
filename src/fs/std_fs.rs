@@ -170,7 +170,6 @@ mod sys {
     use std::os::windows::io::AsRawHandle;
 
     pub(super) fn lock_exclusive(file: &File) -> io::Result<()> {
-        use std::mem;
         use std::ptr;
 
         // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex
@@ -393,9 +392,11 @@ mod tests {
     /// Compile-time assertion: `Fs` is object-safe when associated types
     /// are specified.
     #[test]
-    fn object_safety() {
+    fn object_safety() -> io::Result<()> {
         let fs: Arc<dyn Fs<File = File, ReadDir = StdReadDir>> = Arc::new(StdFs);
-        assert!(!fs.exists(Path::new("/nonexistent_path_12345")));
-        let _ = fs;
+        let dir = tempfile::tempdir()?;
+        let bogus = dir.path().join("nonexistent");
+        assert!(!fs.exists(&bogus));
+        Ok(())
     }
 }

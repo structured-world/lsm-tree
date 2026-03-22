@@ -177,6 +177,9 @@ pub struct Config<F: Fs = StdFs> {
     pub path: PathBuf,
 
     /// Filesystem backend
+    ///
+    // All Config fields are `#[doc(hidden)] pub` by convention — callers use
+    // builder methods or `..Default::default()`, not struct literals directly.
     #[doc(hidden)]
     pub fs: Arc<F>,
 

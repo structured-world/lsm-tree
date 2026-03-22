@@ -105,7 +105,7 @@ impl FsOpenOptions {
 /// Metadata about a file or directory.
 #[derive(Clone, Debug)]
 pub struct FsMetadata {
-    /// Size in bytes (0 for directories).
+    /// Size in bytes. For directories the value is platform-dependent.
     pub len: u64,
     /// Whether this entry is a directory.
     pub is_dir: bool,
