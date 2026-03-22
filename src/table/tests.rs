@@ -1710,6 +1710,10 @@ fn load_block_range_tombstone_metrics() -> crate::Result<()> {
     clippy::expect_used,
     reason = "test invariants: key and value patterns must exist in the meta block"
 )]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test fixture: deliberate slice operations on controlled meta block bytes"
+)]
 fn meta_seqno_kv_max_corruption_returns_invalid_data() -> crate::Result<()> {
     use super::block::Header;
     use super::meta::ParsedMeta;
