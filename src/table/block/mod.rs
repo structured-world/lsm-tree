@@ -125,8 +125,10 @@ impl Block {
         // NOTE: max_overhead() is used only for the LIMIT — the actual ciphertext
         // length is checked against it regardless. A buggy provider that expands
         // beyond max_overhead() will be caught by this check (payload > limit).
-        let max_payload = u64::from(MAX_DECOMPRESSION_SIZE)
-            + encryption.map_or(0u64, |enc| enc.max_overhead() as u64);
+        // Cap at u32::MAX to guarantee the subsequent as-u32 cast is safe.
+        let max_payload = (u64::from(MAX_DECOMPRESSION_SIZE)
+            + encryption.map_or(0u64, |enc| enc.max_overhead() as u64))
+        .min(u64::from(u32::MAX));
 
         if payload.len() as u64 > max_payload {
             return Err(crate::Error::DecompressedSizeTooLarge {
