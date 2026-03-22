@@ -421,7 +421,7 @@ fn reverse_comparator_compaction_with_updates() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "RunReader::new() uses lexicographic range_overlap_indexes — needs comparator plumbing"]
+#[ignore = "RunReader needs comparator plumbing (#98)"]
 fn reverse_comparator_range_scan_after_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
@@ -800,7 +800,7 @@ fn reverse_comparator_merge_after_compaction() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "RunReader::new() uses lexicographic range_overlap_indexes — needs comparator plumbing"]
+#[ignore = "RunReader needs comparator plumbing (#98)"]
 fn reverse_comparator_merge_range_scan_after_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
