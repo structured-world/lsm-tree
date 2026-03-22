@@ -67,6 +67,9 @@ impl<I> RangeTombstoneFilter<I> {
     /// Ensures reverse tombstones are built and sorted (end desc, seqno desc).
     fn ensure_rev_initialized(&mut self) {
         if !self.rev_initialized {
+            // Sort fwd first so both directions share a canonical base order,
+            // preserving tie-breaking semantics from the pre-lazy implementation.
+            self.ensure_fwd_initialized();
             self.rev_tombstones = self.fwd_tombstones.clone();
             self.rev_tombstones
                 .sort_by(|a, b| (&b.0.end, &b.0.seqno).cmp(&(&a.0.end, &a.0.seqno)));

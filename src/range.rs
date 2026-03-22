@@ -216,8 +216,15 @@ impl TreeIter {
                 )),
             );
 
-            let mut iters: Vec<BoxedIterator<'_>> = Vec::with_capacity(5);
+            let mut iters: Vec<BoxedIterator<'_>> = Vec::new();
             let mut range_tombstones: Vec<(RangeTombstone, SeqNo)> = Vec::new();
+
+            // Constant for a point key — computed once and reused for
+            // key-range overlap checks and bloom filtering across all runs.
+            let bounds = (
+                user_range.0.as_ref().map(std::convert::AsRef::as_ref),
+                user_range.1.as_ref().map(std::convert::AsRef::as_ref),
+            );
 
             for run in lock
                 .version
@@ -229,11 +236,6 @@ impl TreeIter {
                 // of bloom — an RT in a bloom-negative table can still suppress
                 // the target key. The key-range check avoids loading RTs from
                 // tables that cannot possibly contain a covering tombstone.
-                let bounds = (
-                    user_range.0.as_ref().map(std::convert::AsRef::as_ref),
-                    user_range.1.as_ref().map(std::convert::AsRef::as_ref),
-                );
-
                 for table in run.iter() {
                     if !table.check_key_range_overlap(&bounds) {
                         continue;
@@ -254,11 +256,7 @@ impl TreeIter {
                         #[expect(clippy::expect_used, reason = "we checked for length")]
                         let table = run.first().expect("should exist");
 
-                        if table.check_key_range_overlap(&(
-                            user_range.0.as_ref().map(std::convert::AsRef::as_ref),
-                            user_range.1.as_ref().map(std::convert::AsRef::as_ref),
-                        )) && bloom_passes(lock, table)
-                        {
+                        if table.check_key_range_overlap(&bounds) && bloom_passes(lock, table) {
                             let reader =
                                 table
                                     .range(user_range.clone())
@@ -270,11 +268,6 @@ impl TreeIter {
                         }
                     }
                     _ => {
-                        let bounds = (
-                            user_range.0.as_ref().map(std::convert::AsRef::as_ref),
-                            user_range.1.as_ref().map(std::convert::AsRef::as_ref),
-                        );
-
                         let surviving: Vec<_> = run
                             .iter()
                             .filter(|table| {
