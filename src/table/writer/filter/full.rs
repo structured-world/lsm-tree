@@ -60,8 +60,9 @@ impl<W: std::io::Write + std::io::Seek> FilterWriter<W> for FullFilterWriter {
         self.bloom_hash_buffer.push(Builder::get_hash(key));
 
         // NOTE: Prefix hashes are intentionally not deduplicated — duplicate
-        // hashes set the same bloom bits (idempotent) and the slight filter
-        // size overestimate lowers FPR, a net positive.
+        // hashes set the same bloom bits (idempotent). This can significantly
+        // inflate the bloom entry count when many keys share few prefixes, but
+        // in exchange it lowers effective FPR and keeps construction simple.
         if let Some(extractor) = &self.prefix_extractor {
             for prefix in extractor.prefixes(key.as_ref()) {
                 self.bloom_hash_buffer.push(Builder::get_hash(prefix));

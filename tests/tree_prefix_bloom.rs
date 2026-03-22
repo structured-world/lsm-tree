@@ -387,19 +387,21 @@ fn prefix_bloom_skip_on_compacted_levels() -> lsm_tree::Result<()> {
 
     // Flush 5 batches each with 100 keys under "data:" prefix, different
     // suffixes so compaction produces multiple L1 tables.
+    let val = "x".repeat(64);
     for batch in 0..5 {
         for i in 0..100 {
             let key = format!("data:{batch}:{i:04}");
-            tree.insert(key, "v", seqno);
+            tree.insert(key, val.as_str(), seqno);
             seqno += 1;
         }
         tree.flush_active_memtable(0)?;
     }
 
-    // Compact with small target_size so compaction produces multiple L1 tables.
-    // Each table covers a sub-range of "data:" keys, enabling bloom-skip for
-    // prefixes that fall in the key_range but were never indexed.
-    tree.major_compact(1, 0)?;
+    // Compact with modest target_size so compaction produces multiple L1 tables
+    // without rotating on nearly every key. Each table covers a sub-range of
+    // "data:" keys, enabling bloom-skip for prefixes that fall in the key_range
+    // but were never indexed.
+    tree.major_compact(4 * 1024, 0)?;
 
     let table_count = tree.table_count();
     assert!(
@@ -498,9 +500,9 @@ fn prefix_bloom_negative_lookup_in_key_range_gap() -> lsm_tree::Result<()> {
     );
 
     // "mmm:" falls in the key_range [aaa:0, zzz:19] but was never written.
-    // The bloom filter should report Ok(false) for the prefix hash.
-    // With 20 keys at 10 bpk, the bloom is ~200 bits — FPR for random
-    // prefixes is low enough that "mmm:" should be rejected.
+    // This test asserts that a prefix scan for "mmm:" returns no keys.
+    // With 20 keys at 10 bpk, the bloom is ~200 bits, so in practice it will
+    // usually reject such random prefixes, but false positives are still possible.
     let results: Vec<_> = tree
         .create_prefix("mmm:", 20, None)
         .collect::<Result<Vec<_>, _>>()?;
