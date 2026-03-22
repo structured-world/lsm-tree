@@ -81,22 +81,16 @@ impl Block {
             uncompressed_length: data.len() as u32,
         };
 
-        // `compressed_buf` keeps the compressed data alive so `payload` can borrow it.
-        // NOTE: Uses Option<Vec<u8>> (not Cow) to match upstream's lz4 pattern and
-        // minimize merge conflict surface. Only declared when a compression feature
-        // is enabled; the match arms always initialize it before use.
+        // Compression step — produces an owned Vec when a compressor is active.
         #[cfg(any(feature = "lz4", feature = "zstd"))]
-        let compressed_buf: Option<Vec<u8>>;
+        let mut compressed_buf: Option<Vec<u8>> = None;
 
-        let payload: &[u8] = match compression {
-            CompressionType::None => data,
+        match compression {
+            CompressionType::None => {}
 
             #[cfg(feature = "lz4")]
             CompressionType::Lz4 => {
                 compressed_buf = Some(lz4_flex::compress(data));
-
-                #[expect(clippy::expect_used, reason = "compressed_buf was just assigned")]
-                compressed_buf.as_ref().expect("just assigned")
             }
 
             #[cfg(feature = "zstd")]
@@ -105,17 +99,43 @@ impl Block {
                     zstd::bulk::compress(data, level)
                         .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?,
                 );
+            }
+        }
 
-                #[expect(clippy::expect_used, reason = "compressed_buf was just assigned")]
-                compressed_buf.as_ref().expect("just assigned")
+        // Encryption step — reuses the owned compression buffer via encrypt_vec
+        // when available, eliminating one allocation on the compress+encrypt path.
+        let encrypted_buf: Option<Vec<u8>>;
+
+        #[cfg(any(feature = "lz4", feature = "zstd"))]
+        {
+            encrypted_buf = if let Some(enc) = encryption {
+                Some(match compressed_buf.take() {
+                    Some(owned) => enc.encrypt_vec(owned)?,
+                    None => enc.encrypt(data)?,
+                })
+            } else {
+                None
+            };
+        }
+
+        #[cfg(not(any(feature = "lz4", feature = "zstd")))]
+        {
+            encrypted_buf = encryption.map(|enc| enc.encrypt(data)).transpose()?;
+        }
+
+        // Determine the final on-disk payload reference.
+        let payload: &[u8] = if let Some(ref enc) = encrypted_buf {
+            enc
+        } else {
+            #[cfg(any(feature = "lz4", feature = "zstd"))]
+            {
+                compressed_buf.as_deref().unwrap_or(data)
+            }
+            #[cfg(not(any(feature = "lz4", feature = "zstd")))]
+            {
+                data
             }
         };
-
-        // Encrypt the compressed payload if an encryption provider is configured.
-        // The encrypted bytes replace the compressed bytes on disk; checksums
-        // cover the encrypted form so corruption is detected before decryption.
-        let encrypted_buf = encryption.map(|enc| enc.encrypt(payload)).transpose()?;
-        let payload: &[u8] = encrypted_buf.as_deref().unwrap_or(payload);
 
         // Validate the final on-disk payload against the same size limit
         // enforced on the read path (MAX_DECOMPRESSION_SIZE + encryption overhead).
@@ -198,64 +218,121 @@ impl Block {
             });
         }
 
-        let raw_data = Slice::from_reader(reader, header.data_length as usize)?;
+        // When encryption is active, read into a Vec so decrypt_vec can
+        // reuse the buffer in-place (one allocation instead of two).
+        // When no encryption, read into a Slice which may use optimized
+        // reference-counted storage.
+        let data = if let Some(enc) = encryption {
+            let mut raw_vec = vec![0u8; header.data_length as usize];
+            reader.read_exact(&mut raw_vec)?;
 
-        let checksum = Checksum::from_raw(crate::hash::hash128(&raw_data));
+            let checksum = Checksum::from_raw(crate::hash::hash128(&raw_vec));
+            checksum.check(header.checksum).inspect_err(|_| {
+                log::error!(
+                    "Checksum mismatch for <bufreader>, got={}, expected={}",
+                    checksum,
+                    header.checksum,
+                );
+            })?;
 
-        checksum.check(header.checksum).inspect_err(|_| {
-            log::error!(
-                "Checksum mismatch for <bufreader>, got={}, expected={}",
-                checksum,
-                header.checksum,
-            );
-        })?;
+            // Decrypt in-place, reusing the read buffer.
+            let decrypted = enc.decrypt_vec(raw_vec)?;
 
-        // Decrypt the on-disk bytes before decompression.
-        let decrypted = encryption.map(|enc| enc.decrypt(&raw_data)).transpose()?;
-        let compressed_data: &[u8] = decrypted.as_deref().unwrap_or(&raw_data);
+            match compression {
+                CompressionType::None => {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "values are u32 length max"
+                    )]
+                    let actual_len = decrypted.len() as u32;
 
-        let data = match compression {
-            CompressionType::None => {
-                #[expect(clippy::cast_possible_truncation, reason = "values are u32 length max")]
-                let actual_len = compressed_data.len() as u32;
+                    if header.uncompressed_length != actual_len {
+                        return Err(crate::Error::InvalidHeader("Block"));
+                    }
 
-                if header.uncompressed_length != actual_len {
-                    return Err(crate::Error::InvalidHeader("Block"));
+                    Slice::from(decrypted)
                 }
 
-                if let Some(plain) = decrypted {
-                    Slice::from(plain)
-                } else {
-                    raw_data
-                }
-            }
+                #[cfg(feature = "lz4")]
+                CompressionType::Lz4 => {
+                    let mut buf = vec![0u8; header.uncompressed_length as usize];
 
-            #[cfg(feature = "lz4")]
-            CompressionType::Lz4 => {
-                let mut buf = vec![0u8; header.uncompressed_length as usize];
-
-                let bytes_written = lz4_flex::decompress_into(compressed_data, &mut buf)
-                    .map_err(|_| crate::Error::Decompress(compression))?;
-
-                // Runtime validation: corrupted data may decompress to fewer bytes
-                if bytes_written != header.uncompressed_length as usize {
-                    return Err(crate::Error::Decompress(compression));
-                }
-
-                Slice::from(buf)
-            }
-
-            #[cfg(feature = "zstd")]
-            CompressionType::Zstd(_) => {
-                let decompressed =
-                    zstd::bulk::decompress(compressed_data, header.uncompressed_length as usize)
+                    let bytes_written = lz4_flex::decompress_into(&decrypted, &mut buf)
                         .map_err(|_| crate::Error::Decompress(compression))?;
 
-                if decompressed.len() != header.uncompressed_length as usize {
-                    return Err(crate::Error::Decompress(compression));
+                    if bytes_written != header.uncompressed_length as usize {
+                        return Err(crate::Error::Decompress(compression));
+                    }
+
+                    Slice::from(buf)
                 }
 
-                Slice::from(decompressed)
+                #[cfg(feature = "zstd")]
+                CompressionType::Zstd(_) => {
+                    let decompressed =
+                        zstd::bulk::decompress(&decrypted, header.uncompressed_length as usize)
+                            .map_err(|_| crate::Error::Decompress(compression))?;
+
+                    if decompressed.len() != header.uncompressed_length as usize {
+                        return Err(crate::Error::Decompress(compression));
+                    }
+
+                    Slice::from(decompressed)
+                }
+            }
+        } else {
+            let raw_data = Slice::from_reader(reader, header.data_length as usize)?;
+
+            let checksum = Checksum::from_raw(crate::hash::hash128(&raw_data));
+            checksum.check(header.checksum).inspect_err(|_| {
+                log::error!(
+                    "Checksum mismatch for <bufreader>, got={}, expected={}",
+                    checksum,
+                    header.checksum,
+                );
+            })?;
+
+            match compression {
+                CompressionType::None => {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "values are u32 length max"
+                    )]
+                    let actual_len = raw_data.len() as u32;
+
+                    if header.uncompressed_length != actual_len {
+                        return Err(crate::Error::InvalidHeader("Block"));
+                    }
+
+                    raw_data
+                }
+
+                #[cfg(feature = "lz4")]
+                CompressionType::Lz4 => {
+                    let mut buf = vec![0u8; header.uncompressed_length as usize];
+
+                    let bytes_written = lz4_flex::decompress_into(&raw_data, &mut buf)
+                        .map_err(|_| crate::Error::Decompress(compression))?;
+
+                    if bytes_written != header.uncompressed_length as usize {
+                        return Err(crate::Error::Decompress(compression));
+                    }
+
+                    Slice::from(buf)
+                }
+
+                #[cfg(feature = "zstd")]
+                CompressionType::Zstd(_) => {
+                    let decompressed =
+                        zstd::bulk::decompress(&raw_data, header.uncompressed_length as usize)
+                            .map_err(|_| crate::Error::Decompress(compression))?;
+
+                    if decompressed.len() != header.uncompressed_length as usize {
+                        return Err(crate::Error::Decompress(compression));
+                    }
+
+                    Slice::from(decompressed)
+                }
             }
         };
 
@@ -313,30 +390,65 @@ impl Block {
             );
         })?;
 
-        // Decrypt the on-disk bytes before decompression.
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "header was decoded from buf, so it has at least Header::serialized_len() bytes"
-        )]
-        let decrypted = encryption
-            .map(|enc| enc.decrypt(&buf[Header::serialized_len()..]))
-            .transpose()?;
+        // When encryption is active, copy the payload into an owned Vec and
+        // drop the original Slice before decrypting in-place. This reduces
+        // peak memory from (Slice + decrypted Vec) to max(Slice, Vec).
+        let buf = if let Some(enc) = encryption {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "header was decoded from buf, so it has at least Header::serialized_len() bytes"
+            )]
+            let payload_vec = buf[Header::serialized_len()..].to_vec();
+            // `buf` (Slice) is dropped here — no longer holding both encrypted
+            // and decrypted data simultaneously.
 
-        let buf = match compression {
-            CompressionType::None => {
-                if let Some(plain) = decrypted {
+            let decrypted = enc.decrypt_vec(payload_vec)?;
+
+            match compression {
+                CompressionType::None => {
                     #[expect(
                         clippy::cast_possible_truncation,
                         reason = "values are u32 length max"
                     )]
-                    let actual_len = plain.len() as u32;
+                    let actual_len = decrypted.len() as u32;
 
                     if header.uncompressed_length != actual_len {
                         return Err(crate::Error::InvalidHeader("Block"));
                     }
 
-                    Slice::from(plain)
-                } else {
+                    Slice::from(decrypted)
+                }
+
+                #[cfg(feature = "lz4")]
+                CompressionType::Lz4 => {
+                    let mut decompressed = vec![0u8; header.uncompressed_length as usize];
+
+                    let bytes_written = lz4_flex::decompress_into(&decrypted, &mut decompressed)
+                        .map_err(|_| crate::Error::Decompress(compression))?;
+
+                    if bytes_written != header.uncompressed_length as usize {
+                        return Err(crate::Error::Decompress(compression));
+                    }
+
+                    Slice::from(decompressed)
+                }
+
+                #[cfg(feature = "zstd")]
+                CompressionType::Zstd(_) => {
+                    let decompressed =
+                        zstd::bulk::decompress(&decrypted, header.uncompressed_length as usize)
+                            .map_err(|_| crate::Error::Decompress(compression))?;
+
+                    if decompressed.len() != header.uncompressed_length as usize {
+                        return Err(crate::Error::Decompress(compression));
+                    }
+
+                    Slice::from(decompressed)
+                }
+            }
+        } else {
+            match compression {
+                CompressionType::None => {
                     let value = buf.slice(Header::serialized_len()..);
 
                     #[expect(
@@ -351,48 +463,42 @@ impl Block {
 
                     value
                 }
-            }
 
-            #[cfg(feature = "lz4")]
-            CompressionType::Lz4 => {
-                let compressed_data: &[u8] = if let Some(ref plain) = decrypted {
-                    plain
-                } else {
+                #[cfg(feature = "lz4")]
+                CompressionType::Lz4 => {
                     #[expect(clippy::indexing_slicing)]
-                    &buf[Header::serialized_len()..]
-                };
+                    let compressed_data = &buf[Header::serialized_len()..];
 
-                let mut decompressed = vec![0u8; header.uncompressed_length as usize];
+                    let mut decompressed = vec![0u8; header.uncompressed_length as usize];
 
-                let bytes_written = lz4_flex::decompress_into(compressed_data, &mut decompressed)
+                    let bytes_written =
+                        lz4_flex::decompress_into(compressed_data, &mut decompressed)
+                            .map_err(|_| crate::Error::Decompress(compression))?;
+
+                    if bytes_written != header.uncompressed_length as usize {
+                        return Err(crate::Error::Decompress(compression));
+                    }
+
+                    Slice::from(decompressed)
+                }
+
+                #[cfg(feature = "zstd")]
+                CompressionType::Zstd(_) => {
+                    #[expect(clippy::indexing_slicing)]
+                    let compressed_data = &buf[Header::serialized_len()..];
+
+                    let decompressed = zstd::bulk::decompress(
+                        compressed_data,
+                        header.uncompressed_length as usize,
+                    )
                     .map_err(|_| crate::Error::Decompress(compression))?;
 
-                // Runtime validation: corrupted data may decompress to fewer bytes
-                if bytes_written != header.uncompressed_length as usize {
-                    return Err(crate::Error::Decompress(compression));
+                    if decompressed.len() != header.uncompressed_length as usize {
+                        return Err(crate::Error::Decompress(compression));
+                    }
+
+                    Slice::from(decompressed)
                 }
-
-                Slice::from(decompressed)
-            }
-
-            #[cfg(feature = "zstd")]
-            CompressionType::Zstd(_) => {
-                let compressed_data: &[u8] = if let Some(ref plain) = decrypted {
-                    plain
-                } else {
-                    #[expect(clippy::indexing_slicing)]
-                    &buf[Header::serialized_len()..]
-                };
-
-                let decompressed =
-                    zstd::bulk::decompress(compressed_data, header.uncompressed_length as usize)
-                        .map_err(|_| crate::Error::Decompress(compression))?;
-
-                if decompressed.len() != header.uncompressed_length as usize {
-                    return Err(crate::Error::Decompress(compression));
-                }
-
-                Slice::from(decompressed)
             }
         };
 
