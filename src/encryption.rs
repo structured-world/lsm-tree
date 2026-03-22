@@ -121,6 +121,27 @@ impl Aes256GcmProvider {
     }
 }
 
+/// Access a thread-local CSPRNG seeded once from the OS RNG.
+///
+/// Using a thread-local [`ChaCha20Rng`](rand_chacha::ChaCha20Rng) avoids a
+/// `getrandom` syscall on every nonce generation, which saves 1-10 µs per
+/// block under contention. The RNG is cryptographically secure and seeded
+/// from `OsRng` on first access per thread.
+#[cfg(feature = "encryption")]
+fn thread_local_rng<R>(f: impl FnOnce(&mut rand_chacha::ChaCha20Rng) -> R) -> R {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static RNG: RefCell<rand_chacha::ChaCha20Rng> = RefCell::new({
+            use rand_core::SeedableRng;
+            rand_chacha::ChaCha20Rng::from_rng(rand_core::OsRng)
+                .expect("OS RNG should be available for initial CSPRNG seed")
+        });
+    }
+
+    RNG.with(|cell| f(&mut cell.borrow_mut()))
+}
+
 #[cfg(feature = "encryption")]
 impl EncryptionProvider for Aes256GcmProvider {
     fn max_overhead(&self) -> u32 {
@@ -132,11 +153,10 @@ impl EncryptionProvider for Aes256GcmProvider {
     }
 
     fn encrypt(&self, plaintext: &[u8]) -> crate::Result<Vec<u8>> {
-        use aes_gcm::aead::OsRng;
         use aes_gcm::AeadCore;
         use aes_gcm::AeadInPlace;
 
-        let nonce = aes_gcm::Aes256Gcm::generate_nonce(&mut OsRng);
+        let nonce = thread_local_rng(|rng| aes_gcm::Aes256Gcm::generate_nonce(rng));
 
         let mut buf = Vec::with_capacity(Self::NONCE_LEN + plaintext.len() + Self::TAG_LEN);
         buf.extend_from_slice(&nonce);
