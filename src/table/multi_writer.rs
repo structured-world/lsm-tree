@@ -4,16 +4,24 @@
 
 use super::{filter::BloomConstructionPolicy, writer::Writer};
 use crate::{
-    blob_tree::handle::BlobIndirection, encryption::EncryptionProvider, prefix::PrefixExtractor,
-    range_tombstone::RangeTombstone, table::writer::LinkedFile, value::InternalValue,
-    vlog::BlobFileId, Checksum, CompressionType, HashMap, SequenceNumberCounter, TableId, UserKey,
+    blob_tree::handle::BlobIndirection,
+    encryption::EncryptionProvider,
+    fs::{Fs, StdFs},
+    prefix::PrefixExtractor,
+    range_tombstone::RangeTombstone,
+    table::writer::LinkedFile,
+    value::InternalValue,
+    vlog::BlobFileId,
+    Checksum, CompressionType, HashMap, SequenceNumberCounter, TableId, UserKey,
 };
 use std::{path::PathBuf, sync::Arc};
 
 /// Like `Writer` but will rotate to a new table, once a table grows larger than `target_size`
 ///
 /// This results in a sorted "run" of tables
-pub struct MultiWriter {
+pub struct MultiWriter<FS: Fs = StdFs> {
+    fs: Arc<FS>,
+
     pub(crate) base_path: PathBuf,
 
     data_block_hash_ratio: f32,
@@ -36,7 +44,7 @@ pub struct MultiWriter {
 
     table_id_generator: SequenceNumberCounter,
 
-    pub writer: Writer,
+    pub writer: Writer<FS>,
 
     pub data_block_compression: CompressionType,
     pub index_block_compression: CompressionType,
@@ -65,20 +73,22 @@ pub struct MultiWriter {
     encryption: Option<Arc<dyn EncryptionProvider>>,
 }
 
-impl MultiWriter {
+impl<FS: Fs> MultiWriter<FS> {
     /// Sets up a new `MultiWriter` at the given tables folder
     pub fn new(
         base_path: PathBuf,
         table_id_generator: SequenceNumberCounter,
         target_size: u64,
         initial_level: u8,
+        fs: Arc<FS>,
     ) -> crate::Result<Self> {
         let current_table_id = table_id_generator.next();
 
         let path = base_path.join(current_table_id.to_string());
-        let writer = Writer::new(path, current_table_id, initial_level)?;
+        let writer = Writer::new(path, current_table_id, initial_level, fs.clone())?;
 
         Ok(Self {
+            fs,
             initial_level,
 
             base_path,
@@ -134,7 +144,7 @@ impl MultiWriter {
     /// - **clip=true** (compaction): intersect each RT with the table's KV key range.
     /// - **clip=false** (flush): write all overlapping RTs unmodified so they cover
     ///   keys in older SSTs outside this memtable's key range.
-    fn write_rts_to_writer(tombstones: &[RangeTombstone], clip: bool, writer: &mut Writer) {
+    fn write_rts_to_writer(tombstones: &[RangeTombstone], clip: bool, writer: &mut Writer<FS>) {
         if let (Some(first_key), Some(last_key)) =
             (writer.meta.first_key.clone(), writer.meta.last_key.clone())
         {
@@ -318,7 +328,7 @@ impl MultiWriter {
         let new_table_id = self.table_id_generator.next();
         let path = self.base_path.join(new_table_id.to_string());
 
-        let mut new_writer = Writer::new(path, new_table_id, self.initial_level)?
+        let mut new_writer = Writer::new(path, new_table_id, self.initial_level, self.fs.clone())?
             .use_data_block_compression(self.data_block_compression)
             .use_index_block_compression(self.index_block_compression)
             .use_data_block_size(self.data_block_size)

@@ -4,12 +4,14 @@
 
 use super::meta::Metadata;
 use crate::{
-    checksum::ChecksummedWriter, time::unix_timestamp, vlog::BlobFileId, Checksum, CompressionType,
-    KeyRange, SeqNo, TreeId, UserKey,
+    checksum::ChecksummedWriter,
+    fs::{Fs, FsFile, FsOpenOptions, StdFs},
+    time::unix_timestamp,
+    vlog::BlobFileId,
+    Checksum, CompressionType, KeyRange, SeqNo, TreeId, UserKey,
 };
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::{
-    fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
@@ -97,13 +99,13 @@ pub(super) fn validate_header_crc(
 }
 
 /// Blob file writer
-pub struct Writer {
+pub struct Writer<FS: Fs = StdFs> {
     pub(crate) tree_id: TreeId,
     pub path: PathBuf,
     pub(crate) blob_file_id: BlobFileId,
 
     #[expect(clippy::struct_field_names)]
-    writer: sfa::Writer<ChecksummedWriter<BufWriter<File>>>,
+    writer: sfa::Writer<ChecksummedWriter<BufWriter<FS::File>>>,
 
     offset: u64,
 
@@ -117,7 +119,7 @@ pub struct Writer {
     pub(crate) compression: CompressionType,
 }
 
-impl Writer {
+impl<FS: Fs> Writer<FS> {
     /// Initializes a new blob file writer.
     ///
     /// # Errors
@@ -128,10 +130,12 @@ impl Writer {
         path: P,
         blob_file_id: BlobFileId,
         tree_id: TreeId,
+        fs: &FS,
     ) -> crate::Result<Self> {
         let path = path.as_ref();
 
-        let writer = BufWriter::new(File::create(path)?);
+        let file = fs.open(path, &FsOpenOptions::new().write(true).create(true))?;
+        let writer = BufWriter::new(file);
         let writer = ChecksummedWriter::new(writer);
         let mut writer = sfa::Writer::from_writer(writer);
         writer.start("data")?;
@@ -337,7 +341,7 @@ impl Writer {
         metadata.encode_into(&mut self.writer)?;
 
         let mut checksum = self.writer.into_inner()?;
-        checksum.inner_mut().get_mut().sync_all()?;
+        FsFile::sync_all(checksum.inner_mut().get_mut())?;
         let checksum = checksum.checksum();
 
         Ok((metadata, checksum))
@@ -347,12 +351,13 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::StdFs;
 
     #[test]
     fn blob_write_rejects_oversized_value() -> crate::Result<()> {
         let folder = tempfile::tempdir()?;
         let path = folder.path().join("test.blob");
-        let mut writer = Writer::new(&path, 0, 0)?;
+        let mut writer = Writer::new(&path, 0, 0, &StdFs)?;
 
         let oversize = MAX_DECOMPRESSION_SIZE as u32 + 1;
         let result = writer.write_raw(b"key", 0, b"small-on-disk", oversize);
@@ -367,7 +372,7 @@ mod tests {
     fn blob_write_accepts_max_size_value() -> crate::Result<()> {
         let folder = tempfile::tempdir()?;
         let path = folder.path().join("test.blob");
-        let mut writer = Writer::new(&path, 0, 0)?;
+        let mut writer = Writer::new(&path, 0, 0, &StdFs)?;
 
         let at_limit = MAX_DECOMPRESSION_SIZE as u32;
         let result = writer.write_raw(b"key", 0, b"small-on-disk", at_limit);
@@ -379,7 +384,7 @@ mod tests {
     fn blob_write_rejects_oversized_value_none_compression() -> crate::Result<()> {
         let folder = tempfile::tempdir()?;
         let path = folder.path().join("test.blob");
-        let mut writer = Writer::new(&path, 0, 0)?;
+        let mut writer = Writer::new(&path, 0, 0, &StdFs)?;
 
         let oversize_value = vec![0u8; MAX_DECOMPRESSION_SIZE + 1];
         let result = writer.write_raw(b"key", 0, &oversize_value, MAX_DECOMPRESSION_SIZE as u32);
@@ -395,7 +400,7 @@ mod tests {
     fn blob_write_lz4_accepts_small_value() -> crate::Result<()> {
         let folder = tempfile::tempdir()?;
         let path = folder.path().join("test.blob");
-        let mut writer = Writer::new(&path, 0, 0)?.use_compression(CompressionType::Lz4);
+        let mut writer = Writer::new(&path, 0, 0, &StdFs)?.use_compression(CompressionType::Lz4);
 
         // Exercise the LZ4 compression arm with a value that passes
         // the pre-compression check and compresses successfully.

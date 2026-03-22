@@ -289,6 +289,7 @@ impl AbstractTree for Tree {
             },
             &self.config.seqno,
             &self.config.visible_seqno,
+            &*self.config.fs,
         )
     }
 
@@ -391,6 +392,7 @@ impl AbstractTree for Tree {
             self.table_id_counter.clone(),
             64 * 1_024 * 1_024,
             0,
+            self.config.fs.clone(),
         )?
         .use_data_block_restart_interval(data_block_restart_interval)
         .use_index_block_restart_interval(index_block_restart_interval)
@@ -502,6 +504,7 @@ impl AbstractTree for Tree {
             },
             &self.config.seqno,
             &self.config.visible_seqno,
+            &*self.config.fs,
         )?;
 
         if let Err(e) = version_lock.maintenance(&self.config.path, gc_watermark) {
@@ -1441,8 +1444,8 @@ impl Tree {
         create_dir_all(&table_folder_path)?;
 
         // IMPORTANT: fsync folders on Unix
-        fsync_directory(&table_folder_path)?;
-        fsync_directory(&path)?;
+        fsync_directory(&table_folder_path, &*config.fs)?;
+        fsync_directory(&path, &*config.fs)?;
 
         let inner = TreeInner::create_new(config)?;
         Ok(Self(Arc::new(inner)))
@@ -1509,7 +1512,7 @@ impl Tree {
 
         if !table_base_folder.try_exists()? {
             std::fs::create_dir_all(&table_base_folder)?;
-            fsync_directory(&table_base_folder)?;
+            fsync_directory(&table_base_folder, &*config.fs)?;
         }
 
         let mut orphaned_tables = vec![];

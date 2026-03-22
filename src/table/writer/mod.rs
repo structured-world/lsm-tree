@@ -14,7 +14,7 @@ use crate::{
     checksum::{ChecksumType, ChecksummedWriter},
     coding::Encode,
     encryption::EncryptionProvider,
-    file::fsync_directory,
+    fs::{Fs, FsFile, FsOpenOptions, StdFs},
     prefix::PrefixExtractor,
     range_tombstone::RangeTombstone,
     table::{
@@ -29,7 +29,7 @@ use crate::{
     Checksum, CompressionType, InternalValue, TableId, UserKey, ValueType,
 };
 use index::BlockIndexWriter;
-use std::{fs::File, io::BufWriter, path::PathBuf, sync::Arc};
+use std::{io::BufWriter, path::PathBuf, sync::Arc};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, std::hash::Hash)]
 pub struct LinkedFile {
@@ -40,7 +40,10 @@ pub struct LinkedFile {
 }
 
 /// Serializes and compresses values into blocks and writes them to disk as a table
-pub struct Writer {
+pub struct Writer<FS: Fs = StdFs> {
+    /// Filesystem backend
+    fs: Arc<FS>,
+
     /// Table file path
     pub(crate) path: PathBuf,
 
@@ -66,15 +69,15 @@ pub struct Writer {
 
     /// File writer
     #[expect(clippy::struct_field_names)]
-    file_writer: sfa::Writer<ChecksummedWriter<BufWriter<File>>>,
+    file_writer: sfa::Writer<ChecksummedWriter<BufWriter<FS::File>>>,
 
     /// Writer of index blocks
     #[expect(clippy::struct_field_names)]
-    index_writer: Box<dyn BlockIndexWriter<BufWriter<File>>>,
+    index_writer: Box<dyn BlockIndexWriter<BufWriter<FS::File>>>,
 
     /// Writer of filter
     #[expect(clippy::struct_field_names)]
-    filter_writer: Box<dyn FilterWriter<BufWriter<File>>>,
+    filter_writer: Box<dyn FilterWriter<BufWriter<FS::File>>>,
 
     /// Buffer of KVs
     chunk: Vec<InternalValue>,
@@ -106,14 +109,21 @@ pub struct Writer {
     encryption: Option<Arc<dyn EncryptionProvider>>,
 }
 
-impl Writer {
-    pub fn new(path: PathBuf, table_id: TableId, initial_level: u8) -> crate::Result<Self> {
-        let writer = BufWriter::with_capacity(u16::MAX.into(), File::create_new(&path)?);
+impl<FS: Fs> Writer<FS> {
+    pub fn new(
+        path: PathBuf,
+        table_id: TableId,
+        initial_level: u8,
+        fs: Arc<FS>,
+    ) -> crate::Result<Self> {
+        let file = fs.open(&path, &FsOpenOptions::new().write(true).create_new(true))?;
+        let writer = BufWriter::with_capacity(u16::MAX.into(), file);
         let writer = ChecksummedWriter::new(writer);
         let mut writer = sfa::Writer::from_writer(writer);
         writer.start("data")?;
 
         Ok(Self {
+            fs,
             initial_level,
 
             meta: meta::Metadata::default(),
@@ -429,7 +439,7 @@ impl Writer {
 
         // No items and no range tombstones — delete the empty table file.
         if self.meta.item_count == 0 && self.range_tombstones.is_empty() {
-            std::fs::remove_file(&self.path)?;
+            self.fs.remove_file(&self.path)?;
             return Ok(None);
         }
 
@@ -687,7 +697,7 @@ impl Writer {
         // Write fixed-size trailer
         // and flush & fsync the table file
         let mut checksum = self.file_writer.into_inner()?;
-        checksum.inner_mut().get_mut().sync_all()?;
+        FsFile::sync_all(checksum.inner_mut().get_mut())?;
         let checksum = checksum.checksum();
 
         // IMPORTANT: fsync folder on Unix
@@ -696,7 +706,8 @@ impl Writer {
             clippy::expect_used,
             reason = "if there's no parent folder, something has gone horribly wrong"
         )]
-        fsync_directory(self.path.parent().expect("should have folder"))?;
+        self.fs
+            .sync_directory(self.path.parent().expect("should have folder"))?;
 
         log::debug!(
             "Written {} items in {} blocks into new table file #{}, written {} MiB",
@@ -713,13 +724,14 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::StdFs;
     use test_log::test;
 
     #[test]
     fn table_writer_count() -> crate::Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("1");
-        let mut writer = Writer::new(path, 1, 0)?;
+        let mut writer = Writer::new(path, 1, 0, Arc::new(StdFs))?;
 
         assert_eq!(0, writer.meta.key_count);
         assert_eq!(0, writer.chunk_size);
