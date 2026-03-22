@@ -325,6 +325,7 @@ impl SkipMap {
             let meta = self.arena.get_bytes_mut(node, OFF_TOWER);
             meta[0..4].copy_from_slice(&key_offset.to_ne_bytes());
             meta[4..8].copy_from_slice(&value_idx.to_ne_bytes());
+            // Cast is safe: InternalKey::new() asserts key.len() <= u16::MAX.
             meta[8..10].copy_from_slice(&(key_bytes.len() as u16).to_ne_bytes());
             meta[10] = u8::from(key.value_type);
             meta[11] = height as u8;
