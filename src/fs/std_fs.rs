@@ -596,6 +596,32 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn read_dir_rejects_non_utf8_filename() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        // Create a file with invalid UTF-8 bytes in its name.
+        let bad_name = OsStr::from_bytes(&[0xff, 0xfe]);
+        let bad_path = dir.path().join(bad_name);
+        std::fs::write(&bad_path, b"data").unwrap();
+
+        let fs = StdFs;
+        let err = fs.read_dir(dir.path()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("non-UTF-8 filename"),
+            "unexpected error: {msg}"
+        );
+        assert!(
+            msg.contains(&dir.path().display().to_string()),
+            "error should include directory path: {msg}",
+        );
+    }
+
     /// Compile-time assertion: `Fs` is object-safe without specifying
     /// associated types — enables simple `Arc<dyn Fs>` for per-level routing.
     #[test]

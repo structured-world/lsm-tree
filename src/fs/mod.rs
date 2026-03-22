@@ -219,7 +219,7 @@ pub trait Fs: Send + Sync + 'static {
     ///
     /// Returns an I/O error if the file cannot be opened.
     // Box<dyn FsFile> is intentionally 'static (the default) — file handles are
-    // owned values that must outlive the Fs that created them, not borrow from it.
+    // owned values that do not borrow from the Fs instance that created them.
     fn open(&self, path: &Path, opts: &FsOpenOptions) -> io::Result<Box<dyn FsFile>>;
 
     /// Recursively creates all directories leading to `path`.
