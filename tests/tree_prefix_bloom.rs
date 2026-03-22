@@ -584,6 +584,81 @@ fn prefix_bloom_multi_table_run_skipping() -> lsm_tree::Result<()> {
     Ok(())
 }
 
+/// Exercises the bloom Ok(false) path within a multi-table run.
+///
+/// When a table's key range overlaps the prefix scan bounds but its
+/// bloom filter correctly reports the prefix as absent, the table must
+/// be skipped. This is distinct from the key-range guard (which is a
+/// cheaper metadata-only check) and requires the bloom to be consulted.
+#[test]
+fn prefix_bloom_multi_table_run_bloom_rejection() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = tree_with_prefix_bloom(&folder)?;
+
+    // Create two disjoint tables that will be fused into one multi-table
+    // run by optimize_runs. Each table spans a wide key range so that
+    // a prefix scan for a non-existent prefix overlaps the table's
+    // key_range but gets rejected by the bloom.
+    //
+    // Table 1: keys "a:*" and "c:*"
+    //   → key_range = [a:1, c:9]
+    // Table 2: keys "d:*" and "f:*"
+    //   → key_range = [d:1, f:9]
+    //
+    // These are lexicographically disjoint (c:9 < d:1) so optimize_runs
+    // fuses them into a single multi-table run.
+    //
+    // Scanning "b:" has bounds [b:, b;). Table 1 overlaps (a:1 < b: < c:9),
+    // but "b:" was never written → bloom returns Ok(false).
+    for i in 1..=9 {
+        tree.insert(format!("a:{i}"), "v", i - 1);
+        tree.insert(format!("c:{i}"), "v", 9 + i - 1);
+    }
+    tree.flush_active_memtable(0)?;
+
+    for i in 1..=9 {
+        tree.insert(format!("d:{i}"), "v", 18 + i - 1);
+        tree.insert(format!("f:{i}"), "v", 27 + i - 1);
+    }
+    tree.flush_active_memtable(0)?;
+
+    // Verify L0 has a multi-table run (disjoint tables fused).
+    let version = tree.current_version();
+    let l0 = version.level(0).expect("L0 should exist");
+    let max_run_len = l0.iter().map(|r| r.len()).max().unwrap_or(0);
+    assert!(
+        max_run_len >= 2,
+        "expected multi-table run in L0, largest run has {max_run_len}",
+    );
+
+    // "b:" overlaps table 1's key range [a:1, c:9] but isn't in its bloom.
+    // This exercises the Ok(false) bloom rejection path in the multi-table
+    // run filter (not just the key-range guard).
+    let results: Vec<_> = tree
+        .create_prefix("b:", 36, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 0);
+
+    // "e:" overlaps table 2's key range [d:1, f:9] but isn't in its bloom.
+    let results: Vec<_> = tree
+        .create_prefix("e:", 36, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 0);
+
+    // Real prefixes still work through the multi-table run.
+    let results: Vec<_> = tree
+        .create_prefix("a:", 36, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 9);
+
+    let results: Vec<_> = tree
+        .create_prefix("d:", 36, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 9);
+
+    Ok(())
+}
+
 /// Verify that multi-table run prefix bloom skipping works correctly
 /// with overlapping key ranges (L0 tables may overlap). Two flushes
 /// with interleaved keys ensure the tables' key ranges overlap, and
