@@ -114,17 +114,8 @@ impl Block {
         // Encrypt the compressed payload if an encryption provider is configured.
         // The encrypted bytes replace the compressed bytes on disk; checksums
         // cover the encrypted form so corruption is detected before decryption.
-        let encrypted_buf: Option<Vec<u8>>;
-        let payload: &[u8] = if let Some(enc) = encryption {
-            encrypted_buf = Some(enc.encrypt(payload)?);
-
-            #[expect(clippy::expect_used, reason = "encrypted_buf was just assigned")]
-            encrypted_buf.as_ref().expect("just assigned")
-        } else {
-            encrypted_buf = None;
-            let _ = &encrypted_buf; // suppress unused warning
-            payload
-        };
+        let encrypted_buf = encryption.map(|enc| enc.encrypt(payload)).transpose()?;
+        let payload: &[u8] = encrypted_buf.as_deref().unwrap_or(payload);
 
         #[expect(clippy::cast_possible_truncation, reason = "blocks are limited to u32")]
         {
@@ -197,17 +188,8 @@ impl Block {
         })?;
 
         // Decrypt the on-disk bytes before decompression.
-        let decrypted: Option<Vec<u8>>;
-        let compressed_data: &[u8] = if let Some(enc) = encryption {
-            decrypted = Some(enc.decrypt(&raw_data)?);
-
-            #[expect(clippy::expect_used, reason = "decrypted was just assigned")]
-            decrypted.as_ref().expect("just assigned")
-        } else {
-            decrypted = None;
-            let _ = &decrypted;
-            &raw_data
-        };
+        let decrypted = encryption.map(|enc| enc.decrypt(&raw_data)).transpose()?;
+        let compressed_data: &[u8] = decrypted.as_deref().unwrap_or(&raw_data);
 
         let data = match compression {
             CompressionType::None => {
@@ -309,12 +291,13 @@ impl Block {
         })?;
 
         // Decrypt the on-disk bytes before decompression.
-        #[expect(clippy::indexing_slicing)]
-        let decrypted: Option<Vec<u8>> = if let Some(enc) = encryption {
-            Some(enc.decrypt(&buf[Header::serialized_len()..])?)
-        } else {
-            None
-        };
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "header was decoded from buf, so it has at least Header::serialized_len() bytes"
+        )]
+        let decrypted = encryption
+            .map(|enc| enc.decrypt(&buf[Header::serialized_len()..]))
+            .transpose()?;
 
         let buf = match compression {
             CompressionType::None => {
