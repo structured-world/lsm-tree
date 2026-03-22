@@ -1,0 +1,198 @@
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+//! Pluggable filesystem abstraction for I/O backends.
+//!
+//! The [`Fs`] trait abstracts all filesystem operations that lsm-tree
+//! performs, allowing alternative backends such as io_uring, in-memory
+//! filesystems for deterministic testing, or cloud blob storage.
+//!
+//! The default implementation [`StdFs`] delegates to [`std::fs`] and
+//! is a zero-sized type, so it adds no runtime overhead when used as a
+//! monomorphized generic parameter.
+
+mod std_fs;
+
+pub use std_fs::{StdFs, StdReadDir};
+
+use std::io::{self, Read, Seek, Write};
+use std::path::{Path, PathBuf};
+
+/// Options for opening a file through the [`Fs`] trait.
+///
+/// Mirrors the builder API of [`std::fs::OpenOptions`].
+#[derive(Clone, Debug)]
+pub struct FsOpenOptions {
+    /// Open for reading.
+    pub read: bool,
+    /// Open for writing.
+    pub write: bool,
+    /// Create the file if it does not exist (requires `write`).
+    pub create: bool,
+    /// Fail if the file already exists (requires `write` and `create`).
+    pub create_new: bool,
+    /// Truncate the file to zero length on open (requires `write`).
+    pub truncate: bool,
+    /// Open in append mode (requires `write`).
+    pub append: bool,
+}
+
+impl Default for FsOpenOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FsOpenOptions {
+    /// Creates a new set of options with everything disabled.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            read: false,
+            write: false,
+            create: false,
+            create_new: false,
+            truncate: false,
+            append: false,
+        }
+    }
+
+    /// Sets the `read` flag.
+    #[must_use]
+    pub const fn read(mut self, read: bool) -> Self {
+        self.read = read;
+        self
+    }
+
+    /// Sets the `write` flag.
+    #[must_use]
+    pub const fn write(mut self, write: bool) -> Self {
+        self.write = write;
+        self
+    }
+
+    /// Sets the `create` flag.
+    #[must_use]
+    pub const fn create(mut self, create: bool) -> Self {
+        self.create = create;
+        self
+    }
+
+    /// Sets the `create_new` flag.
+    #[must_use]
+    pub const fn create_new(mut self, create_new: bool) -> Self {
+        self.create_new = create_new;
+        self
+    }
+
+    /// Sets the `truncate` flag.
+    #[must_use]
+    pub const fn truncate(mut self, truncate: bool) -> Self {
+        self.truncate = truncate;
+        self
+    }
+
+    /// Sets the `append` flag.
+    #[must_use]
+    pub const fn append(mut self, append: bool) -> Self {
+        self.append = append;
+        self
+    }
+}
+
+/// Metadata about a file or directory.
+#[derive(Clone, Debug)]
+pub struct FsMetadata {
+    /// Size in bytes (0 for directories).
+    pub len: u64,
+    /// Whether this entry is a directory.
+    pub is_dir: bool,
+    /// Whether this entry is a regular file.
+    pub is_file: bool,
+}
+
+/// A directory entry returned by [`Fs::read_dir`].
+#[derive(Clone, Debug)]
+pub struct FsDirEntry {
+    /// Full path to the entry.
+    pub path: PathBuf,
+    /// File name component (without parent path).
+    pub file_name: String,
+    /// Whether this entry is a directory.
+    pub is_dir: bool,
+}
+
+/// Filesystem operations on an open file handle.
+///
+/// Extends [`Read`] + [`Write`] + [`Seek`] with persistence and
+/// metadata operations needed by the storage engine.
+pub trait FsFile: Read + Write + Seek + Send + Sync {
+    /// Flushes all OS-internal buffers and metadata to durable storage.
+    fn sync_all(&self) -> io::Result<()>;
+
+    /// Flushes file data (but not necessarily metadata) to durable storage.
+    fn sync_data(&self) -> io::Result<()>;
+
+    /// Returns metadata for this open file handle.
+    fn metadata(&self) -> io::Result<FsMetadata>;
+
+    /// Truncates or extends the file to the specified length.
+    fn set_len(&self, size: u64) -> io::Result<()>;
+
+    /// Acquires an exclusive (write) lock on this file.
+    ///
+    /// Blocks until the lock is acquired.
+    fn lock_exclusive(&self) -> io::Result<()>;
+}
+
+/// Pluggable filesystem abstraction.
+///
+/// All filesystem operations that lsm-tree performs go through this trait.
+/// The default implementation [`StdFs`] delegates to [`std::fs`].
+///
+/// # Object safety
+///
+/// `Fs` is object-safe when associated types are specified:
+/// ```
+/// # use lsm_tree::fs::{Fs, StdFs, StdReadDir};
+/// # use std::sync::Arc;
+/// let _: Arc<dyn Fs<File = std::fs::File, ReadDir = StdReadDir>> = Arc::new(StdFs);
+/// ```
+pub trait Fs: Send + Sync + 'static {
+    /// The file handle type returned by [`open`](Fs::open).
+    type File: FsFile;
+
+    /// The iterator type returned by [`read_dir`](Fs::read_dir).
+    type ReadDir: Iterator<Item = io::Result<FsDirEntry>>;
+
+    /// Opens a file at `path` with the given options.
+    fn open(&self, path: &Path, opts: &FsOpenOptions) -> io::Result<Self::File>;
+
+    /// Recursively creates all directories leading to `path`.
+    fn create_dir_all(&self, path: &Path) -> io::Result<()>;
+
+    /// Returns an iterator over the entries in a directory.
+    fn read_dir(&self, path: &Path) -> io::Result<Self::ReadDir>;
+
+    /// Removes a single file.
+    fn remove_file(&self, path: &Path) -> io::Result<()>;
+
+    /// Recursively removes a directory and all of its contents.
+    fn remove_dir_all(&self, path: &Path) -> io::Result<()>;
+
+    /// Renames a file or directory from `from` to `to`.
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+
+    /// Returns metadata for the file or directory at `path`.
+    fn metadata(&self, path: &Path) -> io::Result<FsMetadata>;
+
+    /// Ensures directory metadata is persisted to durable storage.
+    ///
+    /// On platforms that do not support directory fsync (e.g. Windows),
+    /// this may be a no-op.
+    fn sync_directory(&self, path: &Path) -> io::Result<()>;
+
+    /// Returns `true` if a file or directory exists at `path`.
+    fn exists(&self, path: &Path) -> bool;
+}
