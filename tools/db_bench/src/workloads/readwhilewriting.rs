@@ -86,6 +86,8 @@ impl Workload for ReadWhileWriting {
             // this is a read throughput benchmark with concurrent write pressure,
             // matching RocksDB db_bench semantics.
             for handle in reader_handles {
+                // Reader panic = broken benchmark, not recoverable.
+                #[expect(clippy::expect_used, reason = "reader panic is unrecoverable")]
                 let local_reporter = handle.join().expect("reader thread panicked")?;
                 reporter.merge(&local_reporter);
             }
