@@ -1640,6 +1640,7 @@ fn load_block_range_tombstone_metrics() -> crate::Result<()> {
         Some(Arc::new(DescriptorTable::new(10))),
         false,
         false,
+        None,
         crate::comparator::default_comparator(),
         #[cfg(feature = "metrics")]
         metrics.clone(),
@@ -1667,6 +1668,7 @@ fn load_block_range_tombstone_metrics() -> crate::Result<()> {
         &rt_handle,
         BlockType::RangeTombstone,
         CompressionType::None,
+        None,
         #[cfg(feature = "metrics")]
         &metrics,
     )?;
@@ -1685,6 +1687,7 @@ fn load_block_range_tombstone_metrics() -> crate::Result<()> {
         &rt_handle,
         BlockType::RangeTombstone,
         CompressionType::None,
+        None,
         #[cfg(feature = "metrics")]
         &metrics,
     )?;
