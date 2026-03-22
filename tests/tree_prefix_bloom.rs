@@ -536,7 +536,6 @@ fn prefix_bloom_negative_lookup_in_key_range_gap() -> lsm_tree::Result<()> {
     Ok(())
 }
 
-<<<<<<< HEAD
 /// Multi-table runs (typically L0) now support per-table prefix bloom
 /// skipping. This test creates multiple flushes WITHOUT compaction so
 /// the tables remain in a single multi-table L0 run, then verifies
