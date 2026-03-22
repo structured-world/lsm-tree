@@ -180,7 +180,7 @@ impl Block {
         // overhead (nonce + auth tag), so allow the provider's declared margin.
         // Use u64 arithmetic to avoid any possibility of u32 overflow
         // (consistent with from_file).
-        let enc_overhead = encryption.map_or(0u64, |e| e.max_overhead() as u64);
+        let enc_overhead = encryption.map_or(0u64, |e| u64::from(e.max_overhead()));
         let max_data_length = u64::from(MAX_DECOMPRESSION_SIZE) + enc_overhead;
 
         if u64::from(header.data_length) > max_data_length {
@@ -273,7 +273,7 @@ impl Block {
     ) -> crate::Result<Self> {
         // handle.size() includes Header::serialized_len(), so allow that overhead.
         // Encrypted blocks add provider-specific overhead to the on-disk size.
-        let enc_overhead = encryption.map_or(0u64, |e| e.max_overhead() as u64);
+        let enc_overhead = encryption.map_or(0u64, |e| u64::from(e.max_overhead()));
         let max_on_disk_size =
             u64::from(MAX_DECOMPRESSION_SIZE) + Header::serialized_len() as u64 + enc_overhead;
 

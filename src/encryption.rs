@@ -124,7 +124,11 @@ impl Aes256GcmProvider {
 #[cfg(feature = "encryption")]
 impl EncryptionProvider for Aes256GcmProvider {
     fn max_overhead(&self) -> u32 {
-        Self::OVERHEAD as u32
+        // OVERHEAD = NONCE_LEN + TAG_LEN = 28, always fits u32.
+        #[expect(clippy::cast_possible_truncation, reason = "OVERHEAD is 28")]
+        {
+            Self::OVERHEAD as u32
+        }
     }
 
     fn encrypt(&self, plaintext: &[u8]) -> crate::Result<Vec<u8>> {
