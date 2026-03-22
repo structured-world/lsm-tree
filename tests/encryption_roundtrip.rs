@@ -44,12 +44,12 @@ mod encrypted {
             let key = format!("key-{i:05}");
             let expected = format!("value-{i:05}");
             let got = tree
-                .get(key.as_bytes(), u64::MAX)?
+                .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
                 .expect("key should exist");
             assert_eq!(got.as_ref(), expected.as_bytes(), "mismatch at key {key}");
         }
 
-        assert!(tree.get(b"nonexistent", u64::MAX)?.is_none());
+        assert!(tree.get(b"nonexistent", lsm_tree::MAX_SEQNO)?.is_none());
         Ok(())
     }
 
@@ -78,7 +78,7 @@ mod encrypted {
             let key = format!("key-{i:05}");
             let expected = format!("value-{i:05}");
             let got = tree
-                .get(key.as_bytes(), u64::MAX)?
+                .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
                 .expect("key should exist");
             assert_eq!(got.as_ref(), expected.as_bytes(), "mismatch at key {key}");
         }
@@ -114,7 +114,9 @@ mod encrypted {
         tree_enc.flush_active_memtable(0)?;
 
         // Read back from encrypted tree to verify correctness
-        let got = tree_enc.get(b"secret", u64::MAX)?.expect("should exist");
+        let got = tree_enc
+            .get(b"secret", lsm_tree::MAX_SEQNO)?
+            .expect("should exist");
         assert_eq!(got.as_ref(), data);
 
         // Compare SST files on disk — they should differ
@@ -196,7 +198,7 @@ mod encrypted {
             Ok(tree) => {
                 // Recovery succeeded (tamper was in data block, not meta/index).
                 // The read must fail.
-                let result = tree.get(b"secret", u64::MAX);
+                let result = tree.get(b"secret", lsm_tree::MAX_SEQNO);
                 assert!(
                     result.is_err(),
                     "reading tampered encrypted data should fail, got: {result:?}"
