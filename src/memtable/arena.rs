@@ -35,7 +35,10 @@ const MAX_BLOCKS: usize = 1 << (32 - BLOCK_SHIFT); // 1024
 /// The u32 offset returned by [`alloc`](Self::alloc) encodes both the block
 /// index (high 10 bits) and the within-block offset (low 22 bits).
 pub struct Arena {
-    /// Block pointers.  Null means not yet allocated.
+    /// Block pointers.  Null means not yet allocated.  Once set to non-null,
+    /// a block pointer is never modified — reads may use `Relaxed` ordering
+    /// as long as the caller establishes happens-before via the skiplist CAS
+    /// chain.
     blocks: Box<[AtomicPtr<u8>]>,
 
     /// Allocation cursor.  High 10 bits = block index, low 22 bits = offset
@@ -52,7 +55,6 @@ impl Arena {
     /// Creates a new empty arena.  No memory is allocated until the first
     /// [`alloc`](Self::alloc) call.
     pub fn new() -> Self {
-        // Allocate the block-pointer array.  All entries start as null.
         let mut blocks = Vec::with_capacity(MAX_BLOCKS);
         for _ in 0..MAX_BLOCKS {
             blocks.push(AtomicPtr::new(ptr::null_mut()));
@@ -82,7 +84,6 @@ impl Arena {
 
             if let Some(new_end) = aligned.checked_add(size) {
                 if new_end <= BLOCK_SIZE {
-                    // Fits in the current block.
                     let new_cursor = (block_idx << BLOCK_SHIFT) | new_end;
                     if self
                         .cursor
@@ -92,16 +93,12 @@ impl Arena {
                         self.ensure_block(block_idx as usize);
                         return Some((block_idx << BLOCK_SHIFT) | aligned);
                     }
-                    // CAS failed — retry.
                 } else {
-                    // Doesn't fit — advance to the next block.
                     let new_block = block_idx + 1;
                     if new_block as usize >= MAX_BLOCKS {
                         return None;
                     }
                     let new_cursor = new_block << BLOCK_SHIFT;
-                    // Try to advance; if another thread already did, we'll just
-                    // retry and pick up the updated cursor.
                     let _ = self.cursor.compare_exchange_weak(
                         cur,
                         new_cursor,
@@ -110,7 +107,6 @@ impl Arena {
                     );
                 }
             } else {
-                // size overflow — shouldn't happen with realistic values.
                 return None;
             }
         }
@@ -121,7 +117,9 @@ impl Arena {
     /// # Safety
     ///
     /// The caller must ensure that `offset..offset+len` was previously
-    /// allocated by this arena and fully initialised.
+    /// allocated by this arena and fully initialised.  The caller must also
+    /// establish happens-before (typically via the skiplist CAS chain) so
+    /// that the block pointer is visible.
     pub unsafe fn get_bytes(&self, offset: u32, len: u32) -> &[u8] {
         let (ptr, off) = self.decode(offset);
         // SAFETY: caller guarantees the range is allocated and initialised.
@@ -154,9 +152,8 @@ impl Arena {
     pub unsafe fn get_atomic_u32(&self, offset: u32) -> &AtomicU32 {
         let (ptr, off) = self.decode(offset);
         // SAFETY: caller guarantees alignment and prior allocation.
-        // Global allocator alignment (>= 4 on all targets) ensures the block
-        // base is aligned; alloc() with align=4 ensures the within-block
-        // offset is aligned.
+        // alloc(..., 4) ensures within-block alignment; the block base has
+        // at least pointer-width alignment from the global allocator.
         #[expect(
             clippy::cast_ptr_alignment,
             reason = "caller guarantees 4-byte alignment via alloc(..., 4)"
@@ -170,12 +167,16 @@ impl Arena {
     // Internal helpers
     // -----------------------------------------------------------------------
 
-    /// Decodes an encoded offset into a `(block_base_ptr, within_block_offset)`.
+    /// Decodes an encoded offset into `(block_base_ptr, within_block_offset)`.
     ///
-    /// # Safety (caller implied)
-    ///
-    /// The offset must have been returned by a prior `alloc()` call, which
-    /// guarantees the block is allocated and the offset is in-bounds.
+    /// Uses `Relaxed` ordering for the block pointer load because:
+    /// - Block pointers are write-once (set in `ensure_block`, never changed).
+    /// - The caller must establish happens-before via the skiplist CAS chain
+    ///   before reading node data; this transitively makes the block pointer
+    ///   visible.
+    /// - There is a data dependency: the `offset` value (which determines
+    ///   `block_idx`) comes from an `Acquire` load on the skiplist, preventing
+    ///   speculative reordering.
     #[expect(
         clippy::indexing_slicing,
         reason = "block_idx < MAX_BLOCKS by construction (alloc enforces this)"
@@ -183,7 +184,7 @@ impl Arena {
     unsafe fn decode(&self, offset: u32) -> (*mut u8, usize) {
         let block_idx = (offset >> BLOCK_SHIFT) as usize;
         let off = (offset & BLOCK_MASK) as usize;
-        let ptr = self.blocks[block_idx].load(Ordering::Acquire);
+        let ptr = self.blocks[block_idx].load(Ordering::Relaxed);
         debug_assert!(!ptr.is_null(), "accessing unallocated arena block");
         (ptr, off)
     }
@@ -196,21 +197,22 @@ impl Arena {
     )]
     fn ensure_block(&self, idx: usize) {
         if self.blocks[idx].load(Ordering::Acquire).is_null() {
-            // Allocate a new zero-initialised block.
-            let block = vec![0u8; BLOCK_SIZE as usize].into_boxed_slice();
-            let raw = Box::into_raw(block).cast::<u8>();
+            // Allocate a new zero-initialised block via Vec for correct
+            // deallocation (avoids fat-pointer round-trip issues on big-endian
+            // targets like powerpc64).
+            let mut block = vec![0u8; BLOCK_SIZE as usize];
+            let raw = block.as_mut_ptr();
+            std::mem::forget(block);
 
             // CAS null → raw.  If another thread won, free our block.
             if self.blocks[idx]
                 .compare_exchange(ptr::null_mut(), raw, Ordering::AcqRel, Ordering::Acquire)
                 .is_err()
             {
-                // Another thread already allocated this block — drop ours.
+                // Another thread already allocated this block — reconstruct
+                // the Vec and let it drop.
                 unsafe {
-                    drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
-                        raw,
-                        BLOCK_SIZE as usize,
-                    )));
+                    drop(Vec::from_raw_parts(raw, 0, BLOCK_SIZE as usize));
                 }
             }
         }
@@ -228,11 +230,10 @@ impl Drop for Arena {
         for block in &*self.blocks {
             let ptr = block.load(Ordering::Relaxed);
             if !ptr.is_null() {
+                // SAFETY: ptr was created via Vec::as_mut_ptr() + mem::forget()
+                // with cap = BLOCK_SIZE. len=0 is fine — we only need deallocation.
                 unsafe {
-                    drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
-                        ptr,
-                        BLOCK_SIZE as usize,
-                    )));
+                    drop(Vec::from_raw_parts(ptr, 0, BLOCK_SIZE as usize));
                 }
             }
         }
@@ -249,10 +250,10 @@ mod tests {
         let arena = Arena::new();
 
         let off = arena.alloc(4, 4).expect("should succeed");
-        assert!(off >= 1); // 0 is reserved
-        assert_eq!(off & 3, 0); // 4-byte aligned
+        assert!(off >= 1);
+        assert_eq!(off & 3, 0);
 
-        // SAFETY: `off` was just allocated with size 4; exclusive access.
+        // SAFETY: freshly allocated, exclusive access.
         unsafe {
             let bytes = arena.get_bytes_mut(off, 4);
             bytes.copy_from_slice(&[1, 2, 3, 4]);
@@ -265,25 +266,21 @@ mod tests {
     #[test]
     fn alloc_respects_alignment() {
         let arena = Arena::new();
-
         let a = arena.alloc(1, 1).expect("ok");
         let b = arena.alloc(4, 4).expect("ok");
-        assert_eq!(b & 3, 0); // 4-byte aligned
+        assert_eq!(b & 3, 0);
         assert!(b > a);
     }
 
     #[test]
     fn alloc_crosses_block_boundary() {
         let arena = Arena::new();
-
-        // Fill most of the first block.
         let big = BLOCK_SIZE - 64;
         let off1 = arena.alloc(big, 1).expect("ok");
-        assert_eq!(off1 >> BLOCK_SHIFT, 0); // block 0
+        assert_eq!(off1 >> BLOCK_SHIFT, 0);
 
-        // This allocation should spill into block 1.
         let off2 = arena.alloc(128, 4).expect("ok");
-        assert_eq!(off2 >> BLOCK_SHIFT, 1); // block 1
+        assert_eq!(off2 >> BLOCK_SHIFT, 1);
     }
 
     #[test]
@@ -324,7 +321,6 @@ mod tests {
             all_offsets.extend(h.join().expect("thread ok"));
         }
 
-        // All offsets must be unique (no overlapping allocations).
         all_offsets.sort();
         all_offsets.dedup();
         assert_eq!(all_offsets.len(), 8000);
