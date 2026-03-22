@@ -101,10 +101,10 @@ fn key_from_idx(idx: u8) -> Vec<u8> {
     vec![idx]
 }
 
-// NOTE: RemoveRange is excluded from this test due to a known bug where
-// point tombstones are not visible when a range tombstone exists in a prior
-// SST (see prop_regression_rt_tombstone.rs). Range tombstone correctness
-// is covered by prop_range_tombstone.rs instead.
+// NOTE: RemoveRange is excluded from this oracle because it only models
+// point operations. Range tombstone semantics (including interaction with
+// point tombstones across SSTs) are covered by prop_range_tombstone.rs
+// and related regression tests instead.
 #[derive(Debug, Clone)]
 enum Op {
     Insert { key_idx: u8, value: Vec<u8> },
