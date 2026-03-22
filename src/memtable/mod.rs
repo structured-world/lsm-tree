@@ -168,34 +168,6 @@ impl Memtable {
         })
     }
 
-    /// Collects all entries for a given key with seqno < `seqno`,
-    /// ordered by descending sequence number (newest first).
-    ///
-    /// Used by the merge operator read path to collect all operands for a key.
-    // Allocates a Vec and clones entries — acceptable for the merge slow-path.
-    // A zero-copy iterator API would avoid this but changes the skiplist contract.
-    pub(crate) fn get_all_for_key(&self, key: &[u8], seqno: SeqNo) -> Vec<InternalValue> {
-        if seqno == 0 {
-            return Vec::new();
-        }
-
-        // ValueType is not part of InternalKey ordering (only user_key + Reverse(seqno)),
-        // so the value type here is arbitrary — it does not affect seek position.
-        let lower_bound = InternalKey::new(key, seqno - 1, ValueType::Value);
-        let cmp = self.comparator.as_ref();
-
-        self.items
-            .range(lower_bound..)
-            .take_while(|entry| {
-                cmp.compare(entry.user_key_bytes(), key) == std::cmp::Ordering::Equal
-            })
-            .map(|entry| InternalValue {
-                key: entry.key(),
-                value: entry.value(),
-            })
-            .collect()
-    }
-
     /// Gets approximate size of memtable in bytes.
     pub fn size(&self) -> u64 {
         self.approximate_size
