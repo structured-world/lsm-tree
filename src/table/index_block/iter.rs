@@ -64,3 +64,8 @@ impl DoubleEndedIterator for Iter<'_> {
         self.decoder.next_back()
     }
 }
+
+// Unit tests for IndexBlock::Iter seek/seek_upper behavior are covered by
+// integration tests in tests/custom_comparator.rs (which exercise the full
+// block-index → data-block path with both default and custom comparators)
+// and by the existing table-level tests in src/table/tests.rs.
