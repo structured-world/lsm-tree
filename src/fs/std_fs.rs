@@ -143,14 +143,13 @@ impl Fs for StdFs {
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         #[cfg(not(target_os = "windows"))]
         {
-            let metadata = std::fs::metadata(path)?;
-            if !metadata.is_dir() {
+            let dir = File::open(path)?;
+            if !dir.metadata()?.is_dir() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "sync_directory: path is not a directory",
                 ));
             }
-            let dir = File::open(path)?;
             dir.sync_all()
         }
 
@@ -162,8 +161,8 @@ impl Fs for StdFs {
         }
     }
 
-    fn exists(&self, path: &Path) -> bool {
-        path.exists()
+    fn exists(&self, path: &Path) -> io::Result<bool> {
+        path.try_exists()
     }
 }
 
@@ -173,15 +172,16 @@ impl Fs for StdFs {
 
 #[cfg(unix)]
 mod sys {
+    use std::ffi::c_int;
     use std::fs::File;
     use std::io;
     use std::os::unix::io::AsRawFd;
 
     // Declare flock directly to avoid requiring libc as a direct dependency.
-    const LOCK_EX: i32 = 2;
+    const LOCK_EX: c_int = 2;
 
     unsafe extern "C" {
-        fn flock(fd: i32, operation: i32) -> i32;
+        fn flock(fd: c_int, operation: c_int) -> c_int;
     }
 
     pub(super) fn lock_exclusive(file: &File) -> io::Result<()> {
@@ -321,7 +321,7 @@ mod tests {
 
         let nested = dir.path().join("a").join("b").join("c");
         fs.create_dir_all(&nested)?;
-        assert!(fs.exists(&nested));
+        assert!(fs.exists(&nested)?);
 
         // Create a file inside
         let file_path = nested.join("data.bin");
@@ -344,12 +344,12 @@ mod tests {
 
         // remove_file
         fs.remove_file(&file_path)?;
-        assert!(!fs.exists(&file_path));
+        assert!(!fs.exists(&file_path)?);
 
         // remove_dir_all
         let top = dir.path().join("a");
         fs.remove_dir_all(&top)?;
-        assert!(!fs.exists(&top));
+        assert!(!fs.exists(&top)?);
 
         Ok(())
     }
@@ -368,8 +368,8 @@ mod tests {
         drop(file);
 
         fs.rename(&src, &dst)?;
-        assert!(!fs.exists(&src));
-        assert!(fs.exists(&dst));
+        assert!(!fs.exists(&src)?);
+        assert!(fs.exists(&dst)?);
 
         Ok(())
     }
@@ -575,7 +575,7 @@ mod tests {
         let fs: Arc<dyn Fs<File = File, ReadDir = StdReadDir>> = Arc::new(StdFs);
         let dir = tempfile::tempdir()?;
         let bogus = dir.path().join("nonexistent");
-        assert!(!fs.exists(&bogus));
+        assert!(!fs.exists(&bogus)?);
         Ok(())
     }
 }

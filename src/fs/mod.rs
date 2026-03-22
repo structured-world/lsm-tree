@@ -264,6 +264,11 @@ pub trait Fs: Send + Sync + 'static {
     /// Returns an I/O error if the sync operation fails.
     fn sync_directory(&self, path: &Path) -> io::Result<()>;
 
-    /// Returns `true` if a file or directory exists at `path`.
-    fn exists(&self, path: &Path) -> bool;
+    /// Returns `Ok(true)` if a file or directory exists at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the existence of `path` cannot be determined
+    /// (for example, due to permission issues or transient backend failures).
+    fn exists(&self, path: &Path) -> io::Result<bool>;
 }
