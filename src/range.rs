@@ -271,17 +271,30 @@ impl TreeIter {
                         // If a prefix hash is available, filter individual tables
                         // within the multi-table run using their bloom filters.
                         if let Some(prefix_hash) = lock.prefix_hash {
+                            let bounds = (
+                                user_range.0.as_ref().map(std::convert::AsRef::as_ref),
+                                user_range.1.as_ref().map(std::convert::AsRef::as_ref),
+                            );
+
                             let surviving: Vec<_> = run
                                 .iter()
-                                .filter(|table| match table.maybe_contains_prefix(prefix_hash) {
-                                    Ok(false) => false,
-                                    Ok(true) => true,
-                                    Err(e) => {
-                                        log::debug!(
-                                            "prefix bloom check failed for table {:?}: {e}",
-                                            table.id(),
-                                        );
-                                        true
+                                .filter(|table| {
+                                    // Cheap key-range metadata check first to avoid
+                                    // bloom filter I/O for non-overlapping tables.
+                                    if !table.check_key_range_overlap(&bounds) {
+                                        return false;
+                                    }
+
+                                    match table.maybe_contains_prefix(prefix_hash) {
+                                        Ok(false) => false,
+                                        Ok(true) => true,
+                                        Err(e) => {
+                                            log::debug!(
+                                                "prefix bloom check failed for table {:?}: {e}",
+                                                table.id(),
+                                            );
+                                            true
+                                        }
                                     }
                                 })
                                 .cloned()
