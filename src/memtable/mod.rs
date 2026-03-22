@@ -2,65 +2,22 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
+pub(crate) mod arena;
 pub mod interval_tree;
+pub(crate) mod skiplist;
 
 use crate::comparator::SharedComparator;
 use crate::key::InternalKey;
 use crate::range_tombstone::RangeTombstone;
 use crate::{
-    value::{InternalValue, SeqNo, UserValue},
+    value::{InternalValue, SeqNo},
     UserKey, ValueType,
 };
-use crossbeam_skiplist::SkipMap;
-use std::ops::Bound;
+use std::ops::RangeBounds;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::RwLock;
 
 pub use crate::tree::inner::MemtableId;
-
-/// Wrapper around [`InternalKey`] that uses a custom [`UserComparator`] for ordering.
-///
-/// This wrapper is used as the key type in the memtable's `SkipMap` to support
-/// pluggable key comparison. The `SharedComparator` is cloned (Arc bump) per entry.
-#[derive(Clone)]
-pub struct MemtableKey {
-    pub(crate) inner: InternalKey,
-    pub(crate) comparator: SharedComparator,
-}
-
-impl MemtableKey {
-    pub(crate) fn new(inner: InternalKey, comparator: SharedComparator) -> Self {
-        Self { inner, comparator }
-    }
-}
-
-impl PartialEq for MemtableKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
-    }
-}
-
-impl Eq for MemtableKey {}
-
-impl PartialOrd for MemtableKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for MemtableKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.inner
-            .compare_with(&other.inner, self.comparator.as_ref())
-    }
-}
-
-#[cfg_attr(coverage_nightly, coverage(off))]
-impl std::fmt::Debug for MemtableKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.inner.fmt(f)
-    }
-}
 
 /// The memtable serves as an intermediary, ephemeral, sorted storage for new items
 ///
@@ -72,9 +29,12 @@ pub struct Memtable {
     /// The user key comparator used for ordering entries.
     pub(crate) comparator: SharedComparator,
 
-    /// The actual content, stored in a lock-free skiplist.
-    #[doc(hidden)]
-    pub(crate) items: SkipMap<MemtableKey, UserValue>,
+    /// The actual content, stored in an arena-based lock-free skiplist.
+    ///
+    /// Nodes are allocated from a contiguous byte arena for cache locality
+    /// and O(1) bulk deallocation when the memtable is dropped.  Reads are
+    /// lock-free (atomic loads); inserts use CAS with retry.
+    items: skiplist::SkipMap,
 
     /// Range tombstones stored in an interval tree.
     ///
@@ -137,7 +97,7 @@ impl Memtable {
         Self {
             id,
             comparator,
-            items: SkipMap::default(),
+            items: skiplist::SkipMap::new(),
             range_tombstones: RwLock::new(interval_tree::IntervalTree::new()),
             approximate_size: AtomicU64::default(),
             highest_seqno: AtomicU64::default(),
@@ -148,31 +108,22 @@ impl Memtable {
     /// Creates an iterator over all items.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = InternalValue> + '_ {
         self.items.iter().map(|entry| InternalValue {
-            key: entry.key().inner.clone(),
-            value: entry.value().clone(),
+            key: entry.key(),
+            value: entry.value(),
         })
     }
 
     /// Creates an iterator over a range of items.
     ///
-    /// Accepts `InternalKey`-based bounds and wraps them with the memtable's comparator.
-    pub(crate) fn range_internal(
-        &self,
-        range: (Bound<InternalKey>, Bound<InternalKey>),
-    ) -> impl DoubleEndedIterator<Item = InternalValue> + '_ {
-        let wrapped = (
-            range.0.map(|k| self.wrap_key(k)),
-            range.1.map(|k| self.wrap_key(k)),
-        );
-        self.items.range(wrapped).map(|entry| InternalValue {
-            key: entry.key().inner.clone(),
-            value: entry.value().clone(),
+    /// Accepts `InternalKey`-based bounds.
+    pub(crate) fn range_internal<'a, R: RangeBounds<InternalKey> + 'a>(
+        &'a self,
+        range: R,
+    ) -> impl DoubleEndedIterator<Item = InternalValue> + 'a {
+        self.items.range(range).map(|entry| InternalValue {
+            key: entry.key(),
+            value: entry.value(),
         })
-    }
-
-    /// Wraps an `InternalKey` with this memtable's comparator for `SkipMap` lookups.
-    pub(crate) fn wrap_key(&self, key: InternalKey) -> MemtableKey {
-        MemtableKey::new(key, self.comparator.clone())
     }
 
     /// Returns the item by key if it exists.
@@ -200,18 +151,47 @@ impl Memtable {
         // abcdef -> 6
         // abcdef -> 5
         //
-        let lower_bound = self.wrap_key(InternalKey::new(key, seqno - 1, ValueType::Value));
+        let lower_bound = InternalKey::new(key, seqno - 1, ValueType::Value);
 
         let cmp = self.comparator.as_ref();
 
         let mut iter = self.items.range(lower_bound..).take_while(|entry| {
-            cmp.compare(&entry.key().inner.user_key, key) == std::cmp::Ordering::Equal
+            let entry_key = entry.key();
+            cmp.compare(&entry_key.user_key, key) == std::cmp::Ordering::Equal
         });
 
         iter.next().map(|entry| InternalValue {
-            key: entry.key().inner.clone(),
-            value: entry.value().clone(),
+            key: entry.key(),
+            value: entry.value(),
         })
+    }
+
+    /// Collects all entries for a given key with seqno < `seqno`,
+    /// ordered by descending sequence number (newest first).
+    ///
+    /// Used by the merge operator read path to collect all operands for a key.
+    // Allocates a Vec and clones entries — acceptable for the merge slow-path.
+    // A zero-copy iterator API would avoid this but changes the skiplist contract.
+    pub(crate) fn get_all_for_key(&self, key: &[u8], seqno: SeqNo) -> Vec<InternalValue> {
+        if seqno == 0 {
+            return Vec::new();
+        }
+
+        // ValueType is not part of InternalKey ordering (only user_key + Reverse(seqno)),
+        // so the value type here is arbitrary — it does not affect seek position.
+        let lower_bound = InternalKey::new(key, seqno - 1, ValueType::Value);
+
+        self.items
+            .range(lower_bound..)
+            .take_while(|entry| {
+                let entry_key = entry.key();
+                &*entry_key.user_key == key
+            })
+            .map(|entry| InternalValue {
+                key: entry.key(),
+                value: entry.value(),
+            })
+            .collect()
     }
 
     /// Gets approximate size of memtable in bytes.
@@ -251,8 +231,7 @@ impl Memtable {
             .fetch_add(item_size, std::sync::atomic::Ordering::AcqRel);
 
         let key = InternalKey::new(item.key.user_key, item.key.seqno, item.key.value_type);
-        let memtable_key = MemtableKey::new(key, self.comparator.clone());
-        self.items.insert(memtable_key, item.value);
+        self.items.insert(&key, &item.value);
 
         self.highest_seqno
             .fetch_max(item.key.seqno, std::sync::atomic::Ordering::AcqRel);

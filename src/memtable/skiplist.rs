@@ -1,0 +1,1085 @@
+// Copyright (c) 2024-present, fjall-rs
+// This source code is licensed under both the Apache 2.0 and MIT License
+// (found in the LICENSE-* files in the repository)
+
+//! Arena-based concurrent skiplist for memtable storage.
+//!
+//! Nodes are allocated from a contiguous [`Arena`] for cache locality and O(1)
+//! bulk deallocation when the memtable is dropped.  Concurrent reads are
+//! lock-free (atomic loads on next-pointers); inserts use CAS with retry.
+//!
+//! The design follows the arena-skiplist pattern used by Pebble/CockroachDB
+//! and Badger, adapted for Rust's ownership model and the lsm-tree
+//! `InternalKey` ordering (user_key ASC, seqno DESC).
+
+use super::arena::Arena;
+use crate::key::InternalKey;
+use crate::value::{SeqNo, UserValue};
+use crate::{UserKey, ValueType};
+
+use std::cmp::Ordering as CmpOrdering;
+use std::ops::{Bound, RangeBounds};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Maximum tower height.  With P = 1/4 this supports ~4^20 ≈ 10^12 entries.
+const MAX_HEIGHT: usize = 20;
+
+/// Sentinel offset meaning "no node".  Offset 0 is reserved in the arena.
+const UNSET: u32 = 0;
+
+/// Default arena capacity (64 MiB).
+const DEFAULT_ARENA_CAPACITY: u32 = 64 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// Node layout (offsets within a node allocation)
+// ---------------------------------------------------------------------------
+// All multi-byte fields are stored in **native** byte order (LE on x86/ARM)
+// because the arena is never persisted — it lives only in memory.
+//
+// +0   u32  key_offset    — offset of user_key bytes in the arena
+// +4   u32  value_idx     — index into the SkipMap `values` Vec
+// +8   u16  key_len       — user_key length
+// +10  u8   value_type    — ValueType discriminant
+// +11  u8   height        — tower height (1..=MAX_HEIGHT)
+// +12  u32  (reserved)    — padding for alignment
+// +16  u64  seqno         — sequence number
+// +24  [u32; height]      — tower: next-pointers per level (AtomicU32)
+//
+// Values are stored in a separate heap-backed Vec so that large values
+// don't bloat the arena and cause exhaustion.
+//
+// Total: 24 + 4 × height   (always 4-byte aligned)
+
+// Layout offsets — only OFF_HEIGHT and OFF_TOWER are used by name in code;
+// the rest are accessed via array slicing in the node_*() accessors.
+const OFF_HEIGHT: u32 = 11;
+const OFF_TOWER: u32 = 24;
+
+/// Byte size of a node with the given tower `height`.
+const fn node_size(height: usize) -> u32 {
+    OFF_TOWER + (height as u32) * 4
+}
+
+// ---------------------------------------------------------------------------
+// SkipMap
+// ---------------------------------------------------------------------------
+
+/// A concurrent ordered map backed by an arena-allocated skiplist.
+///
+/// Provides lock-free reads and CAS-based inserts with O(log n) expected
+/// time for both operations.  Keys are [`InternalKey`] (ordered by user_key
+/// ascending, then seqno descending).
+pub(crate) struct SkipMap {
+    arena: Arena,
+    /// Heap-backed storage for values.  Keys live in the arena for cache
+    /// locality during comparisons; values live here so large blobs don't
+    /// exhaust the fixed-size arena.  Indexed by `value_idx` stored in each node.
+    values: Mutex<Vec<UserValue>>,
+    /// Offset of the sentinel head node in the arena.
+    head: u32,
+    /// Current maximum height of any inserted node.
+    height: AtomicUsize,
+    /// Number of entries (not counting the head sentinel).
+    len: AtomicUsize,
+    /// PRNG counter for height generation (splitmix64-based).
+    rng_state: AtomicU64,
+}
+
+impl SkipMap {
+    /// Creates a new empty skiplist with default arena capacity (64 MiB).
+    pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_ARENA_CAPACITY)
+    }
+
+    /// Creates a new empty skiplist with the given arena capacity in bytes.
+    pub fn with_capacity(capacity: u32) -> Self {
+        let arena = Arena::new(capacity);
+
+        // Allocate the head sentinel with MAX_HEIGHT.
+        let head_size = node_size(MAX_HEIGHT);
+        let head = arena
+            .alloc(head_size, 4)
+            .expect("arena must fit at least the head sentinel");
+
+        // Head is zero-initialised by the arena; set the height byte.
+        unsafe {
+            arena.get_bytes_mut(head, head_size)[OFF_HEIGHT as usize] = MAX_HEIGHT as u8;
+        }
+
+        // Seed PRNG with an address-derived non-zero value.
+        let seed = {
+            let p = &arena as *const Arena as u64;
+            if p == 0 {
+                0xDEAD_BEEF
+            } else {
+                p
+            }
+        };
+
+        Self {
+            arena,
+            values: Mutex::new(Vec::new()),
+            head,
+            height: AtomicUsize::new(1),
+            len: AtomicUsize::new(0),
+            rng_state: AtomicU64::new(seed),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Public API
+    // -----------------------------------------------------------------------
+
+    /// Inserts a key-value pair into the skiplist.
+    ///
+    /// Multiple entries with the same `user_key` but different `seqno` are
+    /// expected (MVCC).  No deduplication is performed.
+    pub fn insert(&self, key: &InternalKey, value: &UserValue) {
+        let height = self.random_height();
+        let node = self.alloc_node(key, value, height);
+
+        // Raise the list height if needed.
+        let mut list_h = self.height.load(Ordering::Relaxed);
+        while height > list_h {
+            match self.height.compare_exchange_weak(
+                list_h,
+                height,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(h) => list_h = h,
+            }
+        }
+
+        // Find predecessors and link the node at each level.
+        let mut preds = [self.head; MAX_HEIGHT];
+        let mut succs = [UNSET; MAX_HEIGHT];
+        self.find_splice(key, &mut preds, &mut succs);
+
+        for level in 0..height {
+            loop {
+                // new_node.next[level] = succs[level]
+                unsafe {
+                    self.tower_atomic(node, level)
+                        .store(succs[level], Ordering::Release);
+                }
+
+                // CAS pred.next[level] from succs[level] to new_node
+                let pred_next = unsafe { self.tower_atomic(preds[level], level) };
+                match pred_next.compare_exchange_weak(
+                    succs[level],
+                    node,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(_) => {
+                        // Predecessor changed — re-search at this level.
+                        self.find_splice_for_level(key, &mut preds, &mut succs, level);
+                    }
+                }
+            }
+        }
+
+        self.len.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns the number of entries.
+    pub fn len(&self) -> usize {
+        self.len.load(Ordering::Relaxed)
+    }
+
+    /// Returns `true` if the skiplist is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns an iterator over all entries in order.
+    pub fn iter(&self) -> Iter<'_> {
+        Iter {
+            map: self,
+            front: self.first_node(),
+            back: UNSET,
+            back_init: false,
+            done: false,
+        }
+    }
+
+    /// Returns an iterator over entries within the given range.
+    pub fn range<R: RangeBounds<InternalKey>>(&self, range: R) -> Range<'_> {
+        let front = match range.start_bound() {
+            Bound::Included(k) => self.seek_ge(k),
+            Bound::Excluded(k) => self.seek_gt(k),
+            Bound::Unbounded => self.first_node(),
+        };
+
+        let end_bound = match range.end_bound() {
+            Bound::Included(k) => Bound::Included(k.clone()),
+            Bound::Excluded(k) => Bound::Excluded(k.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+
+        Range {
+            map: self,
+            end_bound,
+            front,
+            back: UNSET,
+            back_init: false,
+            done: false,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal: node allocation
+    // -----------------------------------------------------------------------
+
+    /// Allocates and initialises a node in the arena, returning its offset.
+    ///
+    /// Key data is stored in the arena for comparison locality.
+    /// Value data is appended to the heap-backed `values` Vec.
+    fn alloc_node(&self, key: &InternalKey, value: &UserValue, height: usize) -> u32 {
+        let key_bytes: &[u8] = &key.user_key;
+
+        // Allocate key data in the arena.
+        let key_offset = self
+            .arena
+            .alloc(key_bytes.len() as u32, 1)
+            .expect("arena exhausted (key data)");
+        unsafe {
+            self.arena
+                .get_bytes_mut(key_offset, key_bytes.len() as u32)
+                .copy_from_slice(key_bytes);
+        }
+
+        // Store value in the heap-backed Vec.
+        #[expect(
+            clippy::expect_used,
+            reason = "Mutex is never poisoned in normal operation"
+        )]
+        let value_idx = {
+            let mut vals = self.values.lock().expect("values lock poisoned");
+            let idx = vals.len() as u32;
+            vals.push(value.clone());
+            idx
+        };
+
+        // Allocate the node header + tower.
+        let n_size = node_size(height);
+        let node = self.arena.alloc(n_size, 4).expect("arena exhausted (node)");
+
+        // Write immutable metadata.
+        unsafe {
+            let meta = self.arena.get_bytes_mut(node, OFF_TOWER);
+            meta[0..4].copy_from_slice(&key_offset.to_ne_bytes());
+            meta[4..8].copy_from_slice(&value_idx.to_ne_bytes());
+            meta[8..10].copy_from_slice(&(key_bytes.len() as u16).to_ne_bytes());
+            meta[10] = u8::from(key.value_type);
+            meta[11] = height as u8;
+            // meta[12..16] reserved (padding)
+            meta[16..24].copy_from_slice(&key.seqno.to_ne_bytes());
+            // Tower entries are already zero (= UNSET) from arena zero-init.
+        }
+
+        node
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal: reading node fields
+    // -----------------------------------------------------------------------
+
+    /// Reads the immutable metadata header of a node (24 bytes at `node`).
+    ///
+    /// # Safety
+    ///
+    /// `node` must be a valid node offset previously returned by `alloc_node`.
+    unsafe fn meta(&self, node: u32) -> &[u8] {
+        self.arena.get_bytes(node, OFF_TOWER)
+    }
+
+    fn node_key_offset(&self, node: u32) -> u32 {
+        let m = unsafe { self.meta(node) };
+        u32::from_ne_bytes(m[0..4].try_into().expect("4 bytes"))
+    }
+
+    fn node_key_len(&self, node: u32) -> u16 {
+        let m = unsafe { self.meta(node) };
+        u16::from_ne_bytes(m[8..10].try_into().expect("2 bytes"))
+    }
+
+    fn node_value_type(&self, node: u32) -> ValueType {
+        let m = unsafe { self.meta(node) };
+        ValueType::try_from(m[10]).expect("valid ValueType discriminant")
+    }
+
+    fn node_value_idx(&self, node: u32) -> u32 {
+        let m = unsafe { self.meta(node) };
+        u32::from_ne_bytes(m[4..8].try_into().expect("4 bytes"))
+    }
+
+    fn node_seqno(&self, node: u32) -> SeqNo {
+        let m = unsafe { self.meta(node) };
+        u64::from_ne_bytes(m[16..24].try_into().expect("8 bytes"))
+    }
+
+    /// Returns the raw user_key bytes stored in the arena for `node`.
+    fn node_user_key_bytes(&self, node: u32) -> &[u8] {
+        let off = self.node_key_offset(node);
+        let len = self.node_key_len(node) as u32;
+        unsafe { self.arena.get_bytes(off, len) }
+    }
+
+    /// Reconstructs the [`InternalKey`] for `node` (allocates a new `Slice`).
+    fn node_internal_key(&self, node: u32) -> InternalKey {
+        let user_key: UserKey = self.node_user_key_bytes(node).into();
+        let seqno = self.node_seqno(node);
+        let vt = self.node_value_type(node);
+        InternalKey {
+            user_key,
+            seqno,
+            value_type: vt,
+        }
+    }
+
+    /// Clones the value for `node` from the heap-backed values Vec.
+    #[expect(
+        clippy::expect_used,
+        reason = "Mutex is never poisoned in normal operation"
+    )]
+    fn node_value(&self, node: u32) -> UserValue {
+        let idx = self.node_value_idx(node) as usize;
+        let vals = self.values.lock().expect("values lock poisoned");
+        vals[idx].clone()
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal: tower access
+    // -----------------------------------------------------------------------
+
+    /// Returns a reference to the AtomicU32 next-pointer at `level` for `node`.
+    ///
+    /// # Safety
+    ///
+    /// `level` must be < the node's height.
+    unsafe fn tower_atomic(&self, node: u32, level: usize) -> &std::sync::atomic::AtomicU32 {
+        self.arena
+            .get_atomic_u32(node + OFF_TOWER + (level as u32) * 4)
+    }
+
+    /// Loads the next-pointer at `level` for `node`.
+    fn next_at(&self, node: u32, level: usize) -> u32 {
+        unsafe { self.tower_atomic(node, level).load(Ordering::Acquire) }
+    }
+
+    /// The first data node (head.next[0]), or UNSET if empty.
+    fn first_node(&self) -> u32 {
+        self.next_at(self.head, 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal: key comparison
+    // -----------------------------------------------------------------------
+
+    /// Compares the key stored at `node` with `target` using InternalKey
+    /// ordering (user_key ASC, seqno DESC).
+    fn compare_key(&self, node: u32, target: &InternalKey) -> CmpOrdering {
+        let node_uk = self.node_user_key_bytes(node);
+        let target_uk: &[u8] = &target.user_key;
+
+        match node_uk.cmp(target_uk) {
+            CmpOrdering::Equal => {
+                // Reverse seqno: higher seqno sorts first.
+                let node_seq = self.node_seqno(node);
+                target.seqno.cmp(&node_seq)
+            }
+            other => other,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal: search helpers
+    // -----------------------------------------------------------------------
+
+    /// Populates `preds` and `succs` arrays with the splice point for `key`.
+    fn find_splice(
+        &self,
+        key: &InternalKey,
+        preds: &mut [u32; MAX_HEIGHT],
+        succs: &mut [u32; MAX_HEIGHT],
+    ) {
+        let list_h = self.height.load(Ordering::Acquire);
+        let mut node = self.head;
+
+        for level in (0..list_h).rev() {
+            loop {
+                let next = self.next_at(node, level);
+                if next == UNSET {
+                    break;
+                }
+                if self.compare_key(next, key) == CmpOrdering::Less {
+                    node = next;
+                } else {
+                    break;
+                }
+            }
+            preds[level] = node;
+            succs[level] = self.next_at(node, level);
+        }
+    }
+
+    /// Re-searches at a single `level` starting from the stored predecessor
+    /// (or a higher-level predecessor as fallback).
+    fn find_splice_for_level(
+        &self,
+        key: &InternalKey,
+        preds: &mut [u32; MAX_HEIGHT],
+        succs: &mut [u32; MAX_HEIGHT],
+        level: usize,
+    ) {
+        // Start from the predecessor at the level above (if available).
+        let mut node = if level + 1 < MAX_HEIGHT {
+            preds[level + 1]
+        } else {
+            self.head
+        };
+
+        // Walk down to the correct level first.
+        let list_h = self.height.load(Ordering::Acquire);
+        let start_level = if level + 1 < list_h {
+            level + 1
+        } else {
+            list_h
+        };
+
+        for lv in (level..start_level).rev() {
+            loop {
+                let next = self.next_at(node, lv);
+                if next == UNSET {
+                    break;
+                }
+                if self.compare_key(next, key) == CmpOrdering::Less {
+                    node = next;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Now search at the target level.
+        loop {
+            let next = self.next_at(node, level);
+            if next == UNSET {
+                break;
+            }
+            if self.compare_key(next, key) == CmpOrdering::Less {
+                node = next;
+            } else {
+                break;
+            }
+        }
+
+        preds[level] = node;
+        succs[level] = self.next_at(node, level);
+    }
+
+    /// Finds the first node whose key >= `target`, or UNSET.
+    fn seek_ge(&self, target: &InternalKey) -> u32 {
+        let mut node = self.head;
+        let list_h = self.height.load(Ordering::Acquire);
+
+        for level in (0..list_h).rev() {
+            loop {
+                let next = self.next_at(node, level);
+                if next == UNSET {
+                    break;
+                }
+                if self.compare_key(next, target) == CmpOrdering::Less {
+                    node = next;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        self.next_at(node, 0)
+    }
+
+    /// Finds the first node whose key > `target`, or UNSET.
+    fn seek_gt(&self, target: &InternalKey) -> u32 {
+        let mut node = self.head;
+        let list_h = self.height.load(Ordering::Acquire);
+
+        for level in (0..list_h).rev() {
+            loop {
+                let next = self.next_at(node, level);
+                if next == UNSET {
+                    break;
+                }
+                // Advance while next <= target (i.e. not Greater)
+                if self.compare_key(next, target) != CmpOrdering::Greater {
+                    node = next;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        self.next_at(node, 0)
+    }
+
+    /// Finds the last node whose key <= `target`, or UNSET if all nodes > target.
+    fn seek_le(&self, target: &InternalKey) -> u32 {
+        let mut node = self.head;
+        let list_h = self.height.load(Ordering::Acquire);
+
+        for level in (0..list_h).rev() {
+            loop {
+                let next = self.next_at(node, level);
+                if next == UNSET {
+                    break;
+                }
+                if self.compare_key(next, target) != CmpOrdering::Greater {
+                    node = next;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if node == self.head {
+            UNSET
+        } else {
+            node
+        }
+    }
+
+    /// Finds the last node whose key < `target`, or UNSET.
+    fn seek_lt(&self, target: &InternalKey) -> u32 {
+        let mut node = self.head;
+        let list_h = self.height.load(Ordering::Acquire);
+
+        for level in (0..list_h).rev() {
+            loop {
+                let next = self.next_at(node, level);
+                if next == UNSET {
+                    break;
+                }
+                if self.compare_key(next, target) == CmpOrdering::Less {
+                    node = next;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if node == self.head {
+            UNSET
+        } else {
+            node
+        }
+    }
+
+    /// Returns the last node in the skiplist, or UNSET if empty.
+    fn last_node(&self) -> u32 {
+        let mut node = self.head;
+        let list_h = self.height.load(Ordering::Acquire);
+
+        for level in (0..list_h).rev() {
+            loop {
+                let next = self.next_at(node, level);
+                if next == UNSET {
+                    break;
+                }
+                node = next;
+            }
+        }
+
+        if node == self.head {
+            UNSET
+        } else {
+            node
+        }
+    }
+
+    /// Finds the predecessor of `target_node` at level 0 using a top-down
+    /// search.  Returns UNSET if `target_node` is the first data node.
+    ///
+    /// This is O(log n) — used only for `next_back()` which is called
+    /// infrequently on memtable iterators.
+    fn find_predecessor(&self, target_node: u32) -> u32 {
+        // Build a temporary InternalKey for the comparison target.
+        let target_key = self.node_internal_key(target_node);
+
+        let mut node = self.head;
+        let list_h = self.height.load(Ordering::Acquire);
+
+        for level in (0..list_h).rev() {
+            loop {
+                let next = self.next_at(node, level);
+                if next == UNSET || next == target_node {
+                    break;
+                }
+                if self.compare_key(next, &target_key) == CmpOrdering::Less {
+                    node = next;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // At level 0, walk forward until we find the node whose next IS
+        // target_node (handles equal-key adjacency).
+        loop {
+            let next = self.next_at(node, 0);
+            if next == UNSET || next == target_node {
+                break;
+            }
+            // Only advance if next < target_key (safe since ordering is total)
+            if self.compare_key(next, &target_key) == CmpOrdering::Less {
+                node = next;
+            } else {
+                break;
+            }
+        }
+
+        if node == self.head {
+            UNSET
+        } else {
+            node
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal: random height
+    // -----------------------------------------------------------------------
+
+    /// Generates a random tower height using a geometric distribution (P = 1/4).
+    fn random_height(&self) -> usize {
+        // Each thread gets a unique seed from fetch_add, then we hash it.
+        let state = self.rng_state.fetch_add(1, Ordering::Relaxed);
+
+        // splitmix64 finaliser for good bit mixing
+        let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+
+        // Count pairs of trailing zero bits → geometric(P=1/4)
+        let mut h = 1;
+        let mut bits = z;
+        while h < MAX_HEIGHT && (bits & 3) == 0 {
+            h += 1;
+            bits >>= 2;
+        }
+        h
+    }
+}
+
+impl Default for SkipMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry reference
+// ---------------------------------------------------------------------------
+
+/// A reference to a key-value pair stored in the skiplist arena.
+pub(crate) struct Entry<'a> {
+    map: &'a SkipMap,
+    node: u32,
+}
+
+impl Entry<'_> {
+    /// Reconstructs the [`InternalKey`] (allocates a new `Slice` for user_key).
+    pub fn key(&self) -> InternalKey {
+        self.map.node_internal_key(self.node)
+    }
+
+    /// Reconstructs the value (allocates a new `Slice`).
+    pub fn value(&self) -> UserValue {
+        self.map.node_value(self.node)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Full iterator
+// ---------------------------------------------------------------------------
+
+/// Forward + backward iterator over all entries in a [`SkipMap`].
+pub(crate) struct Iter<'a> {
+    map: &'a SkipMap,
+    front: u32,
+    back: u32,
+    back_init: bool,
+    done: bool,
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = Entry<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done || self.front == UNSET {
+            return None;
+        }
+
+        let node = self.front;
+
+        // If front and back have converged, this is the last element.
+        if self.back_init && node == self.back {
+            self.done = true;
+        } else {
+            self.front = self.map.next_at(node, 0);
+        }
+
+        Some(Entry {
+            map: self.map,
+            node,
+        })
+    }
+}
+
+impl<'a> DoubleEndedIterator for Iter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        if !self.back_init {
+            self.back = self.map.last_node();
+            self.back_init = true;
+        }
+
+        if self.back == UNSET {
+            self.done = true;
+            return None;
+        }
+
+        let node = self.back;
+
+        // If front and back have converged, this is the last element.
+        if node == self.front {
+            self.done = true;
+        } else {
+            self.back = self.map.find_predecessor(node);
+        }
+
+        Some(Entry {
+            map: self.map,
+            node,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Range iterator
+// ---------------------------------------------------------------------------
+
+/// Forward + backward iterator over a range of entries in a [`SkipMap`].
+pub(crate) struct Range<'a> {
+    map: &'a SkipMap,
+    end_bound: Bound<InternalKey>,
+    front: u32,
+    back: u32,
+    back_init: bool,
+    done: bool,
+}
+
+impl Range<'_> {
+    /// Returns `true` if `node` is within the end bound.
+    fn within_end(&self, node: u32) -> bool {
+        match &self.end_bound {
+            Bound::Unbounded => true,
+            Bound::Included(k) => self.map.compare_key(node, k) != CmpOrdering::Greater,
+            Bound::Excluded(k) => self.map.compare_key(node, k) == CmpOrdering::Less,
+        }
+    }
+}
+
+impl<'a> Iterator for Range<'a> {
+    type Item = Entry<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done || self.front == UNSET {
+            return None;
+        }
+
+        let node = self.front;
+
+        // Check end bound.
+        if !self.within_end(node) {
+            self.front = UNSET;
+            self.done = true;
+            return None;
+        }
+
+        // If front and back have converged, this is the last element.
+        if self.back_init && node == self.back {
+            self.done = true;
+        } else {
+            self.front = self.map.next_at(node, 0);
+        }
+
+        Some(Entry {
+            map: self.map,
+            node,
+        })
+    }
+}
+
+impl<'a> DoubleEndedIterator for Range<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        if !self.back_init {
+            self.back = match &self.end_bound {
+                Bound::Unbounded => self.map.last_node(),
+                Bound::Included(k) => self.map.seek_le(k),
+                Bound::Excluded(k) => self.map.seek_lt(k),
+            };
+            self.back_init = true;
+        }
+
+        if self.back == UNSET {
+            self.done = true;
+            return None;
+        }
+
+        let node = self.back;
+
+        // If front and back have converged, this is the last element.
+        if node == self.front {
+            self.done = true;
+        } else {
+            self.back = self.map.find_predecessor(node);
+        }
+
+        Some(Entry {
+            map: self.map,
+            node,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ValueType;
+
+    fn make_key(user_key: &[u8], seqno: SeqNo) -> InternalKey {
+        InternalKey::new(user_key.to_vec(), seqno, ValueType::Value)
+    }
+
+    fn make_value(data: &[u8]) -> UserValue {
+        UserValue::from(data)
+    }
+
+    #[test]
+    fn insert_and_get_single() {
+        let map = SkipMap::new();
+        let key = make_key(b"hello", 1);
+        let val = make_value(b"world");
+        map.insert(&key, &val);
+
+        assert_eq!(map.len(), 1);
+        assert!(!map.is_empty());
+
+        let mut iter = map.iter();
+        let entry = iter.next().expect("one entry");
+        assert_eq!(&*entry.key().user_key, b"hello");
+        assert_eq!(entry.key().seqno, 1);
+        assert_eq!(&*entry.value(), b"world");
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn ordering_user_key_asc_seqno_desc() {
+        let map = SkipMap::new();
+
+        // Same user_key, different seqnos → should iterate highest seqno first.
+        map.insert(&make_key(b"abc", 1), &make_value(b"v1"));
+        map.insert(&make_key(b"abc", 3), &make_value(b"v3"));
+        map.insert(&make_key(b"abc", 2), &make_value(b"v2"));
+
+        let seqnos: Vec<SeqNo> = map.iter().map(|e| e.key().seqno).collect();
+        assert_eq!(seqnos, vec![3, 2, 1]);
+
+        // Different user_keys → ascending.
+        map.insert(&make_key(b"zzz", 10), &make_value(b"z"));
+        map.insert(&make_key(b"aaa", 10), &make_value(b"a"));
+
+        let keys: Vec<Vec<u8>> = map.iter().map(|e| e.key().user_key.to_vec()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                b"aaa".to_vec(),
+                b"abc".to_vec(),
+                b"abc".to_vec(),
+                b"abc".to_vec(),
+                b"zzz".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn range_lower_bound() {
+        let map = SkipMap::new();
+        for i in 0u8..10 {
+            let key = vec![b'a' + i];
+            map.insert(&make_key(&key, 0), &make_value(&[i]));
+        }
+
+        // Range from 'e' onwards → e, f, g, h, i, j
+        let bound = make_key(b"e", SeqNo::MAX);
+        let keys: Vec<u8> = map.range(bound..).map(|e| e.key().user_key[0]).collect();
+        assert_eq!(keys, vec![b'e', b'f', b'g', b'h', b'i', b'j']);
+    }
+
+    #[test]
+    fn range_bounded() {
+        let map = SkipMap::new();
+        for i in 0u8..10 {
+            let key = vec![b'a' + i];
+            map.insert(&make_key(&key, 0), &make_value(&[i]));
+        }
+
+        let lo = make_key(b"c", SeqNo::MAX);
+        let hi = make_key(b"f", 0);
+        let keys: Vec<u8> = map.range(lo..=hi).map(|e| e.key().user_key[0]).collect();
+        assert_eq!(keys, vec![b'c', b'd', b'e', b'f']);
+    }
+
+    #[test]
+    fn double_ended_iter() {
+        let map = SkipMap::new();
+        for i in 0u8..5 {
+            let key = vec![b'a' + i];
+            map.insert(&make_key(&key, 0), &make_value(&[i]));
+        }
+
+        let mut iter = map.iter();
+        assert_eq!(iter.next().unwrap().key().user_key[0], b'a');
+        assert_eq!(iter.next_back().unwrap().key().user_key[0], b'e');
+        assert_eq!(iter.next().unwrap().key().user_key[0], b'b');
+        assert_eq!(iter.next_back().unwrap().key().user_key[0], b'd');
+        assert_eq!(iter.next().unwrap().key().user_key[0], b'c');
+        assert!(iter.next().is_none());
+        assert!(iter.next_back().is_none());
+    }
+
+    #[test]
+    fn double_ended_range() {
+        let map = SkipMap::new();
+        for i in 0u8..10 {
+            let key = vec![b'a' + i];
+            map.insert(&make_key(&key, 0), &make_value(&[i]));
+        }
+
+        let lo = make_key(b"c", SeqNo::MAX);
+        let hi = make_key(b"g", 0);
+        let rev: Vec<u8> = map
+            .range(lo..=hi)
+            .rev()
+            .map(|e| e.key().user_key[0])
+            .collect();
+        assert_eq!(rev, vec![b'g', b'f', b'e', b'd', b'c']);
+    }
+
+    #[test]
+    fn empty_value() {
+        let map = SkipMap::new();
+        map.insert(&make_key(b"k", 0), &make_value(b""));
+        let entry = map.iter().next().unwrap();
+        assert!(entry.value().is_empty());
+    }
+
+    #[test]
+    fn concurrent_inserts() {
+        use std::sync::Arc;
+
+        let map = Arc::new(SkipMap::with_capacity(32 * 1024 * 1024));
+        let n_threads = 8;
+        let n_per_thread = 1000;
+
+        let handles: Vec<_> = (0..n_threads)
+            .map(|t| {
+                let map = Arc::clone(&map);
+                std::thread::spawn(move || {
+                    for i in 0..n_per_thread {
+                        let key = format!("t{t:02}_k{i:05}");
+                        map.insert(&make_key(key.as_bytes(), i as u64), &make_value(b"v"));
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        assert_eq!(map.len(), n_threads * n_per_thread);
+
+        // Verify sorted order.
+        let entries: Vec<_> = map.iter().collect();
+        for pair in entries.windows(2) {
+            let a = pair[0].key();
+            let b = pair[1].key();
+            assert!(a <= b, "out of order: {a:?} > {b:?}");
+        }
+    }
+
+    #[test]
+    fn mvcc_point_lookup_via_range() {
+        let map = SkipMap::new();
+
+        // Insert 3 versions of "key" at seqnos 1, 2, 3.
+        map.insert(&make_key(b"key", 1), &make_value(b"v1"));
+        map.insert(&make_key(b"key", 2), &make_value(b"v2"));
+        map.insert(&make_key(b"key", 3), &make_value(b"v3"));
+
+        // Memtable MVCC read at read_seqno=3 (visible: seqno <= 2).
+        // The memtable uses lower_bound = InternalKey("key", read_seqno - 1).
+        // With InternalKey ordering (user_key ASC, seqno DESC), range(("key", 2)..)
+        // yields entries starting from seqno=2 downward.
+        let lower = InternalKey::new(b"key".to_vec(), 2, ValueType::Value);
+        let mut iter = map.range(lower..);
+        let entry = iter
+            .next()
+            .filter(|e| &*e.key().user_key == b"key")
+            .expect("should find key");
+        assert_eq!(entry.key().seqno, 2);
+        assert_eq!(&*entry.value(), b"v2");
+
+        // At read_seqno=2, lower_bound = ("key", 1), yields seqno=1.
+        let lower2 = InternalKey::new(b"key".to_vec(), 1, ValueType::Value);
+        let entry2 = map
+            .range(lower2..)
+            .next()
+            .filter(|e| &*e.key().user_key == b"key")
+            .expect("should find key");
+        assert_eq!(entry2.key().seqno, 1);
+        assert_eq!(&*entry2.value(), b"v1");
+
+        // At read_seqno=SeqNo::MAX, lower_bound = ("key", MAX-1), yields seqno=3 (latest).
+        let lower3 = InternalKey::new(b"key".to_vec(), SeqNo::MAX - 1, ValueType::Value);
+        let entry3 = map
+            .range(lower3..)
+            .next()
+            .filter(|e| &*e.key().user_key == b"key")
+            .expect("should find key");
+        assert_eq!(entry3.key().seqno, 3);
+        assert_eq!(&*entry3.value(), b"v3");
+    }
+}
