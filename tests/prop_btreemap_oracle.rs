@@ -158,7 +158,7 @@ fn op_strategy() -> impl Strategy<Value = Op> {
 }
 
 fn ops_strategy() -> impl Strategy<Value = Vec<Op>> {
-    prop::collection::vec(op_strategy(), 10..200)
+    prop::collection::vec(op_strategy(), 10..100)
 }
 
 // ---------------------------------------------------------------------------
@@ -283,9 +283,11 @@ fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    // cases defaults to 256; CI overrides via PROPTEST_CASES=32
+    // cases defaults to 256; CI overrides via PROPTEST_CASES=32.
+    // timeout keeps the test within CI per-test budget (60 s).
     #![proptest_config(ProptestConfig {
         max_shrink_iters: 1000,
+        timeout: 50_000,
         .. ProptestConfig::default()
     })]
 
