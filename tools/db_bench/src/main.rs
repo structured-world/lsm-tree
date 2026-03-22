@@ -63,6 +63,9 @@ struct Cli {
     github_json: bool,
 
     /// Database directory path. If not set, a temporary directory is used.
+    /// Note: some workloads (e.g. `prefixscan`, `mergerandom`) create their
+    /// own temporary database (they require special tree configuration) and
+    /// will not reuse this path.
     #[arg(long)]
     db: Option<PathBuf>,
 }
@@ -104,6 +107,13 @@ fn main() {
 
     if bench_config.key_size == 0 {
         eprintln!("Error: --key-size must be > 0");
+        std::process::exit(1);
+    }
+
+    // --json emits one JSON object per workload; with "all" that produces
+    // concatenated objects which is not valid JSON.  Use --github-json instead.
+    if cli.json && cli.benchmark == "all" {
+        eprintln!("Error: --json does not support --benchmark all; use --github-json");
         std::process::exit(1);
     }
 
