@@ -103,13 +103,14 @@ mod tests {
             .collect();
 
         let bytes = IndexBlock::encode_into_vec(&items).unwrap();
+        let data_len = bytes.len() as u32;
         IndexBlock::new(crate::table::block::Block {
             data: bytes.into(),
             header: Header {
                 block_type: BlockType::Index,
                 checksum: Checksum::from_raw(0),
-                data_length: 0,
-                uncompressed_length: 0,
+                data_length: data_len,
+                uncompressed_length: data_len,
             },
         })
     }

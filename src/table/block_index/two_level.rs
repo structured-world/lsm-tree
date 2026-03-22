@@ -87,19 +87,16 @@ impl Iter {
         let lo = self.lo.as_ref().map(|(k, s)| (k.as_ref(), *s));
         let hi = self.hi.as_ref().map(|(k, s)| (k.as_ref(), *s));
 
-        let iter = OwnedIndexBlockIter::from_block_with_bounds(
+        if let Some(it) = OwnedIndexBlockIter::from_block_with_bounds(
             self.tli_block.clone(),
             self.comparator.clone(),
             lo,
             hi,
-        );
-
-        match iter {
-            Some(it) => {
-                self.tli = Some(it);
-                true
-            }
-            None => false,
+        ) {
+            self.tli = Some(it);
+            true
+        } else {
+            false
         }
     }
 }
