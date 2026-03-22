@@ -51,7 +51,12 @@ impl Scanner {
                 "BlobFile: missing data section",
             ))?;
         let data_start = data_section.pos();
-        let data_end = data_start + data_section.len();
+        let data_end =
+            data_start
+                .checked_add(data_section.len())
+                .ok_or(crate::Error::InvalidHeader(
+                    "BlobFile: data section offset overflow",
+                ))?;
 
         let mut file_reader = BufReader::with_capacity(32_000, File::open(path)?);
         file_reader.seek(std::io::SeekFrom::Start(data_start))?;
@@ -62,25 +67,6 @@ impl Scanner {
             is_terminated: false,
             data_end,
         })
-    }
-
-    /// Initializes a new blob file reader with a pre-opened reader.
-    ///
-    /// `data_end` is the byte offset where the "data" section ends
-    /// (obtained from the SFA table-of-contents). The reader must
-    /// already be positioned at the start of the data section.
-    #[must_use]
-    pub fn with_reader(
-        blob_file_id: BlobFileId,
-        file_reader: BufReader<File>,
-        data_end: u64,
-    ) -> Self {
-        Self {
-            blob_file_id,
-            inner: file_reader,
-            is_terminated: false,
-            data_end,
-        }
     }
 }
 
