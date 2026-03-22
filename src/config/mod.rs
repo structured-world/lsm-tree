@@ -617,7 +617,6 @@ impl<F: Fs> Config<F> {
         self.comparator = comparator;
         self
     }
-<<<<<<< HEAD
 
     /// Sets the block-level encryption provider for encryption at rest.
     ///

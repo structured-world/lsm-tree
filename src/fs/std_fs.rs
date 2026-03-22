@@ -180,6 +180,7 @@ mod sys {
     // Declare flock directly to avoid requiring libc as a direct dependency.
     const LOCK_EX: c_int = 2;
 
+    // SAFETY: declaration matches the POSIX `flock` ABI on Unix targets.
     unsafe extern "C" {
         fn flock(fd: c_int, operation: c_int) -> c_int;
     }
@@ -217,6 +218,7 @@ mod sys {
         // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex
         const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
 
+        // SAFETY: declaration matches the Windows `LockFileEx` ABI and `Overlapped` layout.
         #[expect(non_snake_case, reason = "FFI name matches Windows API")]
         unsafe extern "system" {
             fn LockFileEx(
@@ -419,6 +421,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(unix, windows))]
     fn fs_file_lock_exclusive() -> io::Result<()> {
         let dir = tempfile::tempdir()?;
         let fs = StdFs;
@@ -435,6 +438,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(unix, windows))]
     fn fs_file_read_at() -> io::Result<()> {
         let dir = tempfile::tempdir()?;
         let fs = StdFs;
