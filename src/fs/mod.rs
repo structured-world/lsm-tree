@@ -229,10 +229,11 @@ pub trait Fs: Send + Sync + 'static {
     /// Returns an I/O error if directory creation fails.
     fn create_dir_all(&self, path: &Path) -> io::Result<()>;
 
-    /// Returns all entries in a directory.
+    /// Returns all entries in a directory (order is unspecified).
     ///
     /// Eagerly collects results because `read_dir` is a cold-path
-    /// operation (recovery, compaction file listing).
+    /// operation (recovery, compaction file listing). Callers that
+    /// need a specific order must sort the returned `Vec`.
     ///
     /// # Errors
     ///
