@@ -498,6 +498,20 @@ impl SkipMap {
         }
     }
 
+    /// Compares two nodes by key without allocating (reads raw arena bytes).
+    fn compare_nodes(&self, a: u32, b: u32) -> CmpOrdering {
+        let a_uk = self.node_user_key_bytes(a);
+        let b_uk = self.node_user_key_bytes(b);
+        match self.comparator.compare(a_uk, b_uk) {
+            CmpOrdering::Equal => {
+                let a_seq = self.node_seqno(a);
+                let b_seq = self.node_seqno(b);
+                b_seq.cmp(&a_seq) // reverse seqno
+            }
+            other => other,
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Internal: search helpers
     // -----------------------------------------------------------------------
@@ -555,7 +569,7 @@ impl SkipMap {
             list_h
         };
 
-        for lv in (level..start_level).rev() {
+        for lv in (level + 1..start_level).rev() {
             loop {
                 let next = self.next_at(node, lv);
                 if next == UNSET {
@@ -702,9 +716,6 @@ impl SkipMap {
     /// This is O(log n) — used only for `next_back()` which is called
     /// infrequently on memtable iterators.
     fn find_predecessor(&self, target_node: u32) -> u32 {
-        // Build a temporary InternalKey for the comparison target.
-        let target_key = self.node_internal_key(target_node);
-
         let mut node = self.head;
         let list_h = self.height.load(Ordering::Acquire);
 
@@ -714,7 +725,8 @@ impl SkipMap {
                 if next == UNSET || next == target_node {
                     break;
                 }
-                if self.compare_key(next, &target_key) == CmpOrdering::Less {
+                // Compare without allocating InternalKey — reads arena bytes directly.
+                if self.compare_nodes(next, target_node) == CmpOrdering::Less {
                     node = next;
                 } else {
                     break;
@@ -729,8 +741,7 @@ impl SkipMap {
             if next == UNSET || next == target_node {
                 break;
             }
-            // Only advance if next < target_key (safe since ordering is total)
-            if self.compare_key(next, &target_key) == CmpOrdering::Less {
+            if self.compare_nodes(next, target_node) == CmpOrdering::Less {
                 node = next;
             } else {
                 break;
@@ -948,11 +959,7 @@ impl DoubleEndedIterator for Range<'_> {
 
         // If back is before front in key order, the range is empty
         // (e.g., start bound > end bound).
-        if self
-            .map
-            .compare_key(self.back, &self.map.node_internal_key(self.front))
-            == CmpOrdering::Less
-        {
+        if self.map.compare_nodes(self.back, self.front) == CmpOrdering::Less {
             self.done = true;
             return None;
         }
