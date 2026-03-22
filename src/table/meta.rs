@@ -80,6 +80,21 @@ macro_rules! read_u64 {
     }};
 }
 
+/// Validates that `kv_seqno` does not exceed `max_seqno`.
+///
+/// KV-only seqno must be ≤ overall max (which includes both KV and RT seqnos).
+/// A value above `max_seqno` indicates on-disk corruption.
+fn validated_kv_seqno(kv_seqno: SeqNo, max_seqno: SeqNo) -> crate::Result<SeqNo> {
+    if kv_seqno > max_seqno {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "seqno#kv_max exceeds seqno#max",
+        )
+        .into());
+    }
+    Ok(kv_seqno)
+}
+
 impl ParsedMeta {
     #[expect(clippy::expect_used, clippy::too_many_lines)]
     pub fn load_with_handle(file: &File, handle: &BlockHandle) -> crate::Result<Self> {
@@ -204,19 +219,7 @@ impl ParsedMeta {
         // surface metadata corruption rather than silently falling back.
         let highest_kv_seqno = if let Some(item) = block.point_read(b"seqno#kv_max", SeqNo::MAX) {
             let mut bytes = &item.value[..];
-            let value = bytes.read_u64::<LittleEndian>()?;
-            // KV-only seqno must not exceed the overall max (which includes
-            // both KV and RT seqnos). A value above seqnos.1 indicates
-            // on-disk corruption — surface it rather than silently using
-            // a bogus bound that could cause incorrect table-skip decisions.
-            if value > seqnos.1 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "seqno#kv_max exceeds seqno#max",
-                )
-                .into());
-            }
-            value
+            validated_kv_seqno(bytes.read_u64::<LittleEndian>()?, seqnos.1)?
         } else {
             seqnos.1
         };
@@ -255,5 +258,31 @@ impl ParsedMeta {
             data_block_compression,
             index_block_compression,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validated_kv_seqno_within_bounds() {
+        assert_eq!(validated_kv_seqno(5, 10).unwrap(), 5);
+    }
+
+    #[test]
+    fn validated_kv_seqno_equal_to_max() {
+        assert_eq!(validated_kv_seqno(10, 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn validated_kv_seqno_zero() {
+        assert_eq!(validated_kv_seqno(0, 10).unwrap(), 0);
+    }
+
+    #[test]
+    fn validated_kv_seqno_exceeds_max_returns_error() {
+        let err = validated_kv_seqno(11, 10).unwrap_err();
+        assert!(matches!(err, crate::Error::Io(e) if e.kind() == std::io::ErrorKind::InvalidData));
     }
 }
