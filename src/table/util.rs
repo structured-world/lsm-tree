@@ -88,7 +88,7 @@ pub fn load_block(
         (fd, true)
     };
 
-    let block = Block::from_file(&*fd, *handle, compression, encryption)?;
+    let block = Block::from_file(fd.as_ref(), *handle, compression, encryption)?;
 
     if block.header.block_type != block_type {
         return Err(crate::Error::InvalidTag((

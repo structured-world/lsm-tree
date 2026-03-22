@@ -163,6 +163,8 @@ fn blob_ingestion_out_of_order_panics_without_blob_write() -> lsm_tree::Result<(
     let before = tree.blob_file_count();
 
     // Use a small value for the first write to avoid blob I/O
+    // AssertUnwindSafe needed: tree contains Arc<dyn FsFile> (from DescriptorTable)
+    // which isn't UnwindSafe. Safe here — test only checks panic behavior.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut ingest = tree.ingestion().unwrap();
         ingest.write(b"k2", b"x").unwrap();

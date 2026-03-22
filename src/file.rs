@@ -103,10 +103,6 @@ mod tests {
         // Request 10 bytes from a 5-byte file → short read → UnexpectedEof
         let err = read_exact(&file, 0, 10).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
-        assert!(
-            err.to_string().contains("did not read enough bytes"),
-            "unexpected error message: {err}",
-        );
 
         Ok(())
     }

@@ -45,7 +45,7 @@ impl<'a> Accessor<'a> {
                 (file, true)
             };
 
-        let value = Reader::new(blob_file, &*file).get(key, vhandle)?;
+        let value = Reader::new(blob_file, file.as_ref()).get(key, vhandle)?;
         cache.insert_blob(tree_id, vhandle, value.clone());
 
         if fd_cache_miss {
