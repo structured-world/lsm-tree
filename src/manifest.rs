@@ -14,6 +14,7 @@ pub struct Manifest {
     )]
     pub tree_type: TreeType,
     pub level_count: u8,
+    pub comparator_name: String,
 }
 
 impl Manifest {
@@ -90,10 +91,26 @@ impl Manifest {
             );
         }
 
+        // Optional section — absent in manifests written before comparator
+        // identity persistence was added. Trees created without this section
+        // were implicitly using `DefaultUserComparator` whose name is "default".
+        let comparator_name = match toc.section(b"comparator_name") {
+            Some(section) => {
+                let bytes: Vec<u8> = section
+                    .buf_reader(path)?
+                    .bytes()
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                String::from_utf8(bytes).map_err(|e| crate::Error::Utf8(e.utf8_error()))?
+            }
+            None => "default".to_owned(),
+        };
+
         Ok(Self {
             version,
             tree_type,
             level_count,
+            comparator_name,
         })
     }
 }

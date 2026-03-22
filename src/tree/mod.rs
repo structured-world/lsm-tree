@@ -1365,6 +1365,19 @@ impl Tree {
                 return Err(crate::Error::Unrecoverable);
             }
 
+            let supplied_name = config.comparator.name();
+            if manifest.comparator_name != supplied_name {
+                log::error!(
+                    "Comparator mismatch: tree was created with {:?} but opened with {:?}",
+                    manifest.comparator_name,
+                    supplied_name,
+                );
+                return Err(crate::Error::ComparatorMismatch {
+                    stored: manifest.comparator_name,
+                    supplied: supplied_name,
+                });
+            }
+
             // IMPORTANT: Restore persisted config
             config.level_count = manifest.level_count;
         }

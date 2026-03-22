@@ -6,7 +6,11 @@ use crate::{
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::{io::BufWriter, path::Path};
 
-pub fn persist_version(folder: &Path, version: &Version) -> crate::Result<()> {
+pub fn persist_version(
+    folder: &Path,
+    version: &Version,
+    comparator_name: &str,
+) -> crate::Result<()> {
     log::trace!(
         "Persisting version {} in {}",
         version.id(),
@@ -21,7 +25,7 @@ pub fn persist_version(folder: &Path, version: &Version) -> crate::Result<()> {
     {
         let mut writer = sfa::Writer::from_writer(&mut writer);
 
-        version.encode_into(&mut writer)?;
+        version.encode_into(&mut writer, comparator_name)?;
 
         writer.finish().map_err(|e| match e {
             sfa::Error::Io(e) => crate::Error::from(e),

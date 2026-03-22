@@ -29,8 +29,9 @@ use std::sync::Arc;
 /// # Important
 ///
 /// Once a tree is created with a comparator, it must always be opened with the
-/// same comparator. Using a different comparator on an existing tree will produce
-/// incorrect results.
+/// same comparator. The comparator's [`name`](UserComparator::name) is
+/// persisted and checked on every subsequent open — a mismatch causes the open
+/// to fail with [`Error::ComparatorMismatch`](crate::Error::ComparatorMismatch).
 ///
 /// # Examples
 ///
@@ -42,6 +43,10 @@ use std::sync::Arc;
 /// struct U64Comparator;
 ///
 /// impl UserComparator for U64Comparator {
+///     fn name(&self) -> &'static str {
+///         "u64-big-endian"
+///     }
+///
 ///     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
 ///         if a.len() == 8 && b.len() == 8 {
 ///             // Length checked, conversion cannot fail.
@@ -57,6 +62,17 @@ use std::sync::Arc;
 /// }
 /// ```
 pub trait UserComparator: Send + Sync + std::panic::RefUnwindSafe + 'static {
+    /// Returns a stable identifier for this comparator.
+    ///
+    /// The name is persisted when a tree is first created. On subsequent
+    /// opens the stored name is compared against the caller-supplied
+    /// comparator's name — a mismatch causes the open to fail, preventing
+    /// silent data corruption from using an incompatible ordering.
+    ///
+    /// Choose a name that uniquely identifies the ordering logic and will
+    /// not change across releases (e.g. `"u64-big-endian"`, `"reverse-lexicographic"`).
+    fn name(&self) -> &'static str;
+
     /// Compares two user keys, returning their ordering.
     fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering;
 
@@ -78,6 +94,10 @@ pub trait UserComparator: Send + Sync + std::panic::RefUnwindSafe + 'static {
 pub struct DefaultUserComparator;
 
 impl UserComparator for DefaultUserComparator {
+    fn name(&self) -> &'static str {
+        "default"
+    }
+
     #[inline]
     fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
         a.cmp(b)

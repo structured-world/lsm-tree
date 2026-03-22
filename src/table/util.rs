@@ -377,6 +377,10 @@ mod tests {
     /// Reverse comparator to exercise the Vec-allocation slow path.
     struct ReverseComparator;
     impl crate::comparator::UserComparator for ReverseComparator {
+        fn name(&self) -> &'static str {
+            "test-reverse"
+        }
+
         fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
             b.cmp(a)
         }
