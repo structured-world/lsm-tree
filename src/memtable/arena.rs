@@ -245,6 +245,10 @@ impl Arena {
             if raw.is_null() {
                 std::alloc::handle_alloc_error(layout);
             }
+            // Zero the block so that tower next-pointers default to UNSET (0).
+            // Visibility: write_bytes happens-before the CAS below (program
+            // order), and readers Acquire the block pointer from the CAS,
+            // transitively making the zeroed contents visible.
             unsafe {
                 std::ptr::write_bytes(raw, 0, BLOCK_SIZE as usize);
             }
