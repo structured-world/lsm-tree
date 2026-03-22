@@ -46,6 +46,10 @@ pub struct Metrics {
     /// Number of IOs that were skipped due to filter
     pub(crate) io_skipped_by_filter: AtomicUsize,
 
+    /// Number of segments skipped during prefix scans because the
+    /// prefix bloom filter returned `Ok(false)`.
+    pub(crate) prefix_bloom_skips: AtomicUsize,
+
     /// Number of data block bytes that were requested from OS or disk
     pub(crate) data_block_io_requested: AtomicU64,
 
@@ -248,6 +252,11 @@ impl Metrics {
     /// Number of I/O operations skipped by filter.
     pub fn io_skipped_by_filter(&self) -> usize {
         self.io_skipped_by_filter.load(Relaxed)
+    }
+
+    /// Number of segments skipped during prefix scans by prefix bloom filters.
+    pub fn prefix_bloom_skips(&self) -> usize {
+        self.prefix_bloom_skips.load(Relaxed)
     }
 }
 

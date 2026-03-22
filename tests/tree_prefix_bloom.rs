@@ -747,3 +747,95 @@ fn prefix_bloom_overlapping_l0_tables() -> lsm_tree::Result<()> {
 
     Ok(())
 }
+
+/// Verifies the `prefix_bloom_skips` metric is incremented when bloom filters
+/// reject prefixes that fall inside a table's key_range.
+///
+/// Creates a single L0 table (= single-table run, where bloom check applies)
+/// with a wide key range, then performs many prefix scans for non-existent
+/// prefixes. With 1000 keys and 10 bits-per-key the FP rate per query is ~1%,
+/// so out of 24 distinct non-existent prefixes at least some must be rejected
+/// by the bloom filter, producing a non-zero skip count.
+#[cfg(feature = "metrics")]
+#[test]
+fn prefix_bloom_skip_metrics() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = tree_with_prefix_bloom(&folder)?;
+
+    // Insert 500 keys under "aaa:" and 500 under "zzz:" to create a single
+    // table with key_range [aaa:0000, zzz:0499] and a large bloom filter.
+    let mut seqno = 0u64;
+    for i in 0..500 {
+        tree.insert(format!("aaa:{i:04}"), "v", seqno);
+        seqno += 1;
+    }
+    for i in 0..500 {
+        tree.insert(format!("zzz:{i:04}"), "v", seqno);
+        seqno += 1;
+    }
+    tree.flush_active_memtable(0)?;
+
+    assert_eq!(tree.metrics().prefix_bloom_skips(), 0);
+
+    // Scan for 24 non-existent prefixes that fall inside the key_range.
+    // Each prefix is a valid extractor boundary (ends with ':').
+    for c in b'b'..=b'y' {
+        let prefix = format!("{}:", c as char);
+        let results: Vec<_> = tree
+            .create_prefix(&prefix, seqno, None)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(results.len(), 0, "prefix '{prefix}' should match no keys");
+    }
+
+    // With ~1% FP rate and 24 queries, probability of zero skips = 0.99^24 ≈ 78%.
+    // That's too high for a single-query test. But the bloom indexed 1000 keys ×
+    // 3 prefixes each (e.g. "aaa:", "zzz:"), so 6 entries. At 10 bpk on 6 entries
+    // the filter is tiny (~60 bits) with relatively high FP. With 24 queries it's
+    // very unlikely that ALL are false positives.
+    let skips = tree.metrics().prefix_bloom_skips();
+    assert!(
+        skips > 0,
+        "expected at least one prefix bloom skip out of 24 non-existent prefix scans, got 0"
+    );
+
+    Ok(())
+}
+
+/// Verifies `prefix_bloom_skips` stays at zero when no bloom filtering occurs.
+///
+/// Without a prefix extractor, no prefix hash is computed — the bloom check is
+/// never reached, and the counter must remain zero.
+#[cfg(feature = "metrics")]
+#[test]
+fn prefix_bloom_skip_metrics_zero_without_extractor() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    let tree = match tree {
+        lsm_tree::AnyTree::Standard(t) => t,
+        _ => panic!("expected standard tree"),
+    };
+
+    tree.insert("user:1", "v", 0);
+    tree.insert("user:2", "v", 1);
+    tree.flush_active_memtable(0)?;
+
+    let results: Vec<_> = tree
+        .create_prefix("user:", 2, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 2);
+
+    assert_eq!(
+        tree.metrics().prefix_bloom_skips(),
+        0,
+        "no bloom skips should occur without a prefix extractor"
+    );
+
+    Ok(())
+}

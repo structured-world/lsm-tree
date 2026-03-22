@@ -78,6 +78,10 @@ pub struct IterState {
     /// When set, segments whose bloom filter reports no match for this
     /// hash will be skipped entirely during the scan.
     pub(crate) prefix_hash: Option<u64>,
+
+    /// Metrics handle for recording prefix bloom skips.
+    #[cfg(feature = "metrics")]
+    pub(crate) metrics: Arc<crate::Metrics>,
 }
 
 type BoxedMerge<'a> = Box<dyn DoubleEndedIterator<Item = crate::Result<InternalValue>> + Send + 'a>;
@@ -233,6 +237,10 @@ impl TreeIter {
                                     Ok(false) => {
                                         // Prefix bloom says this segment has no matching keys
                                         // — skip it entirely.
+                                        #[cfg(feature = "metrics")]
+                                        lock.metrics
+                                            .prefix_bloom_skips
+                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     }
                                     Ok(true) => {
                                         single_tables.push(table.clone());
