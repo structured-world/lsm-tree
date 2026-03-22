@@ -98,6 +98,18 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Warn if key space is smaller than num ops (causes silent overwrites).
+    if bench_config.key_size < 8 {
+        let max_keys = 1u64 << (bench_config.key_size * 8);
+        if bench_config.num > max_keys {
+            eprintln!(
+                "Warning: --key-size {} supports only {} distinct keys, \
+                 but --num {} was requested. Keys will repeat (overwrites).",
+                bench_config.key_size, max_keys, bench_config.num,
+            );
+        }
+    }
+
     // Use provided path or create a temp directory.
     let _tmpdir;
     let db_path = match &cli.db {
