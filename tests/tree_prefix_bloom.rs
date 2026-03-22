@@ -710,12 +710,14 @@ fn prefix_bloom_multi_table_run_multiple_survivors() -> lsm_tree::Result<()> {
     Ok(())
 }
 
-/// Verify that multi-table run prefix bloom skipping works correctly
-/// with overlapping key ranges (L0 tables may overlap). Two flushes
-/// with interleaved keys ensure the tables' key ranges overlap, and
-/// prefix bloom filtering must still produce correct results.
+/// Verify that prefix bloom skipping works correctly with overlapping
+/// key ranges at L0 (where tables may overlap). Two flushes with
+/// interleaved keys ensure the tables' key ranges overlap, and prefix
+/// bloom filtering must still produce correct results. Because the
+/// key ranges overlap, `optimize_runs` keeps them as separate
+/// single-table runs (not fused into one multi-table run).
 #[test]
-fn prefix_bloom_multi_table_run_overlapping_keys() -> lsm_tree::Result<()> {
+fn prefix_bloom_overlapping_l0_tables() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let tree = tree_with_prefix_bloom(&folder)?;
 
