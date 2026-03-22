@@ -99,10 +99,14 @@ impl Arena {
                         return Some((block_idx << BLOCK_SHIFT) | aligned);
                     }
                 } else {
+                    // Advance to the next block.  Ensure it exists BEFORE
+                    // publishing the new cursor, so that any thread reading
+                    // the cursor will find a valid block pointer.
                     let new_block = block_idx + 1;
                     if new_block as usize >= MAX_BLOCKS {
                         return None;
                     }
+                    self.ensure_block(new_block as usize);
                     let new_cursor = new_block << BLOCK_SHIFT;
                     let _ = self.cursor.compare_exchange_weak(
                         cur,
@@ -183,8 +187,17 @@ impl Arena {
     unsafe fn decode(&self, offset: u32) -> (*mut u8, usize) {
         let block_idx = (offset >> BLOCK_SHIFT) as usize;
         let off = (offset & BLOCK_MASK) as usize;
-        let ptr = self.blocks[block_idx].load(Ordering::Acquire);
-        debug_assert!(!ptr.is_null(), "accessing unallocated arena block");
+
+        // Block pointers are write-once.  In the common case the Acquire load
+        // sees the non-null pointer immediately.  The spin is a safety net for
+        // the rare window between cursor advance and ensure_block completion
+        // on another core.
+        let mut ptr = self.blocks[block_idx].load(Ordering::Acquire);
+        while ptr.is_null() {
+            std::hint::spin_loop();
+            ptr = self.blocks[block_idx].load(Ordering::Acquire);
+        }
+
         (ptr, off)
     }
 
@@ -196,25 +209,34 @@ impl Arena {
     )]
     fn ensure_block(&self, idx: usize) {
         if self.blocks[idx].load(Ordering::Acquire).is_null() {
-            // Allocate a new zero-initialised block via Vec for correct
-            // deallocation (avoids fat-pointer round-trip issues on big-endian
-            // targets like powerpc64).
-            let mut block = vec![0u8; BLOCK_SIZE as usize];
-            let raw = block.as_mut_ptr();
-            std::mem::forget(block);
+            // Allocate with explicit 4-byte alignment so that AtomicU32
+            // accesses within the block are correctly aligned on all targets.
+            let layout = Self::block_layout();
+
+            // SAFETY: layout is non-zero (BLOCK_SIZE > 0).
+            let raw = unsafe { std::alloc::alloc_zeroed(layout) };
+            if raw.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
 
             // CAS null → raw.  If another thread won, free our block.
             if self.blocks[idx]
                 .compare_exchange(ptr::null_mut(), raw, Ordering::AcqRel, Ordering::Acquire)
                 .is_err()
             {
-                // Another thread already allocated this block — reconstruct
-                // the Vec and let it drop.
+                // SAFETY: raw was just allocated with `layout`.
                 unsafe {
-                    drop(Vec::from_raw_parts(raw, 0, BLOCK_SIZE as usize));
+                    std::alloc::dealloc(raw, layout);
                 }
             }
         }
+    }
+
+    /// Layout for arena blocks: `BLOCK_SIZE` bytes with 4-byte alignment
+    /// (required for `AtomicU32` tower pointers).
+    fn block_layout() -> std::alloc::Layout {
+        // SAFETY: BLOCK_SIZE > 0 and align (4) is a power of two.
+        unsafe { std::alloc::Layout::from_size_align_unchecked(BLOCK_SIZE as usize, 4) }
     }
 }
 
@@ -226,13 +248,13 @@ impl Default for Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
+        let layout = Self::block_layout();
         for block in &*self.blocks {
             let ptr = block.load(Ordering::Relaxed);
             if !ptr.is_null() {
-                // SAFETY: ptr was created via Vec::as_mut_ptr() + mem::forget()
-                // with cap = BLOCK_SIZE. len=0 is fine — we only need deallocation.
+                // SAFETY: ptr was allocated via alloc_zeroed with block_layout().
                 unsafe {
-                    drop(Vec::from_raw_parts(ptr, 0, BLOCK_SIZE as usize));
+                    std::alloc::dealloc(ptr, layout);
                 }
             }
         }
