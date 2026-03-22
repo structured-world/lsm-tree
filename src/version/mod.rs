@@ -491,6 +491,10 @@ impl Version {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "comparator is essential for correctness"
+    )]
     pub fn with_merge(
         &self,
         old_ids: &[TableId],
