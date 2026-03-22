@@ -47,8 +47,8 @@ pub trait EncryptionProvider:
     /// Used by block I/O to account for encryption overhead in size
     /// validation. For AES-256-GCM this is 28 (12-byte nonce + 16-byte tag).
     ///
-    /// The returned value must fit in `u32` (block sizes are `u32`-bounded).
-    fn max_overhead(&self) -> usize;
+    /// Returns `u32` because block sizes are `u32`-bounded on disk.
+    fn max_overhead(&self) -> u32;
 
     /// Decrypt `ciphertext` previously produced by [`encrypt`](EncryptionProvider::encrypt).
     ///
@@ -123,8 +123,8 @@ impl Aes256GcmProvider {
 
 #[cfg(feature = "encryption")]
 impl EncryptionProvider for Aes256GcmProvider {
-    fn max_overhead(&self) -> usize {
-        Self::OVERHEAD
+    fn max_overhead(&self) -> u32 {
+        Self::OVERHEAD as u32
     }
 
     fn encrypt(&self, plaintext: &[u8]) -> crate::Result<Vec<u8>> {

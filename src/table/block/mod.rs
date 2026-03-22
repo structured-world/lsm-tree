@@ -127,7 +127,7 @@ impl Block {
         // beyond max_overhead() will be caught by this check (payload > limit).
         // Cap at u32::MAX to guarantee the subsequent as-u32 cast is safe.
         let max_payload = (u64::from(MAX_DECOMPRESSION_SIZE)
-            + encryption.map_or(0u64, |enc| enc.max_overhead() as u64))
+            + encryption.map_or(0u64, |enc| u64::from(enc.max_overhead())))
         .min(u64::from(u32::MAX));
 
         if payload.len() as u64 > max_payload {
