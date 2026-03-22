@@ -1066,8 +1066,13 @@ mod tests {
         let err = file.seek(SeekFrom::Current(2)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 
-        // SeekFrom::End with positive overflow
-        let err = file.seek(SeekFrom::End(i64::MAX)).unwrap_err();
+        // SeekFrom::Current negative past zero — should underflow.
+        file.seek(SeekFrom::Start(0))?;
+        let err = file.seek(SeekFrom::Current(-1)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        // SeekFrom::End negative past zero — should underflow.
+        let err = file.seek(SeekFrom::End(-100)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 
         Ok(())
