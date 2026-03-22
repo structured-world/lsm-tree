@@ -265,7 +265,7 @@ pub struct Config {
     ///
     /// When set, all blocks (data, index, filter, meta) are encrypted
     /// using this provider after compression and before checksumming.
-    pub encryption: Option<Arc<dyn EncryptionProvider>>,
+    pub(crate) encryption: Option<Arc<dyn EncryptionProvider>>,
 
     /// The global sequence number generator.
     ///

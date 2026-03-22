@@ -124,10 +124,20 @@ impl Block {
             crate::Error::Encrypt("encrypted payload exceeds u32::MAX block format limit")
         })?;
 
-        if payload_len > MAX_DECOMPRESSION_SIZE {
+        // Mirror the read-path bound: MAX_DECOMPRESSION_SIZE plus any encryption
+        // overhead. Without encryption, this reduces to MAX_DECOMPRESSION_SIZE.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "max_overhead() is contractually bounded to u32 (see EncryptionProvider doc)"
+        )]
+        let max_payload = encryption.map_or(MAX_DECOMPRESSION_SIZE, |enc| {
+            MAX_DECOMPRESSION_SIZE + enc.max_overhead() as u32
+        });
+
+        if payload_len > max_payload {
             return Err(crate::Error::DecompressedSizeTooLarge {
                 declared: u64::from(payload_len),
-                limit: u64::from(MAX_DECOMPRESSION_SIZE),
+                limit: u64::from(max_payload),
             });
         }
 
