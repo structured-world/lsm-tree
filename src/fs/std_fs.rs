@@ -126,10 +126,12 @@ impl Fs for StdFs {
                 let entry = res?;
                 let file_type = entry.file_type()?;
                 let file_name_os = entry.file_name();
+                // OsString has no Display impl — Debug is the only way to show the raw bytes.
+                #[expect(clippy::unnecessary_debug_formatting)]
                 let file_name = file_name_os.into_string().map_err(|os| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!("non-UTF-8 filename in directory {path:?}: {os:?}"),
+                        format!("non-UTF-8 filename in directory {}: {os:?}", path.display()),
                     )
                 })?;
                 Ok(FsDirEntry {
