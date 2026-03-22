@@ -122,6 +122,10 @@ impl Aes256GcmProvider {
 }
 
 /// Create a new [`ChaCha20Rng`](rand_chacha::ChaCha20Rng) seeded from the OS RNG.
+///
+/// Returns the RNG directly (not `Result`) because callers are
+/// `thread_local!` init and fork-reseed, neither of which can propagate
+/// errors. `OsRng` is infallible on all platforms we target.
 #[cfg(feature = "encryption")]
 fn new_chacha_rng() -> rand_chacha::ChaCha20Rng {
     use rand_core::SeedableRng;
@@ -388,6 +392,7 @@ mod tests {
                 let ct = provider.encrypt(plaintext)?;
 
                 #[expect(clippy::indexing_slicing, reason = "ct always >= NONCE_LEN")]
+                #[expect(clippy::expect_used, reason = "test assertion")]
                 let nonce: [u8; 12] = ct[..Aes256GcmProvider::NONCE_LEN]
                     .try_into()
                     .expect("nonce is 12 bytes");
