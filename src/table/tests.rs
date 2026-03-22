@@ -1760,6 +1760,10 @@ fn meta_seqno_kv_max_corruption_returns_invalid_data() -> crate::Result<()> {
             .position(|w| w == needle)
             .expect("seqno#kv_max key must be present in the meta block payload");
 
+        // On disk each entry is: [key bytes] [InternalKey seqno+type suffix: 8B]
+        // [value length: varint] [value bytes: 8B].  We scan forward from the
+        // end of the key string to find the first occurrence of the LE value,
+        // skipping the suffix and length fields.
         let search_start = key_pos + needle.len();
         let original_le = 5u64.to_le_bytes();
         let val_rel = payload[search_start..]
