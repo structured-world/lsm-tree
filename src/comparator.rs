@@ -71,6 +71,10 @@ pub trait UserComparator: Send + Sync + std::panic::RefUnwindSafe + 'static {
     ///
     /// Choose a name that uniquely identifies the ordering logic and will
     /// not change across releases (e.g. `"u64-big-endian"`, `"reverse-lexicographic"`).
+    //
+    // Intentionally required (no default impl): a shared fallback name would
+    // let two distinct comparators pass the mismatch check, silently producing
+    // corrupt reads on reopen — the exact scenario this method prevents.
     fn name(&self) -> &'static str;
 
     /// Compares two user keys, returning their ordering.

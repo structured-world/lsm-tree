@@ -96,6 +96,15 @@ impl Manifest {
         // were implicitly using `DefaultUserComparator` whose name is "default".
         let comparator_name = match toc.section(b"comparator_name") {
             Some(section) => {
+                const MAX_COMPARATOR_NAME_LEN: u64 = 256;
+
+                if section.len() > MAX_COMPARATOR_NAME_LEN {
+                    return Err(crate::Error::DecompressedSizeTooLarge {
+                        declared: section.len(),
+                        limit: MAX_COMPARATOR_NAME_LEN,
+                    });
+                }
+
                 let bytes: Vec<u8> = section
                     .buf_reader(path)?
                     .bytes()
