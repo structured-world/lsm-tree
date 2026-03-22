@@ -11,13 +11,15 @@ pub fn persist_version(
     version: &Version,
     comparator_name: &str,
 ) -> crate::Result<()> {
-    // Panic is intentional: `UserComparator::name()` returns `&'static str`,
-    // so an oversized name is a programmer error, not a runtime condition.
-    assert!(
-        comparator_name.len() <= crate::comparator::MAX_COMPARATOR_NAME_BYTES,
-        "comparator name exceeds {} bytes",
-        crate::comparator::MAX_COMPARATOR_NAME_BYTES,
-    );
+    if comparator_name.len() > crate::comparator::MAX_COMPARATOR_NAME_BYTES {
+        return Err(crate::Error::from(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "comparator name exceeds {} bytes",
+                crate::comparator::MAX_COMPARATOR_NAME_BYTES,
+            ),
+        )));
+    }
 
     log::trace!(
         "Persisting version {} in {}",
