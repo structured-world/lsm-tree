@@ -598,59 +598,51 @@ fn multi_level_skip_fires_when_l1_oversized() -> crate::Result<()> {
     )
     .open()?;
 
-    // Step 1: Use leveled (no multi-level) to fill L1 past capacity.
     // target_size=1 → L1 target = 1*4 = 4 bytes. Any real table exceeds this.
-    let leveled = Arc::new(
-        Strategy::default()
-            .with_table_target_size(1)
-            .with_l0_threshold(4),
-    );
-
-    // Flush 4 overlapping tables → triggers L0→L1 compaction
-    for i in 0..4u8 {
-        tree.insert("a", "val", u64::from(i));
-        tree.insert([b'k', i].as_slice(), "val", u64::from(i));
-        tree.insert("z", "val", u64::from(i));
-        tree.flush_active_memtable(u64::from(i))?;
-    }
-    tree.compact(leveled.clone(), 4)?;
-
-    // Compact until data reaches deeper levels so L1 is populated
-    for extra in 4..12u64 {
-        tree.insert("a", "val", extra);
-        tree.insert(format!("x_{extra}").as_bytes(), "val", extra);
-        tree.insert("z", "val", extra);
-        tree.flush_active_memtable(extra)?;
-        tree.compact(leveled.clone(), extra + 1)?;
-    }
-
-    // Step 2: Now flush another batch with multi_level enabled.
-    // L1 should be oversized (any data > 4 bytes target).
-    // Multi-level should skip L1 and go directly to L2.
-    let multi = Arc::new(
+    // Use multi_level from the start but run many rounds of flush+compact
+    // to build up data across levels, ensuring L1 becomes oversized.
+    let strategy = Arc::new(
         Strategy::default()
             .with_multi_level(true)
             .with_table_target_size(1)
             .with_l0_threshold(4),
     );
 
-    for i in 12..16u64 {
-        tree.insert("a", "val", i);
-        tree.insert(format!("y_{i}").as_bytes(), "val", i);
-        tree.insert("z", "val", i);
-        tree.flush_active_memtable(i)?;
+    let mut seqno = 0u64;
+
+    // Run enough rounds to guarantee L1 gets populated and oversized.
+    // Each round flushes 4 overlapping tables, triggering L0→L1 (or L0+L1→L2).
+    for _round in 0..6 {
+        for _k in 0..4 {
+            tree.insert("a", "val", seqno);
+            tree.insert(format!("k_{seqno}").as_bytes(), "val", seqno);
+            tree.insert("z", "val", seqno);
+            tree.flush_active_memtable(seqno)?;
+            seqno += 1;
+        }
+        // Compact multiple times per round to propagate through levels
+        for _ in 0..4 {
+            tree.compact(strategy.clone(), seqno)?;
+        }
     }
-    tree.compact(multi, 16)?;
+
+    // Verify multi-level actually pushed data past L1 into deeper levels.
+    // With target_size=1, L1 target is only 4 bytes. After 6 rounds of
+    // overlapping data, data MUST have propagated beyond L1.
+    let version = tree.current_version();
+    let has_data_beyond_l1 =
+        (2..version.level_count()).any(|idx| version.level(idx).is_some_and(|l| !l.is_empty()));
+    assert!(
+        has_data_beyond_l1,
+        "data should have been compacted into L2+ (multi-level skip or overflow)",
+    );
 
     // All data should be readable
-    for i in 0..4u8 {
-        assert!(tree.get([b'k', i].as_slice(), MAX_SEQNO)?.is_some());
-    }
-    for i in 4..12u64 {
-        assert!(tree.get(format!("x_{i}").as_bytes(), MAX_SEQNO)?.is_some());
-    }
-    for i in 12..16u64 {
-        assert!(tree.get(format!("y_{i}").as_bytes(), MAX_SEQNO)?.is_some());
+    for s in 0..seqno {
+        assert!(
+            tree.get(format!("k_{s}").as_bytes(), MAX_SEQNO)?.is_some(),
+            "key k_{s} should exist",
+        );
     }
 
     Ok(())
