@@ -171,6 +171,13 @@ impl ForkAwareRng {
     }
 }
 
+#[cfg(feature = "encryption")]
+thread_local! {
+    // Module-scope so all monomorphizations of `thread_local_rng`
+    // share a single thread-local instance.
+    static THREAD_RNG: ForkAwareRng = ForkAwareRng::new();
+}
+
 /// Access a thread-local CSPRNG seeded from the OS RNG in a fork-aware way.
 ///
 /// Using a thread-local [`ChaCha20Rng`](rand_chacha::ChaCha20Rng) avoids a
@@ -181,11 +188,7 @@ impl ForkAwareRng {
 /// the risk of nonce reuse across processes.
 #[cfg(feature = "encryption")]
 fn thread_local_rng<R>(f: impl FnOnce(&mut rand_chacha::ChaCha20Rng) -> R) -> R {
-    thread_local! {
-        static RNG: ForkAwareRng = ForkAwareRng::new();
-    }
-
-    RNG.with(|state| state.with_rng(f))
+    THREAD_RNG.with(|state| state.with_rng(f))
 }
 
 #[cfg(feature = "encryption")]
