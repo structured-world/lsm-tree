@@ -44,12 +44,10 @@ impl Workload for ReadWhileWriting {
                 .map(|(i, _)| {
                     let my_ops = base_ops + if (i as u64) < remainder { 1 } else { 0 };
                     let barrier = &barrier;
-                    s.spawn(move || {
+                    s.spawn(move || -> lsm_tree::Result<Reporter> {
                         let mut local_reporter = Reporter::new();
                         let mut rng = rand::rng();
                         barrier.wait();
-
-                        let mut error_count: u64 = 0;
 
                         for _ in 0..my_ops {
                             let read_seq = read_seqno(seqno);
@@ -57,19 +55,11 @@ impl Workload for ReadWhileWriting {
                             let key = make_sequential_key(idx, config.key_size);
 
                             let t = Instant::now();
-                            // Aggregate errors to avoid skewing latency with
-                            // per-op stderr writes in the hot loop.
-                            if tree.get(&key, read_seq).is_err() {
-                                error_count += 1;
-                            }
+                            tree.get(&key, read_seq)?;
                             local_reporter.record_duration(t.elapsed());
                         }
 
-                        if error_count > 0 {
-                            eprintln!("reader thread: {error_count} read errors");
-                        }
-
-                        local_reporter
+                        Ok(local_reporter)
                     })
                 })
                 .collect();
@@ -93,7 +83,7 @@ impl Workload for ReadWhileWriting {
             // this is a read throughput benchmark with concurrent write pressure,
             // matching RocksDB db_bench semantics.
             for handle in reader_handles {
-                let local_reporter = handle.join().expect("reader thread panicked");
+                let local_reporter = handle.join().expect("reader thread panicked")?;
                 reporter.merge(&local_reporter);
             }
 

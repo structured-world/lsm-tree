@@ -44,13 +44,9 @@ pub fn prefill_prefix_keys(
     seqno: &AtomicU64,
     num_prefixes: u16,
 ) -> lsm_tree::Result<()> {
-    // Integer division may leave a remainder — the `total >= config.num` guard
-    // below ensures we insert exactly config.num keys (distributing the remainder
-    // across the first few prefixes via the outer break).
-    let mut keys_per_prefix = config.num / num_prefixes as u64;
-    if keys_per_prefix == 0 && config.num > 0 {
-        keys_per_prefix = 1;
-    }
+    let prefix_count = u64::from(num_prefixes);
+    let base = config.num / prefix_count;
+    let remainder = config.num % prefix_count;
     let batch_size = 10_000u64;
     let mut total = 0u64;
 
@@ -58,8 +54,10 @@ pub fn prefill_prefix_keys(
         if total >= config.num {
             break;
         }
+        // Distribute remainder: first `remainder` prefixes get one extra key.
+        let keys_this_prefix = base + if u64::from(prefix) < remainder { 1 } else { 0 };
         let prefix_bytes = prefix.to_be_bytes();
-        for suffix in 0..keys_per_prefix {
+        for suffix in 0..keys_this_prefix {
             if total >= config.num {
                 break;
             }
@@ -135,6 +133,27 @@ pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
     }
 
     key
+}
+
+/// Write a sequential key into an existing buffer (zero-alloc variant).
+///
+/// Same encoding as [`make_sequential_key`] but writes into `buf` in-place.
+#[inline]
+pub fn fill_sequential_key(buf: &mut [u8], index: u64) {
+    let key_size = buf.len();
+    assert!(key_size > 0, "key_size must be > 0");
+    let be_bytes = index.to_be_bytes();
+
+    if key_size >= 8 {
+        buf[..8].copy_from_slice(&be_bytes);
+        buf[8..].fill(0);
+    } else {
+        debug_assert!(
+            index < (1u64 << (key_size * 8)),
+            "index {index} exceeds unique key space for key_size {key_size}"
+        );
+        buf.copy_from_slice(&be_bytes[8 - key_size..]);
+    }
 }
 
 /// Create a random key of the given size.

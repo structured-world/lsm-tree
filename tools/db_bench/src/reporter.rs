@@ -108,8 +108,7 @@ impl Reporter {
             config: config.clone(),
             elapsed_secs: secs,
             ops_total: ops,
-            // Truncate fractional ops/sec for clean JSON integer output.
-            ops_per_sec: ops_per_sec as u64,
+            ops_per_sec,
             mb_per_sec,
             latency_us: LatencyUs {
                 p50: self.percentile_us(50.0),
@@ -143,7 +142,7 @@ struct JsonReport {
     config: JsonConfig,
     elapsed_secs: f64,
     ops_total: u64,
-    ops_per_sec: u64,
+    ops_per_sec: f64,
     mb_per_sec: f64,
     latency_us: LatencyUs,
 }
