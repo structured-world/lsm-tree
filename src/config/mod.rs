@@ -605,7 +605,7 @@ impl<F: Fs> Config<F> {
     ///
     /// # Important
     ///
-    /// The comparator's [`UserComparator::name`] is persisted when a tree is
+    /// The comparator's [`crate::UserComparator::name`] is persisted when a tree is
     /// first created. On subsequent opens the stored name is compared against
     /// the supplied comparator's name — a mismatch causes the open to fail
     /// with [`Error::ComparatorMismatch`](crate::Error::ComparatorMismatch).

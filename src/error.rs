@@ -78,7 +78,7 @@ pub enum Error {
 
     /// Comparator mismatch on tree reopen.
     ///
-    /// The tree was created with a comparator whose [`UserComparator::name`]
+    /// The tree was created with a comparator whose [`crate::UserComparator::name`]
     /// differs from the one supplied at reopen time.
     ComparatorMismatch {
         /// Comparator name persisted in the tree metadata.
