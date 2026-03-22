@@ -26,8 +26,14 @@ impl OwnedIndexBlockIter {
 
     /// Creates an owned iterator with optional lower/upper seek bounds.
     ///
-    /// Returns `None` if either seek operation indicates that no items
-    /// fall within the given bounds.
+    /// The lower bound `lo`, if provided, seeks the forward cursor to the
+    /// first entry at or after `(key, seqno)`. Returns `None` if no such
+    /// entry exists.
+    ///
+    /// The upper bound `hi`, if provided, positions the internal back
+    /// cursor for reverse iteration; it does *not* exclude entries from
+    /// forward iteration. Returns `None` for `hi` only if the underlying
+    /// `seek_upper` reports failure.
     pub(crate) fn from_block_with_bounds(
         block: IndexBlock,
         comparator: SharedComparator,
@@ -167,6 +173,14 @@ mod tests {
 
         // Forward iteration still starts from the beginning
         assert_eq!(iter.next().unwrap().end_key().as_ref(), b"a");
+
+        // seek_upper("c") positions the back cursor at the partition boundary;
+        // next_back yields items from that position downward
+        let back = iter.next_back().unwrap();
+        assert!(back.end_key().as_ref() <= &b"d"[..]);
+        // Confirm backward iteration continues in reverse order
+        let prev = iter.next_back().unwrap();
+        assert!(prev.end_key().as_ref() < back.end_key().as_ref());
     }
 
     #[test]
