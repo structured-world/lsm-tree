@@ -678,10 +678,12 @@ fn multi_level_skip_fires_when_l1_oversized() -> crate::Result<()> {
 
 #[test]
 fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
-    // Regression test for #72: when L1 tables are disjoint (sparse keyspace),
-    // the L2 overlap query must use per-table ranges instead of one coarse
-    // aggregate range. This prevents gap-filling L2 tables from being
-    // unnecessarily pulled into the compaction.
+    // Regression test for #72: when L0/L1 tables have narrow, disjoint key
+    // ranges, the per-table L2 overlap query avoids pulling in gap-filling
+    // L2 tables that the old aggregate-range approach would include.
+    //
+    // Each flush writes keys from ONE narrow range so the flushed table's
+    // key_range is tight (e.g. [a,d] or [x,z]), not the full keyspace.
     let dir = tempfile::tempdir()?;
     let tree = Config::new(
         dir.path(),
@@ -693,27 +695,38 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
     let leveled = Arc::new(Strategy::default().with_l0_threshold(4));
     let mut seqno = 0u64;
 
-    // Step 1: Build disjoint L1 tables covering sparse ranges [a,d] and [x,z]
-    // with a gap in between. Then push some data into L2 that fills the gap.
-
-    // First, populate L1+L2 with data spanning the full range [a..z]
+    // Step 1: Populate L1+L2 with data across the full keyspace.
+    // Flush each range separately so tables have narrow key ranges.
     for _round in 0..3 {
-        for _k in 0..4 {
-            tree.insert("a", "val", seqno);
-            tree.insert("d", "val", seqno);
-            // Keys in the "gap" region — these will end up in L2
-            tree.insert("m", "gap_val", seqno);
-            tree.insert("n", "gap_val", seqno);
-            tree.insert("x", "val", seqno);
-            tree.insert("z", "val", seqno);
-            tree.flush_active_memtable(seqno)?;
-            seqno += 1;
-        }
+        // Low range [a,d]
+        tree.insert("a", "val", seqno);
+        tree.insert("d", "val", seqno);
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+
+        // Gap range [m,n] — will end up in L2 as gap-filling tables
+        tree.insert("m", "gap_val", seqno);
+        tree.insert("n", "gap_val", seqno);
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+
+        // High range [x,z]
+        tree.insert("x", "val", seqno);
+        tree.insert("z", "val", seqno);
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+
+        // Padding flush to reach l0_threshold=4
+        tree.insert("a", "val", seqno);
+        tree.insert("z", "val", seqno);
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+
         tree.compact(leveled.clone(), seqno)?;
     }
 
-    // Step 2: Now flush only sparse keys (no gap keys) to build disjoint L0
-    // tables. When multi-level fires, L0+L1 input will have disjoint ranges.
+    // Step 2: Flush narrow-range L0 tables (only low + high, no gap).
+    // Each flush creates a table with a narrow key_range.
     let multi = Arc::new(
         Strategy::default()
             .with_multi_level(true)
@@ -721,18 +734,39 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
             .with_l0_threshold(4),
     );
 
-    for _k in 0..8 {
+    for _k in 0..4 {
+        // Flush [a,d] only
         tree.insert("a", "val", seqno);
         tree.insert("d", "val", seqno);
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+
+        // Flush [x,z] only
         tree.insert("x", "val", seqno);
         tree.insert("z", "val", seqno);
         tree.flush_active_memtable(seqno)?;
         seqno += 1;
     }
 
-    tree.compact(multi.clone(), seqno)?;
+    let result = tree.compact(multi.clone(), seqno)?;
 
-    // All data must be readable — both sparse keys and gap keys
+    // Verify multi-level path fired (L0+L1→L2).
+    // CompactionResult lets us assert the merge path was taken and
+    // data landed in L2+, covering the per-range overlap code.
+    assert_eq!(
+        result.action,
+        crate::compaction::CompactionAction::Merged,
+        "multi-level skip should produce a Merged action",
+    );
+    assert!(
+        result.dest_level.is_some_and(|lvl| lvl >= 2),
+        "multi-level skip should target L2+, got {:?}",
+        result.dest_level,
+    );
+
+    // All data must be readable — both sparse keys and gap keys.
+    // Gap keys were written in step 1 and must survive the multi-level
+    // compaction whether or not the gap-filling L2 tables were included.
     assert!(tree.get(b"a", MAX_SEQNO)?.is_some(), "key 'a' should exist");
     assert!(tree.get(b"d", MAX_SEQNO)?.is_some(), "key 'd' should exist");
     assert!(

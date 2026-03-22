@@ -751,20 +751,18 @@ impl CompactionStrategy for Strategy {
                         // Include overlapping L2 tables — query per input table
                         // range instead of one coarse aggregate to avoid pulling
                         // in gap-filling L2 tables on sparse keyspaces (#72)
-                        let l2_overlapping: Vec<_> = first_level
+                        for table in first_level
                             .iter()
                             .flat_map(|run| run.iter())
                             .chain(target_level.iter().flat_map(|run| run.iter()))
-                            .flat_map(|table| {
-                                let kr = table.key_range();
-                                l2.iter()
-                                    .flat_map(|run| run.get_overlapping(kr))
-                                    .map(Table::id)
-                                    .collect::<Vec<_>>()
-                            })
-                            .collect();
-
-                        table_ids.extend(&l2_overlapping);
+                        {
+                            let kr = table.key_range();
+                            for run in l2.iter() {
+                                for t in run.get_overlapping(kr) {
+                                    table_ids.insert(Table::id(t));
+                                }
+                            }
+                        }
 
                         #[expect(
                             clippy::cast_possible_truncation,
