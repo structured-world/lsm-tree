@@ -1,8 +1,7 @@
 /// Tests that partitioned bloom filters correctly skip non-matching keys
-/// via the Table::get path (which already has partition-aware bloom seeking).
+/// via the Table::get path (which has partition-aware bloom seeking).
 ///
-/// This exercises the existing partition-aware bloom in Table::get — the
-/// metrics confirm the filter rejects the table for a non-matching key.
+/// Metrics confirm the filter rejects the table for a non-matching key.
 #[test_log::test]
 #[cfg(feature = "metrics")]
 fn partitioned_bloom_skip_for_point_reads() -> lsm_tree::Result<()> {
@@ -17,20 +16,15 @@ fn partitioned_bloom_skip_for_point_reads() -> lsm_tree::Result<()> {
     let seqno = SequenceNumberCounter::default();
 
     let tree = Config::new(path, seqno.clone(), SequenceNumberCounter::default())
-        // Force partitioned filters on all levels (including L0)
         .filter_block_partitioning_policy(PinningPolicy::all(true))
         .open()?;
 
-    // Insert keys "a" and "c" into a single table
     tree.insert("a", "val_a", seqno.next());
     tree.insert("c", "val_c", seqno.next());
     tree.flush_active_memtable(0)?;
 
-    // Query for "b" which does NOT exist — bloom should reject
     assert!(tree.get("b", MAX_SEQNO)?.is_none());
 
-    // With partitioned bloom skip working, the filter should have
-    // rejected the table and recorded a skip.
     assert_eq!(
         1,
         tree.metrics().io_skipped_by_filter(),
@@ -42,15 +36,14 @@ fn partitioned_bloom_skip_for_point_reads() -> lsm_tree::Result<()> {
         tree.metrics().filter_queries()
     );
 
-    // Verify that existing keys are still found correctly
     assert!(tree.get("a", MAX_SEQNO)?.is_some());
     assert!(tree.get("c", MAX_SEQNO)?.is_some());
 
     Ok(())
 }
 
-/// Tests that bloom_may_contain_key returns Ok(false) for a key beyond all
-/// partition boundaries (i.e. greater than the last partition's end key).
+/// Tests that a key beyond all partition boundaries is correctly rejected
+/// by the partitioned bloom filter (Table::get path).
 #[test_log::test]
 fn partitioned_bloom_skip_beyond_partitions() -> lsm_tree::Result<()> {
     use lsm_tree::{
@@ -71,21 +64,22 @@ fn partitioned_bloom_skip_beyond_partitions() -> lsm_tree::Result<()> {
     tree.insert("b", "val_b", seqno.next());
     tree.flush_active_memtable(0)?;
 
-    // Key "z" is beyond all partition boundaries
     assert!(tree.get("z", MAX_SEQNO)?.is_none());
-
-    // Key "a" should still be found
     assert!(tree.get("a", MAX_SEQNO)?.is_some());
 
     Ok(())
 }
 
-/// Exercises the bloom_may_contain_key path through the merge pipeline
+/// Exercises bloom_may_contain_key through the merge pipeline
 /// (resolve_merge_via_pipeline → TreeIter → bloom_passes → bloom_may_contain_key).
 ///
-/// This is the primary path that issue #83 enables: when a merge operator is
-/// configured, point reads go through the iterator pipeline where bloom_key
-/// allows partition-aware filtering instead of the conservative Ok(true).
+/// With a merge operator, point reads go through the iterator pipeline where
+/// bloom_key enables partition-aware filtering. Correctness of the merge
+/// result (110 = merge(100, [10])) confirms the pipeline executes without
+/// errors through the new bloom_may_contain_key code path.
+///
+/// Note: io_skipped_by_filter is only incremented by Table::get, not by
+/// bloom_passes in the pipeline path, so we assert correctness not metrics.
 #[test_log::test]
 fn partitioned_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
     use lsm_tree::{
@@ -134,16 +128,13 @@ fn partitioned_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
     tree.insert("counter", &100_i64.to_le_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
-    // Table 2: unrelated key — bloom should skip this table for "counter"
+    // Table 2: unrelated key — bloom_may_contain_key should reject this
     tree.insert("zzz_other", &999_i64.to_le_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
     // Merge operand in active memtable — triggers resolve_merge_via_pipeline
     tree.merge("counter", 10_i64.to_le_bytes(), seqno.next());
 
-    // The pipeline scans disk tables with bloom pre-filter.
-    // Table 2 should be skipped by bloom_may_contain_key("counter", hash)
-    // because "counter" is not in table 2's partitioned bloom filter.
     let result = tree.get("counter", MAX_SEQNO)?;
     assert!(result.is_some());
 
@@ -155,6 +146,8 @@ fn partitioned_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
 
 /// Exercises bloom_may_contain_key with a full (non-partitioned) filter
 /// through the merge pipeline — covers the delegation to bloom_may_contain_hash.
+///
+/// Same note as above: pipeline bloom skips don't increment io_skipped_by_filter.
 #[test_log::test]
 fn full_filter_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
     use lsm_tree::{
@@ -194,7 +187,6 @@ fn full_filter_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
 
     let seqno = SequenceNumberCounter::default();
 
-    // Full (non-partitioned) filters — bloom_may_contain_key delegates to hash path
     let tree = Config::new(path, seqno.clone(), SequenceNumberCounter::default())
         .filter_block_partitioning_policy(PinningPolicy::all(false))
         .with_merge_operator(Some(std::sync::Arc::new(SumMerge)))
