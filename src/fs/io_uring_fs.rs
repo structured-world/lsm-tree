@@ -2,17 +2,17 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-//! io_uring-backed [`Fs`] implementation for high-throughput I/O on Linux.
+//! `io_uring`-backed [`Fs`] implementation for high-throughput I/O on Linux.
 //!
 //! Requires the `io-uring` feature flag and Linux 5.6+. Uses a dedicated
-//! I/O thread that owns the io_uring ring instance. Submissions from
+//! I/O thread that owns the `io_uring` ring instance. Submissions from
 //! multiple threads are batched opportunistically — when several threads
 //! submit I/O concurrently, their SQEs are combined into a single
 //! `io_uring_enter` syscall.
 //!
 //! Hot-path operations (read, write, fsync) go through the ring.
 //! Cold-path operations (mkdir, readdir, stat, rename, unlink) delegate
-//! to [`std::fs`] since they do not benefit from io_uring.
+//! to [`std::fs`] since they do not benefit from `io_uring`.
 
 use super::{Fs, FsDirEntry, FsFile, FsMetadata, FsOpenOptions};
 use io_uring::{opcode, types, IoUring};
@@ -25,10 +25,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
-/// Default number of io_uring submission queue entries.
+/// Default number of `io_uring` submission queue entries.
 const DEFAULT_SQ_ENTRIES: u32 = 256;
 
-/// Probes whether io_uring is supported on the running kernel.
+/// Probes whether `io_uring` is supported on the running kernel.
 ///
 /// Creates a minimal ring with 2 entries and immediately drops it.
 /// Returns `false` on any failure (old kernel, seccomp restrictions, etc.).
@@ -41,11 +41,11 @@ pub fn is_io_uring_available() -> bool {
 // IoUringFs
 // ---------------------------------------------------------------------------
 
-/// io_uring-backed [`Fs`] implementation.
+/// `io_uring`-backed [`Fs`] implementation.
 ///
 /// Routes hot-path I/O operations (read, write, fsync) through a
-/// dedicated io_uring ring thread. Directory and metadata operations
-/// delegate to [`std::fs`] since they do not benefit from io_uring.
+/// dedicated `io_uring` ring thread. Directory and metadata operations
+/// delegate to [`std::fs`] since they do not benefit from `io_uring`.
 ///
 /// Multiple `IoUringFs` clones and all [`IoUringFile`] handles opened
 /// through them share the same ring thread.
@@ -67,7 +67,7 @@ impl IoUringFs {
     ///
     /// # Errors
     ///
-    /// Returns an error if io_uring is not available on this kernel.
+    /// Returns an error if `io_uring` is not available on this kernel.
     pub fn new() -> io::Result<Self> {
         Self::with_ring_size(DEFAULT_SQ_ENTRIES)
     }
@@ -79,7 +79,7 @@ impl IoUringFs {
     ///
     /// # Errors
     ///
-    /// Returns an error if io_uring is not available on this kernel.
+    /// Returns an error if `io_uring` is not available on this kernel.
     pub fn with_ring_size(sq_entries: u32) -> io::Result<Self> {
         let inner = RingThread::spawn(sq_entries)?;
         Ok(Self {
@@ -200,11 +200,11 @@ impl Fs for IoUringFs {
 // IoUringFile
 // ---------------------------------------------------------------------------
 
-/// File handle that routes I/O through an io_uring ring thread.
+/// File handle that routes I/O through an `io_uring` ring thread.
 ///
 /// Wraps a [`std::fs::File`] for fd ownership and cold-path operations
 /// (metadata, truncate, lock), while routing reads, writes, and fsyncs
-/// through the shared io_uring ring.
+/// through the shared `io_uring` ring.
 pub struct IoUringFile {
     /// Underlying std File — owns the fd, used for metadata/set_len/lock.
     file: File,
@@ -291,7 +291,7 @@ impl Read for IoUringFile {
         }
         let cursor = self.cursor.get_mut();
         let n = self.ring.submit_read(self.file.as_raw_fd(), buf, *cursor)?;
-        *cursor += n as u64;
+        *cursor += u64::from(n);
         Ok(n as usize)
     }
 }
@@ -305,7 +305,7 @@ impl Write for IoUringFile {
         let n = self
             .ring
             .submit_write(self.file.as_raw_fd(), buf, *cursor)?;
-        *cursor += n as u64;
+        *cursor += u64::from(n);
         Ok(n as usize)
     }
 
@@ -322,7 +322,7 @@ impl Seek for IoUringFile {
         let new_pos = match pos {
             SeekFrom::Start(n) => n,
             SeekFrom::Current(n) => if n >= 0 {
-                cursor.checked_add(n as u64)
+                cursor.checked_add(n.unsigned_abs())
             } else {
                 cursor.checked_sub(n.unsigned_abs())
             }
@@ -330,7 +330,7 @@ impl Seek for IoUringFile {
             SeekFrom::End(n) => {
                 let len = self.file.metadata()?.len();
                 if n >= 0 {
-                    len.checked_add(n as u64)
+                    len.checked_add(n.unsigned_abs())
                 } else {
                     len.checked_sub(n.unsigned_abs())
                 }
@@ -353,13 +353,19 @@ impl Seek for IoUringFile {
 /// # Safety
 ///
 /// The caller must ensure the pointed-to memory remains valid until the
-/// io_uring operation completes. This is upheld because the submitting
+/// `io_uring` operation completes. This is upheld because the submitting
 /// thread blocks on an `mpsc::Receiver` and cannot drop the buffer until
 /// the CQE is received.
 struct UnsafeSend<T>(T);
 
-// SAFETY: see struct-level doc.
+// SAFETY: see struct-level doc. The raw pointers wrapped by UnsafeSend
+// are guaranteed valid for the duration of the io_uring op because the
+// caller blocks until the CQE is received.
 #[expect(unsafe_code, reason = "marking raw-pointer wrapper as Send")]
+#[expect(
+    clippy::non_send_fields_in_send_ty,
+    reason = "raw pointers are intentionally sent — lifetime guaranteed by blocking caller"
+)]
 unsafe impl<T> Send for UnsafeSend<T> {}
 
 /// An I/O operation to submit to the ring.
@@ -388,7 +394,7 @@ struct Op {
     result_tx: mpsc::SyncSender<i32>,
 }
 
-/// Dedicated thread that owns the io_uring ring.
+/// Dedicated thread that owns the `io_uring` ring.
 ///
 /// Operations are submitted via `mpsc::Sender` and results are returned
 /// through per-operation `mpsc::SyncSender` channels.
@@ -418,6 +424,10 @@ impl RingThread {
     /// 2. Batch additional ops via `try_recv()`.
     /// 3. Submit to kernel and wait for at least one completion.
     /// 4. Dispatch CQE results to callers.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "rx is moved into the spawned thread — must be owned"
+    )]
     fn event_loop(mut ring: IoUring, rx: mpsc::Receiver<Op>) {
         let mut pending: HashMap<u64, mpsc::SyncSender<i32>> = HashMap::new();
         let mut next_id: u64 = 0;
@@ -459,7 +469,7 @@ impl RingThread {
             loop {
                 match ring.submit_and_wait(1) {
                     Ok(_) => break,
-                    Err(ref e) if e.raw_os_error() == Some(4 /* EINTR */) => continue,
+                    Err(ref e) if e.raw_os_error() == Some(4 /* EINTR */) => {}
                     Err(e) => {
                         let errno = e.raw_os_error().unwrap_or(5 /* EIO */);
                         for (_, tx) in pending.drain() {
@@ -552,7 +562,7 @@ impl RingThread {
     // -- Submission helpers --------------------------------------------------
 
     /// Submits a pread to the ring and blocks until completion.
-    fn submit_read(&self, fd: i32, buf: &mut [u8], offset: u64) -> io::Result<i32> {
+    fn submit_read(&self, fd: i32, buf: &mut [u8], offset: u64) -> io::Result<u32> {
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let (tx, rx) = mpsc::sync_channel(1);
         let op = Op {
@@ -564,11 +574,11 @@ impl RingThread {
             },
             result_tx: tx,
         };
-        self.send_and_wait(op, rx)
+        self.send_and_wait(op, &rx)
     }
 
     /// Submits a pwrite to the ring and blocks until completion.
-    fn submit_write(&self, fd: i32, buf: &[u8], offset: u64) -> io::Result<i32> {
+    fn submit_write(&self, fd: i32, buf: &[u8], offset: u64) -> io::Result<u32> {
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let (tx, rx) = mpsc::sync_channel(1);
         let op = Op {
@@ -580,43 +590,42 @@ impl RingThread {
             },
             result_tx: tx,
         };
-        self.send_and_wait(op, rx)
+        self.send_and_wait(op, &rx)
     }
 
     /// Submits an fsync or fdatasync and blocks until completion.
-    fn submit_fsync(&self, fd: i32, datasync: bool) -> io::Result<i32> {
+    fn submit_fsync(&self, fd: i32, datasync: bool) -> io::Result<u32> {
         let (tx, rx) = mpsc::sync_channel(1);
         let op = Op {
             kind: OpKind::Fsync { fd, datasync },
             result_tx: tx,
         };
-        self.send_and_wait(op, rx)
+        self.send_and_wait(op, &rx)
     }
 
     /// Sends an operation to the ring thread and blocks on the result.
-    fn send_and_wait(&self, op: Op, rx: mpsc::Receiver<i32>) -> io::Result<i32> {
-        {
-            let guard = self
-                .tx
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let sender = guard.as_ref().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::BrokenPipe, "io_uring thread shut down")
-            })?;
-            sender
-                .send(op)
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "io_uring thread exited"))?;
-            // Guard dropped here — releases the lock before blocking.
-        }
+    ///
+    /// Returns the non-negative CQE result as `u32`. Negative results
+    /// (kernel errors) are converted to [`io::Error`].
+    fn send_and_wait(&self, op: Op, rx: &mpsc::Receiver<i32>) -> io::Result<u32> {
+        self.tx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "io_uring thread shut down"))?
+            .send(op)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "io_uring thread exited"))?;
 
         let result = rx
             .recv()
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "io_uring thread exited"))?;
 
-        if result < 0 {
-            Err(io::Error::from_raw_os_error(-result))
+        if result >= 0 {
+            // CQE result is non-negative — `as u32` is lossless.
+            #[expect(clippy::cast_sign_loss, reason = "guarded by result >= 0 check above")]
+            Ok(result as u32)
         } else {
-            Ok(result)
+            Err(io::Error::from_raw_os_error(-result))
         }
     }
 }
