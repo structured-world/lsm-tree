@@ -210,8 +210,10 @@ pub struct IoUringFile {
     file: File,
 
     /// Tracked cursor position for [`Read`]/[`Write`]/[`Seek`] impls.
-    /// Only accessed via `&mut self` (those traits) or not at all
-    /// ([`FsFile::read_at`] uses an explicit offset).
+    /// Only accessed via `get_mut()` (those traits take `&mut self`) or
+    /// not at all ([`FsFile::read_at`] uses an explicit offset).
+    /// `AtomicU64` is used instead of plain `u64` so that `IoUringFile`
+    /// is `Sync` — required by the [`FsFile`] trait bound.
     cursor: AtomicU64,
 
     /// Shared reference to the ring thread.
@@ -466,6 +468,8 @@ impl RingThread {
             }
 
             // Phase 2: submit to kernel, retry on EINTR.
+            // Errno constants are inlined to avoid a libc dependency
+            // (consistent with StdFs which uses raw FFI for flock).
             loop {
                 match ring.submit_and_wait(1) {
                     Ok(_) => break,
@@ -536,7 +540,11 @@ impl RingThread {
         #[expect(unsafe_code, reason = "io_uring SQE push")]
         unsafe {
             if ring.submission().push(&sqe).is_err() {
-                // SQ full — flush current batch to make room, then retry.
+                // SQ full — submit pending SQEs to the kernel and harvest
+                // any already-completed CQEs to free SQ slots. This is
+                // best-effort: if no completions are available the retry
+                // below will fail with EBUSY, which is the correct outcome
+                // for a genuinely saturated ring.
                 if let Err(e) = ring.submit() {
                     let errno = e.raw_os_error().unwrap_or(5 /* EIO */);
                     let _ = op.result_tx.send(-errno);
@@ -563,6 +571,8 @@ impl RingThread {
 
     /// Submits a pread to the ring and blocks until completion.
     fn submit_read(&self, fd: i32, buf: &mut [u8], offset: u64) -> io::Result<u32> {
+        // io_uring SQE length field is u32. In practice LSM block reads
+        // are 4-64 KB, so the cap is never reached.
         let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         let (tx, rx) = mpsc::sync_channel(1);
         let op = Op {
