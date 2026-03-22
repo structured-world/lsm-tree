@@ -91,6 +91,65 @@ mod tests {
     use test_log::test;
 
     #[test]
+    fn read_exact_short_read_returns_error() {
+        use crate::fs::{FsFile, FsMetadata};
+
+        /// FsFile that always reads fewer bytes than requested.
+        struct ShortReadFile;
+
+        impl std::io::Read for ShortReadFile {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Ok(0)
+            }
+        }
+        impl std::io::Write for ShortReadFile {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl std::io::Seek for ShortReadFile {
+            fn seek(&mut self, _pos: std::io::SeekFrom) -> std::io::Result<u64> {
+                Ok(0)
+            }
+        }
+        impl FsFile for ShortReadFile {
+            fn sync_all(&self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn sync_data(&self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn metadata(&self) -> std::io::Result<FsMetadata> {
+                Ok(FsMetadata {
+                    len: 0,
+                    is_dir: false,
+                    is_file: true,
+                })
+            }
+            fn set_len(&self, _size: u64) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn read_at(&self, _buf: &mut [u8], _offset: u64) -> std::io::Result<usize> {
+                Ok(0) // always returns 0 bytes
+            }
+            fn lock_exclusive(&self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let err = read_exact(&ShortReadFile, 0, 10).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("did not read enough bytes"),
+            "unexpected error message: {msg}",
+        );
+    }
+
+    #[test]
     fn atomic_rewrite() -> crate::Result<()> {
         let dir = tempfile::tempdir()?;
 
