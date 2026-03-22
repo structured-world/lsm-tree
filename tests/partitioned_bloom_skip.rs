@@ -134,8 +134,10 @@ fn partitioned_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
     tree.insert("counter", &100_i64.to_le_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
-    // Table 2: unrelated key — bloom_may_contain_key should reject this
-    tree.insert("zzz_other", &999_i64.to_le_bytes(), seqno.next());
+    // Table 2: keys that bracket "counter" so key_range_overlap passes,
+    // but bloom filter does NOT contain "counter" — bloom is the deciding filter.
+    tree.insert("aaa", &1_i64.to_le_bytes(), seqno.next());
+    tree.insert("zzz", &2_i64.to_le_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
     // Merge operand in active memtable — triggers resolve_merge_via_pipeline
@@ -174,7 +176,10 @@ fn full_filter_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
     tree.insert("counter", &100_i64.to_le_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
-    tree.insert("zzz_other", &999_i64.to_le_bytes(), seqno.next());
+    // Keys that bracket "counter" so key_range_overlap passes,
+    // but bloom filter does NOT contain "counter".
+    tree.insert("aaa", &1_i64.to_le_bytes(), seqno.next());
+    tree.insert("zzz", &2_i64.to_le_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
     tree.merge("counter", 10_i64.to_le_bytes(), seqno.next());
