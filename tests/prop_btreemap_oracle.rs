@@ -191,6 +191,7 @@ fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
             Op::Remove { key } => {
                 oracle.remove(key.clone(), seqno);
                 tree.remove(key, seqno);
+                all_keys.push(key.clone());
                 seqno += 1;
             }
             Op::Flush => {
