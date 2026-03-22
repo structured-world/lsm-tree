@@ -54,10 +54,8 @@ pub struct Arena {
     cursor: AtomicU32,
 }
 
-// SAFETY: AtomicPtr and AtomicU32 are Send+Sync.  Block data is accessed via
-// bump allocation (non-overlapping regions) and subsequent immutable reads.
-unsafe impl Send for Arena {}
-unsafe impl Sync for Arena {}
+// Send+Sync derived automatically: all fields (Box<[AtomicPtr<_>]>, AtomicU32)
+// are Send+Sync.
 
 impl Arena {
     /// Creates a new empty arena.  No memory is allocated until the first

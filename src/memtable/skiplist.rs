@@ -565,25 +565,14 @@ impl SkipMap {
             self.head
         };
 
-        // Walk down to the correct level first.
+        // Walk down from the list height to the target level, narrowing
+        // the search window at each level above `level`.
         let list_h = self.height.load(Ordering::Acquire);
-        let start_level = if level + 1 < list_h {
-            level + 1
-        } else {
-            list_h
-        };
-
-        for lv in (level + 1..start_level).rev() {
-            loop {
-                let next = self.next_at(node, lv);
-                if next == UNSET {
-                    break;
-                }
-                if self.compare_key(next, key) == CmpOrdering::Less {
-                    node = next;
-                } else {
-                    break;
-                }
+        for lv in (level + 1..list_h).rev() {
+            let mut next = self.next_at(node, lv);
+            while next != UNSET && self.compare_key(next, key) == CmpOrdering::Less {
+                node = next;
+                next = self.next_at(node, lv);
             }
         }
 
