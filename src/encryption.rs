@@ -214,64 +214,65 @@ mod tests {
         }
 
         #[test]
-        fn roundtrip_basic() {
+        fn roundtrip_basic() -> crate::Result<()> {
             let provider = Aes256GcmProvider::new(&test_key());
             let plaintext = b"hello world, this is a block of data!";
 
-            let ciphertext = provider.encrypt(plaintext).expect("encrypt");
+            let ciphertext = provider.encrypt(plaintext)?;
             assert_ne!(&ciphertext[..], plaintext.as_slice());
             assert_eq!(
                 ciphertext.len(),
                 Aes256GcmProvider::NONCE_LEN + plaintext.len() + Aes256GcmProvider::TAG_LEN,
             );
 
-            let decrypted = provider.decrypt(&ciphertext).expect("decrypt");
+            let decrypted = provider.decrypt(&ciphertext)?;
             assert_eq!(decrypted, plaintext);
+            Ok(())
         }
 
         #[test]
-        fn roundtrip_empty() {
+        fn roundtrip_empty() -> crate::Result<()> {
             let provider = Aes256GcmProvider::new(&test_key());
             let plaintext = b"";
 
-            let ciphertext = provider.encrypt(plaintext).expect("encrypt");
-            let decrypted = provider.decrypt(&ciphertext).expect("decrypt");
+            let ciphertext = provider.encrypt(plaintext)?;
+            let decrypted = provider.decrypt(&ciphertext)?;
             assert_eq!(decrypted, plaintext);
+            Ok(())
         }
 
         #[test]
-        fn different_nonces_produce_different_ciphertexts() {
+        fn different_nonces_produce_different_ciphertexts() -> crate::Result<()> {
             let provider = Aes256GcmProvider::new(&test_key());
             let plaintext = b"deterministic input";
 
-            let ct1 = provider.encrypt(plaintext).expect("encrypt 1");
-            let ct2 = provider.encrypt(plaintext).expect("encrypt 2");
+            let ct1 = provider.encrypt(plaintext)?;
+            let ct2 = provider.encrypt(plaintext)?;
             assert_ne!(
                 ct1, ct2,
                 "random nonces should produce different ciphertexts"
             );
 
             // Both decrypt to the same plaintext
-            assert_eq!(
-                provider.decrypt(&ct1).expect("d1"),
-                provider.decrypt(&ct2).expect("d2"),
-            );
+            assert_eq!(provider.decrypt(&ct1)?, provider.decrypt(&ct2)?,);
+            Ok(())
         }
 
         #[test]
-        fn wrong_key_fails_decrypt() {
+        fn wrong_key_fails_decrypt() -> crate::Result<()> {
             let provider1 = Aes256GcmProvider::new(&[0x01; 32]);
             let provider2 = Aes256GcmProvider::new(&[0x02; 32]);
 
-            let ciphertext = provider1.encrypt(b"secret").expect("encrypt");
+            let ciphertext = provider1.encrypt(b"secret")?;
             let result = provider2.decrypt(&ciphertext);
             assert!(result.is_err());
+            Ok(())
         }
 
         #[test]
-        fn tampered_ciphertext_fails_decrypt() {
+        fn tampered_ciphertext_fails_decrypt() -> crate::Result<()> {
             let provider = Aes256GcmProvider::new(&test_key());
-            let mut ciphertext = provider.encrypt(b"data").expect("encrypt");
+            let mut ciphertext = provider.encrypt(b"data")?;
 
             // Flip a byte in the ciphertext body
             let mid = Aes256GcmProvider::NONCE_LEN + 1;
@@ -284,13 +285,15 @@ mod tests {
 
             let result = provider.decrypt(&ciphertext);
             assert!(result.is_err());
+            Ok(())
         }
 
         #[test]
-        fn truncated_ciphertext_fails_decrypt() {
+        fn truncated_ciphertext_fails_decrypt() -> crate::Result<()> {
             let provider = Aes256GcmProvider::new(&test_key());
             let result = provider.decrypt(&[0u8; 10]); // less than nonce + tag
             assert!(result.is_err());
+            Ok(())
         }
 
         #[test]
@@ -302,13 +305,14 @@ mod tests {
         }
 
         #[test]
-        fn roundtrip_large_payload() {
+        fn roundtrip_large_payload() -> crate::Result<()> {
             let provider = Aes256GcmProvider::new(&test_key());
             let plaintext = vec![0xAB_u8; 64 * 1024]; // 64 KiB
 
-            let ciphertext = provider.encrypt(&plaintext).expect("encrypt");
-            let decrypted = provider.decrypt(&ciphertext).expect("decrypt");
+            let ciphertext = provider.encrypt(&plaintext)?;
+            let decrypted = provider.decrypt(&ciphertext)?;
             assert_eq!(decrypted, plaintext);
+            Ok(())
         }
     }
 }
