@@ -119,17 +119,39 @@ impl Workload for MergeRandom {
         let expected = (base + if remainder > 0 { 1 } else { 0 }) as i64;
         let read_seqno = seqno.load(Ordering::Relaxed);
         let sample_key = make_sequential_key(0, config.key_size);
-        if let Some(val) = tree.get(&sample_key, read_seqno)? {
-            let actual = if val.len() >= 8 {
-                i64::from_le_bytes(val[..8].try_into().unwrap_or_default())
-            } else {
-                eprintln!("Warning: merge result too short ({} bytes)", val.len());
-                0
-            };
-            eprintln!(
-                "Merged {} operands over {} hot keys, sample counter: {actual} (expected {expected}), {} tables",
-                config.num, hot_keys, tree.table_count(),
-            );
+        match tree.get(&sample_key, read_seqno)? {
+            Some(val) => {
+                if val.len() < 8 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("merge result too short: {} bytes (expected 8)", val.len()),
+                    )
+                    .into());
+                }
+                let mut buf = [0_u8; 8];
+                buf.copy_from_slice(&val[..8]);
+                let actual = i64::from_le_bytes(buf);
+
+                if actual != expected {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("merge result mismatch: got {actual}, expected {expected}"),
+                    )
+                    .into());
+                }
+
+                eprintln!(
+                    "Merged {} operands over {} hot keys, counter verified: {actual} (expected {expected}), {} tables",
+                    config.num, hot_keys, tree.table_count(),
+                );
+            }
+            None => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "sample key missing after merge/compaction",
+                )
+                .into());
+            }
         }
 
         Ok(())

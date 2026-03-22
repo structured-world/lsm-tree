@@ -213,6 +213,9 @@ fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
     }
 
     // Verify prefix scans for each possible prefix byte.
+    // With single-byte keys each prefix matches exactly one key — this is
+    // intentional: it validates the prefix() API contract and oracle agreement.
+    // Multi-key prefix grouping is exercised by the db_bench prefixscan workload.
     for prefix_byte in 0..KEY_SPACE {
         let prefix = vec![prefix_byte];
         let expected_prefix = oracle.prefix_scan(&prefix, read_seqno);
