@@ -185,6 +185,14 @@ impl Arena {
         // Alignment is guaranteed by alloc(n_size, 4) for nodes and
         // ensure_block's Layout(align=4) for blocks.  AtomicU32::from_ptr
         // requires the pointer to be aligned — UB if not.
+        assert!(
+            !ptr.is_null(),
+            "arena block pointer is null in get_atomic_u32 (block not yet visible)"
+        );
+        assert!(
+            atom_ptr.is_aligned(),
+            "AtomicU32 pointer misaligned: ptr={ptr:?} off={off}"
+        );
         AtomicU32::from_ptr(atom_ptr)
     }
 
@@ -194,8 +202,11 @@ impl Arena {
 
     /// Decodes an encoded offset into `(block_base_ptr, within_block_offset)`.
     ///
-    /// Hot path: single `Acquire` load (branch-predicted non-null).
-    /// Cold path: `ensure_block` allocates the block on first access.
+    /// Decodes an encoded offset into `(block_base_ptr, within_block_offset)`.
+    ///
+    /// Hot path: single `Acquire` load returns the cached block pointer.
+    /// Cold path: spins until the block pointer becomes visible (another
+    /// thread's `ensure_block` is in progress).
     #[inline]
     #[expect(
         clippy::indexing_slicing,
@@ -204,16 +215,23 @@ impl Arena {
     unsafe fn decode(&self, offset: u32) -> (*mut u8, usize) {
         let block_idx = (offset >> BLOCK_SHIFT) as usize;
         let off = (offset & BLOCK_MASK) as usize;
-        let ptr = self.blocks[block_idx].load(Ordering::Acquire);
-        // Hot path: block already allocated (almost always true).
-        // Cold fallback: allocate on first access — handles the rare window
-        // between cursor advance and ensure_block visibility across cores.
-        let ptr = if ptr.is_null() {
+
+        let mut ptr = self.blocks[block_idx].load(Ordering::Acquire);
+        if ptr.is_null() {
+            // The block is being allocated by another thread's ensure_block.
+            // Spin briefly — ensure_block uses CAS with AcqRel, so the
+            // pointer will become visible after a few iterations.
+            for _ in 0..1000 {
+                std::hint::spin_loop();
+                ptr = self.blocks[block_idx].load(Ordering::Acquire);
+                if !ptr.is_null() {
+                    return (ptr, off);
+                }
+            }
+            // If still null after spinning, allocate the block ourselves.
             self.ensure_block(block_idx);
-            self.blocks[block_idx].load(Ordering::Acquire)
-        } else {
-            ptr
-        };
+            ptr = self.blocks[block_idx].load(Ordering::Acquire);
+        }
 
         (ptr, off)
     }
