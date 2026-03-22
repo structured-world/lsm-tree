@@ -1,15 +1,14 @@
 /// Tests that partitioned bloom filters correctly skip non-matching keys
-/// via the bloom_may_contain_key path (issue #83).
+/// via the Table::get path (which already has partition-aware bloom seeking).
 ///
-/// Before #83, bloom_may_contain_key_hash returned Ok(true) conservatively
-/// for partitioned filters, so the merge pipeline could not skip tables.
-/// After #83, bloom_may_contain_key seeks the partition index and checks
-/// only the matching partition's bloom filter.
+/// This exercises the existing partition-aware bloom in Table::get — the
+/// metrics confirm the filter rejects the table for a non-matching key.
 #[test_log::test]
 #[cfg(feature = "metrics")]
 fn partitioned_bloom_skip_for_point_reads() -> lsm_tree::Result<()> {
     use lsm_tree::{
-        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, SeqNo, SequenceNumberCounter,
+        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, SequenceNumberCounter,
+        MAX_SEQNO,
     };
 
     let folder = get_tmp_folder();
@@ -28,7 +27,7 @@ fn partitioned_bloom_skip_for_point_reads() -> lsm_tree::Result<()> {
     tree.flush_active_memtable(0)?;
 
     // Query for "b" which does NOT exist — bloom should reject
-    assert!(tree.get("b", SeqNo::MAX)?.is_none());
+    assert!(tree.get("b", MAX_SEQNO)?.is_none());
 
     // With partitioned bloom skip working, the filter should have
     // rejected the table and recorded a skip.
@@ -40,8 +39,8 @@ fn partitioned_bloom_skip_for_point_reads() -> lsm_tree::Result<()> {
     assert_eq!(1, tree.metrics().filter_queries());
 
     // Verify that existing keys are still found correctly
-    assert!(tree.get("a", SeqNo::MAX)?.is_some());
-    assert!(tree.get("c", SeqNo::MAX)?.is_some());
+    assert!(tree.get("a", MAX_SEQNO)?.is_some());
+    assert!(tree.get("c", MAX_SEQNO)?.is_some());
 
     Ok(())
 }
@@ -51,7 +50,8 @@ fn partitioned_bloom_skip_for_point_reads() -> lsm_tree::Result<()> {
 #[test_log::test]
 fn partitioned_bloom_skip_beyond_partitions() -> lsm_tree::Result<()> {
     use lsm_tree::{
-        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, SeqNo, SequenceNumberCounter,
+        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, SequenceNumberCounter,
+        MAX_SEQNO,
     };
 
     let folder = get_tmp_folder();
@@ -68,10 +68,74 @@ fn partitioned_bloom_skip_beyond_partitions() -> lsm_tree::Result<()> {
     tree.flush_active_memtable(0)?;
 
     // Key "z" is beyond all partition boundaries
-    assert!(tree.get("z", SeqNo::MAX)?.is_none());
+    assert!(tree.get("z", MAX_SEQNO)?.is_none());
 
     // Key "a" should still be found
-    assert!(tree.get("a", SeqNo::MAX)?.is_some());
+    assert!(tree.get("a", MAX_SEQNO)?.is_some());
+
+    Ok(())
+}
+
+/// Exercises the bloom_may_contain_key path through the merge pipeline
+/// (resolve_merge_via_pipeline → TreeIter → bloom_passes → bloom_may_contain_key).
+///
+/// This is the primary path that issue #83 enables: when a merge operator is
+/// configured, point reads go through the iterator pipeline where bloom_key
+/// allows partition-aware filtering instead of the conservative Ok(true).
+#[test_log::test]
+fn partitioned_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
+    use lsm_tree::{
+        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, MergeOperator,
+        SequenceNumberCounter, MAX_SEQNO,
+    };
+
+    struct SumMerge;
+    impl MergeOperator for SumMerge {
+        fn merge(
+            &self,
+            _key: &[u8],
+            base_value: Option<&[u8]>,
+            operands: &[&[u8]],
+        ) -> lsm_tree::Result<lsm_tree::Slice> {
+            let mut sum: i64 = base_value
+                .map(|b| i64::from_le_bytes(b.try_into().unwrap_or_default()))
+                .unwrap_or(0);
+            for op in operands {
+                sum += i64::from_le_bytes((*op).try_into().unwrap_or_default());
+            }
+            Ok(sum.to_le_bytes().to_vec().into())
+        }
+    }
+
+    let folder = get_tmp_folder();
+    let path = folder.path();
+
+    let seqno = SequenceNumberCounter::default();
+
+    let tree = Config::new(path, seqno.clone(), SequenceNumberCounter::default())
+        .filter_block_partitioning_policy(PinningPolicy::all(true))
+        .with_merge_operator(Some(std::sync::Arc::new(SumMerge)))
+        .open()?;
+
+    // Table 1: base value for "counter"
+    tree.insert("counter", &100_i64.to_le_bytes(), seqno.next());
+    tree.flush_active_memtable(0)?;
+
+    // Table 2: unrelated key — bloom should skip this table for "counter"
+    tree.insert("zzz_other", &999_i64.to_le_bytes(), seqno.next());
+    tree.flush_active_memtable(0)?;
+
+    // Merge operand in active memtable — triggers resolve_merge_via_pipeline
+    tree.merge("counter", 10_i64.to_le_bytes(), seqno.next());
+
+    // The pipeline scans disk tables with bloom pre-filter.
+    // Table 2 should be skipped by bloom_may_contain_key("counter", hash)
+    // because "counter" is not in table 2's partitioned bloom filter.
+    let result = tree.get("counter", MAX_SEQNO)?;
+    assert!(result.is_some());
+
+    let value = i64::from_le_bytes(result.unwrap().as_ref().try_into().unwrap());
+    assert_eq!(110, value, "merge(100, [10]) = 110");
 
     Ok(())
 }

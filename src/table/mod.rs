@@ -904,7 +904,7 @@ impl Table {
         // Partitioned filter with pinned TLI — seek to the matching partition
         if let Some(filter_idx) = &self.pinned_filter_index {
             let mut iter = filter_idx.iter(self.comparator.clone());
-            iter.seek(key, SeqNo::MAX);
+            iter.seek(key, crate::seqno::MAX_SEQNO);
 
             if let Some(filter_block_handle) = iter.next() {
                 let filter_block_handle = filter_block_handle.materialize(filter_idx.as_slice());
