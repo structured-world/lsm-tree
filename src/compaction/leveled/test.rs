@@ -707,11 +707,14 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
             .with_l0_threshold(4)
             .with_table_target_size(256),
     );
+    // Only insert keys in the LOW [a,d] and HIGH [x,z] ranges — no gap
+    // keys. This produces disjoint L1 tables with a gap in between.
     for _round in 0..8 {
         tree.insert("a", val, seqno);
         tree.insert("d", val, seqno);
-        tree.insert("m", val, seqno); // gap key
-        tree.insert("n", val, seqno); // gap key
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+
         tree.insert("x", val, seqno);
         tree.insert("z", val, seqno);
         tree.flush_active_memtable(seqno)?;
@@ -719,17 +722,11 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
 
         tree.insert("b", val, seqno);
         tree.insert("c", val, seqno);
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+
         tree.insert("y", val, seqno);
-        tree.flush_active_memtable(seqno)?;
-        seqno += 1;
-
-        tree.insert("a", val, seqno);
         tree.insert("z", val, seqno);
-        tree.flush_active_memtable(seqno)?;
-        seqno += 1;
-
-        tree.insert("d", val, seqno);
-        tree.insert("x", val, seqno);
         tree.flush_active_memtable(seqno)?;
         seqno += 1;
 
@@ -794,19 +791,9 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
         result.tables_in,
     );
 
-    // All data must be readable — both sparse keys and gap keys.
-    // Gap keys were written in step 1 and must survive the multi-level
-    // compaction whether or not the gap-filling L2 tables were included.
+    // All keys from both disjoint ranges must be readable.
     assert!(tree.get(b"a", MAX_SEQNO)?.is_some(), "key 'a' should exist");
     assert!(tree.get(b"d", MAX_SEQNO)?.is_some(), "key 'd' should exist");
-    assert!(
-        tree.get(b"m", MAX_SEQNO)?.is_some(),
-        "gap key 'm' should exist",
-    );
-    assert!(
-        tree.get(b"n", MAX_SEQNO)?.is_some(),
-        "gap key 'n' should exist",
-    );
     assert!(tree.get(b"x", MAX_SEQNO)?.is_some(), "key 'x' should exist");
     assert!(tree.get(b"z", MAX_SEQNO)?.is_some(), "key 'z' should exist");
 

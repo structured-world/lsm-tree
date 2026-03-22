@@ -11,7 +11,7 @@ use crate::{
     config::Config,
     slice_windows::{GrowingWindowsExt, ShrinkingWindowsExt},
     table::{util::aggregate_run_key_range, Table},
-    version::{Run, Version},
+    version::{run::Ranged, Run, Version},
     HashSet, TableId,
 };
 
@@ -748,28 +748,25 @@ impl CompactionStrategy for Strategy {
                         // Include ALL L1 tables (we're emptying L1 into L2)
                         table_ids.extend(target_level.list_ids());
 
-                        // Include overlapping L2 tables.
-                        //
-                        // Use L0 and L1 aggregate ranges SEPARATELY instead
-                        // of merging them into one range (#72). When L0 extends
-                        // beyond L1's key space (new keys not yet in L1), the
-                        // old merged range [min(L0,L1), max(L0,L1)] pulled in
-                        // L2 tables sitting in the gap between the two ranges.
-                        // Querying each aggregate independently avoids this.
-                        //
-                        // We must use L1's AGGREGATE range (not per-table)
-                        // because all L1 tables are included in the merge and
-                        // output may span L1's full range — any L2 table within
-                        // that range must be included to maintain disjointness.
-                        let l0_range = first_level.aggregate_key_range();
-                        let l1_range = target_level.aggregate_key_range();
-
+                        // Include overlapping L2 tables — query per input
+                        // table range instead of one coarse aggregate (#72).
+                        // An aggregate across disjoint tables (e.g. [a,d] and
+                        // [x,z] → [a,z]) covers gaps and pulls in L2 tables
+                        // that don't actually overlap any input table.
                         for run in l2.iter() {
-                            for t in run.get_overlapping(&l1_range) {
-                                table_ids.insert(Table::id(t));
+                            for l1_run in target_level.iter() {
+                                for t in l1_run.iter() {
+                                    for l2t in run.get_overlapping(t.key_range()) {
+                                        table_ids.insert(Table::id(l2t));
+                                    }
+                                }
                             }
-                            for t in run.get_overlapping(&l0_range) {
-                                table_ids.insert(Table::id(t));
+                            for l0_run in first_level.iter() {
+                                for t in l0_run.iter() {
+                                    for l2t in run.get_overlapping(t.key_range()) {
+                                        table_ids.insert(Table::id(l2t));
+                                    }
+                                }
                             }
                         }
 
