@@ -910,6 +910,10 @@ impl Tree {
             let key_hash = crate::table::filter::standard_bloom::Builder::get_hash(key);
             let key_slice = crate::Slice::from(key);
 
+            // TODO(#46): L0 runs can overlap — this flat scan may stop at
+            // a base in an older L0 run while a newer run has operands.
+            // The #46 refactor should use the same L0/L1+ split strategy
+            // as get_internal_entry_from_version.
             for table in super_version
                 .version
                 .iter_levels()
