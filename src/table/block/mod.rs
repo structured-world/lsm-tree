@@ -149,6 +149,11 @@ impl Block {
     ///
     /// Pipeline: read → verify checksum → decrypt → decompress.
     /// When `encryption` is `None`, the decrypt step is skipped.
+    ///
+    /// Encryption state is determined by the caller (via [`Config`]),
+    /// not recorded in the on-disk block header. Opening an encrypted
+    /// table without the correct provider will produce a checksum or
+    /// decompression error — not silent corruption.
     pub fn from_reader<R: std::io::Read>(
         reader: &mut R,
         compression: CompressionType,
