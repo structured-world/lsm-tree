@@ -11,7 +11,7 @@ use crate::{
     config::Config,
     slice_windows::{GrowingWindowsExt, ShrinkingWindowsExt},
     table::{util::aggregate_run_key_range, Table},
-    version::{Run, Version},
+    version::{run::Ranged, Run, Version},
     HashSet, TableId,
 };
 
@@ -748,16 +748,20 @@ impl CompactionStrategy for Strategy {
                         // Include ALL L1 tables (we're emptying L1 into L2)
                         table_ids.extend(target_level.list_ids());
 
-                        // Include overlapping L2 tables
-                        let combined_key_range = first_level.aggregate_key_range();
-                        let l1_key_range = target_level.aggregate_key_range();
-                        let merged_range =
-                            crate::KeyRange::aggregate([combined_key_range, l1_key_range].iter());
-
-                        let l2_overlapping: Vec<_> = l2
+                        // Include overlapping L2 tables — query per input table
+                        // range instead of one coarse aggregate to avoid pulling
+                        // in gap-filling L2 tables on sparse keyspaces (#72)
+                        let l2_overlapping: Vec<_> = first_level
                             .iter()
-                            .flat_map(|run| run.get_overlapping(&merged_range))
-                            .map(Table::id)
+                            .flat_map(|run| run.iter())
+                            .chain(target_level.iter().flat_map(|run| run.iter()))
+                            .flat_map(|table| {
+                                let kr = table.key_range();
+                                l2.iter()
+                                    .flat_map(|run| run.get_overlapping(kr))
+                                    .map(Table::id)
+                                    .collect::<Vec<_>>()
+                            })
                             .collect();
 
                         table_ids.extend(&l2_overlapping);

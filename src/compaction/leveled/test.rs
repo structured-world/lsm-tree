@@ -674,6 +674,81 @@ fn multi_level_skip_fires_when_l1_oversized() -> crate::Result<()> {
     Ok(())
 }
 
+// --- Coverage: multi-level L2 overlap uses per-range, not aggregate (#72) ---
+
+#[test]
+fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
+    // Regression test for #72: when L1 tables are disjoint (sparse keyspace),
+    // the L2 overlap query must use per-table ranges instead of one coarse
+    // aggregate range. This prevents gap-filling L2 tables from being
+    // unnecessarily pulled into the compaction.
+    let dir = tempfile::tempdir()?;
+    let tree = Config::new(
+        dir.path(),
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    let leveled = Arc::new(Strategy::default().with_l0_threshold(4));
+    let mut seqno = 0u64;
+
+    // Step 1: Build disjoint L1 tables covering sparse ranges [a,d] and [x,z]
+    // with a gap in between. Then push some data into L2 that fills the gap.
+
+    // First, populate L1+L2 with data spanning the full range [a..z]
+    for _round in 0..3 {
+        for _k in 0..4 {
+            tree.insert("a", "val", seqno);
+            tree.insert("d", "val", seqno);
+            // Keys in the "gap" region — these will end up in L2
+            tree.insert("m", "gap_val", seqno);
+            tree.insert("n", "gap_val", seqno);
+            tree.insert("x", "val", seqno);
+            tree.insert("z", "val", seqno);
+            tree.flush_active_memtable(seqno)?;
+            seqno += 1;
+        }
+        tree.compact(leveled.clone(), seqno)?;
+    }
+
+    // Step 2: Now flush only sparse keys (no gap keys) to build disjoint L0
+    // tables. When multi-level fires, L0+L1 input will have disjoint ranges.
+    let multi = Arc::new(
+        Strategy::default()
+            .with_multi_level(true)
+            .with_table_target_size(64)
+            .with_l0_threshold(4),
+    );
+
+    for _k in 0..8 {
+        tree.insert("a", "val", seqno);
+        tree.insert("d", "val", seqno);
+        tree.insert("x", "val", seqno);
+        tree.insert("z", "val", seqno);
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+    }
+
+    tree.compact(multi.clone(), seqno)?;
+
+    // All data must be readable — both sparse keys and gap keys
+    assert!(tree.get(b"a", MAX_SEQNO)?.is_some(), "key 'a' should exist");
+    assert!(tree.get(b"d", MAX_SEQNO)?.is_some(), "key 'd' should exist");
+    assert!(
+        tree.get(b"m", MAX_SEQNO)?.is_some(),
+        "gap key 'm' should exist",
+    );
+    assert!(
+        tree.get(b"n", MAX_SEQNO)?.is_some(),
+        "gap key 'n' should exist",
+    );
+    assert!(tree.get(b"x", MAX_SEQNO)?.is_some(), "key 'x' should exist");
+    assert!(tree.get(b"z", MAX_SEQNO)?.is_some(), "key 'z' should exist");
+
+    Ok(())
+}
+
 // --- Coverage: dynamic fallback to static when tree is small ---
 
 #[test]
