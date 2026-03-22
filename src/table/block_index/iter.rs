@@ -20,7 +20,7 @@ self_cell!(
 
 impl OwnedIndexBlockIter {
     /// Creates an owned iterator from a block and a comparator.
-    pub fn from_block(block: IndexBlock, comparator: SharedComparator) -> Self {
+    pub(crate) fn from_block(block: IndexBlock, comparator: SharedComparator) -> Self {
         Self::new(block, |b| b.iter(comparator))
     }
 
@@ -28,7 +28,7 @@ impl OwnedIndexBlockIter {
     ///
     /// Returns `None` if either seek operation indicates that no items
     /// fall within the given bounds.
-    pub fn from_block_with_bounds(
+    pub(crate) fn from_block_with_bounds(
         block: IndexBlock,
         comparator: SharedComparator,
         lo: Option<(&[u8], SeqNo)>,
@@ -41,6 +41,9 @@ impl OwnedIndexBlockIter {
                 return None;
             }
         }
+        // NOTE: seek_upper on index blocks (restart_interval=1) always succeeds —
+        // it positions the back-end cursor but does not reject out-of-range bounds.
+        // The None path here guards against future decoder changes.
         if let Some((key, seqno)) = hi {
             if !iter.seek_upper(key, seqno) {
                 return None;
