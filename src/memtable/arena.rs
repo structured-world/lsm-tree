@@ -50,7 +50,10 @@ impl Arena {
     pub fn capacity(&self) -> u32 {
         // SAFETY: reading `.len()` is a read-only operation on the boxed slice
         // and does not conflict with concurrent writes to different regions.
-        #[allow(clippy::cast_possible_truncation)] // capacity is set from u32 in new()
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "capacity originates from u32 in new(); len() cannot exceed u32::MAX"
+        )]
         unsafe {
             (&*self.buf.get()).len() as u32
         }
@@ -93,7 +96,10 @@ impl Arena {
     /// The caller must ensure that `offset..offset+len` was previously
     /// allocated by this arena and that initial writes to the region have
     /// been completed (with appropriate memory ordering).
-    #[allow(clippy::indexing_slicing)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "caller guarantees offset..offset+len is within an allocated region"
+    )]
     pub unsafe fn get_bytes(&self, offset: u32, len: u32) -> &[u8] {
         // SAFETY: the caller guarantees `offset..offset+len` lies within a
         // previously allocated, fully initialised arena region.  The bump
@@ -113,7 +119,14 @@ impl Arena {
     /// The caller must ensure exclusive access to the given range (typically
     /// right after allocation, before publishing the node offset to other
     /// threads).
-    #[allow(clippy::indexing_slicing, clippy::mut_from_ref)]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "caller guarantees offset..offset+len is within an allocated region"
+    )]
+    #[expect(
+        clippy::mut_from_ref,
+        reason = "interior mutability via UnsafeCell; caller guarantees exclusive access"
+    )]
     pub unsafe fn get_bytes_mut(&self, offset: u32, len: u32) -> &mut [u8] {
         // SAFETY: the caller guarantees exclusive access to the given range.
         // This is typically called immediately after `alloc()`, before the
@@ -138,7 +151,10 @@ impl Arena {
         // pointer for the given lifetime — the arena buffer is heap-allocated
         // and lives as long as `&self`.
         let buf = &*self.buf.get();
-        #[allow(clippy::cast_ptr_alignment)] // caller guarantees 4-byte alignment
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "caller guarantees 4-byte alignment via alloc(..., 4)"
+        )]
         let ptr = buf.as_ptr().add(offset as usize).cast_mut().cast::<u32>();
         debug_assert!(ptr.is_aligned(), "AtomicU32 requires 4-byte alignment");
         AtomicU32::from_ptr(ptr)

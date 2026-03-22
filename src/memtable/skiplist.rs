@@ -63,7 +63,7 @@ const OFF_HEIGHT: u32 = 11;
 const OFF_TOWER: u32 = 24;
 
 /// Byte size of a node with the given tower `height`.
-#[allow(clippy::cast_possible_truncation)] // height <= MAX_HEIGHT (20), always fits in u32
+#[expect(clippy::cast_possible_truncation, reason = "height <= MAX_HEIGHT (20), always fits in u32")]
 const fn node_size(height: usize) -> u32 {
     OFF_TOWER + (height as u32) * 4
 }
@@ -119,9 +119,9 @@ impl SkipMap {
         // we have exclusive access because no other thread can see this arena yet.
         unsafe {
             let bytes = arena.get_bytes_mut(head, head_size);
-            #[allow(clippy::indexing_slicing)] // OFF_HEIGHT (11) < head_size (104) by construction
+            #[expect(clippy::indexing_slicing, reason = "OFF_HEIGHT (11) < head_size (104) by construction")]
             {
-                #[allow(clippy::cast_possible_truncation)] // MAX_HEIGHT = 20, fits in u8
+                #[expect(clippy::cast_possible_truncation, reason = "MAX_HEIGHT = 20, fits in u8")]
                 {
                     bytes[OFF_HEIGHT as usize] = MAX_HEIGHT as u8;
                 }
@@ -156,7 +156,7 @@ impl SkipMap {
     ///
     /// Multiple entries with the same `user_key` but different `seqno` are
     /// expected (MVCC).  No deduplication is performed.
-    #[allow(clippy::indexing_slicing)] // preds/succs are [u32; MAX_HEIGHT]; level < height <= MAX_HEIGHT
+    #[expect(clippy::indexing_slicing, reason = "preds/succs are [u32; MAX_HEIGHT]; level < height <= MAX_HEIGHT")]
     pub fn insert(&self, key: &InternalKey, value: &UserValue) {
         let height = self.random_height();
         let node = self.alloc_node(key, value, height);
@@ -267,7 +267,7 @@ impl SkipMap {
     ///
     /// Key data is stored in the arena for comparison locality.
     /// Value data is appended to the heap-backed `values` Vec.
-    #[allow(clippy::cast_possible_truncation)] // key_bytes.len() <= u16::MAX, value idx <= u32::MAX, height <= MAX_HEIGHT (20)
+    #[expect(clippy::cast_possible_truncation, reason = "key_bytes.len() <= u16::MAX, value idx <= u32::MAX, height <= MAX_HEIGHT (20)")]
     fn alloc_node(&self, key: &InternalKey, value: &UserValue, height: usize) -> u32 {
         let key_bytes: &[u8] = &key.user_key;
 
@@ -351,7 +351,7 @@ impl SkipMap {
         self.arena.get_bytes(node, OFF_TOWER)
     }
 
-    #[allow(clippy::indexing_slicing)] // metadata is exactly OFF_TOWER (24) bytes by construction
+    #[expect(clippy::indexing_slicing, reason = "metadata is exactly OFF_TOWER (24) bytes by construction")]
     #[expect(
         clippy::expect_used,
         reason = "infallible: 4-byte slice always converts to [u8; 4]"
@@ -361,7 +361,7 @@ impl SkipMap {
         u32::from_ne_bytes(m[0..4].try_into().expect("4 bytes"))
     }
 
-    #[allow(clippy::indexing_slicing)] // metadata is exactly OFF_TOWER (24) bytes by construction
+    #[expect(clippy::indexing_slicing, reason = "metadata is exactly OFF_TOWER (24) bytes by construction")]
     #[expect(
         clippy::expect_used,
         reason = "infallible: 2-byte slice always converts to [u8; 2]"
@@ -371,7 +371,7 @@ impl SkipMap {
         u16::from_ne_bytes(m[8..10].try_into().expect("2 bytes"))
     }
 
-    #[allow(clippy::indexing_slicing)] // metadata is exactly OFF_TOWER (24) bytes by construction
+    #[expect(clippy::indexing_slicing, reason = "metadata is exactly OFF_TOWER (24) bytes by construction")]
     #[expect(
         clippy::expect_used,
         reason = "ValueType discriminant written during alloc_node is always valid"
@@ -381,7 +381,7 @@ impl SkipMap {
         ValueType::try_from(m[10]).expect("valid ValueType discriminant")
     }
 
-    #[allow(clippy::indexing_slicing)] // metadata is exactly OFF_TOWER (24) bytes by construction
+    #[expect(clippy::indexing_slicing, reason = "metadata is exactly OFF_TOWER (24) bytes by construction")]
     #[expect(
         clippy::expect_used,
         reason = "infallible: 4-byte slice always converts to [u8; 4]"
@@ -391,7 +391,7 @@ impl SkipMap {
         u32::from_ne_bytes(m[4..8].try_into().expect("4 bytes"))
     }
 
-    #[allow(clippy::indexing_slicing)] // metadata is exactly OFF_TOWER (24) bytes by construction
+    #[expect(clippy::indexing_slicing, reason = "metadata is exactly OFF_TOWER (24) bytes by construction")]
     #[expect(
         clippy::expect_used,
         reason = "infallible: 8-byte slice always converts to [u8; 8]"
@@ -442,7 +442,7 @@ impl SkipMap {
     /// # Safety
     ///
     /// `level` must be < the node's height.
-    #[allow(clippy::cast_possible_truncation)] // level < MAX_HEIGHT (20), fits in u32
+    #[expect(clippy::cast_possible_truncation, reason = "level < MAX_HEIGHT (20), fits in u32")]
     unsafe fn tower_atomic(&self, node: u32, level: usize) -> &std::sync::atomic::AtomicU32 {
         // SAFETY: caller guarantees level < node height; node + OFF_TOWER + level*4
         // is within the node's arena allocation and 4-byte aligned.
@@ -487,7 +487,7 @@ impl SkipMap {
     // -----------------------------------------------------------------------
 
     /// Populates `preds` and `succs` arrays with the splice point for `key`.
-    #[allow(clippy::indexing_slicing)] // level < list_h <= MAX_HEIGHT
+    #[expect(clippy::indexing_slicing, reason = "level < list_h <= MAX_HEIGHT")]
     fn find_splice(
         &self,
         key: &InternalKey,
@@ -516,7 +516,7 @@ impl SkipMap {
 
     /// Re-searches at a single `level` starting from the stored predecessor
     /// (or a higher-level predecessor as fallback).
-    #[allow(clippy::indexing_slicing)] // level < MAX_HEIGHT; preds/succs are [u32; MAX_HEIGHT]
+    #[expect(clippy::indexing_slicing, reason = "level < MAX_HEIGHT; preds/succs are [u32; MAX_HEIGHT]")]
     fn find_splice_for_level(
         &self,
         key: &InternalKey,
