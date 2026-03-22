@@ -16,6 +16,7 @@
 
 use super::arena::Arena;
 use super::value_store::ValueStore;
+use crate::comparator::SharedComparator;
 use crate::key::InternalKey;
 use crate::value::{SeqNo, UserValue};
 use crate::{UserKey, ValueType};
@@ -84,6 +85,8 @@ pub struct SkipMap {
     /// cache locality during comparisons; values live here so large blobs
     /// don't exhaust the arena.  Indexed by `value_idx` stored in each node.
     values: ValueStore,
+    /// User key comparator for ordering entries.
+    comparator: SharedComparator,
     /// Offset of the sentinel head node in the arena.
     head: u32,
     /// Current maximum height of any inserted node.
@@ -95,10 +98,10 @@ pub struct SkipMap {
 }
 
 impl SkipMap {
-    /// Creates a new empty skiplist.
+    /// Creates a new empty skiplist with the given user key comparator.
     ///
     /// The arena grows lazily in 4 MiB blocks — no large upfront allocation.
-    pub fn new() -> Self {
+    pub fn new(comparator: SharedComparator) -> Self {
         let arena = Arena::new();
 
         // Allocate the head sentinel with MAX_HEIGHT.
@@ -144,6 +147,7 @@ impl SkipMap {
         Self {
             arena,
             values: ValueStore::new(),
+            comparator,
             head,
             height: AtomicUsize::new(1),
             len: AtomicUsize::new(0),
@@ -473,13 +477,13 @@ impl SkipMap {
     // Internal: key comparison
     // -----------------------------------------------------------------------
 
-    /// Compares the key stored at `node` with `target` using `InternalKey`
-    /// ordering (`user_key` ASC, seqno DESC).
+    /// Compares the key stored at `node` with `target` using the pluggable
+    /// `UserComparator` for `user_key` ordering, then seqno DESC.
     fn compare_key(&self, node: u32, target: &InternalKey) -> CmpOrdering {
         let node_uk = self.node_user_key_bytes(node);
         let target_uk: &[u8] = &target.user_key;
 
-        match node_uk.cmp(target_uk) {
+        match self.comparator.compare(node_uk, target_uk) {
             CmpOrdering::Equal => {
                 // Reverse seqno: higher seqno sorts first.
                 let node_seq = self.node_seqno(node);
@@ -757,12 +761,6 @@ impl SkipMap {
     }
 }
 
-impl Default for SkipMap {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Entry reference
 // ---------------------------------------------------------------------------
@@ -968,6 +966,10 @@ mod tests {
     use super::*;
     use crate::ValueType;
 
+    fn new_map() -> SkipMap {
+        SkipMap::new(crate::comparator::default_comparator())
+    }
+
     fn make_key(user_key: &[u8], seqno: SeqNo) -> InternalKey {
         InternalKey::new(user_key.to_vec(), seqno, ValueType::Value)
     }
@@ -978,7 +980,7 @@ mod tests {
 
     #[test]
     fn insert_and_get_single() {
-        let map = SkipMap::new();
+        let map = new_map();
         let key = make_key(b"hello", 1);
         let val = make_value(b"world");
         map.insert(&key, &val);
@@ -996,7 +998,7 @@ mod tests {
 
     #[test]
     fn ordering_user_key_asc_seqno_desc() {
-        let map = SkipMap::new();
+        let map = new_map();
 
         // Same user_key, different seqnos → should iterate highest seqno first.
         map.insert(&make_key(b"abc", 1), &make_value(b"v1"));
@@ -1025,7 +1027,7 @@ mod tests {
 
     #[test]
     fn range_lower_bound() {
-        let map = SkipMap::new();
+        let map = new_map();
         for i in 0u8..10 {
             let key = vec![b'a' + i];
             map.insert(&make_key(&key, 0), &make_value(&[i]));
@@ -1039,7 +1041,7 @@ mod tests {
 
     #[test]
     fn range_bounded() {
-        let map = SkipMap::new();
+        let map = new_map();
         for i in 0u8..10 {
             let key = vec![b'a' + i];
             map.insert(&make_key(&key, 0), &make_value(&[i]));
@@ -1053,7 +1055,7 @@ mod tests {
 
     #[test]
     fn double_ended_iter() {
-        let map = SkipMap::new();
+        let map = new_map();
         for i in 0u8..5 {
             let key = vec![b'a' + i];
             map.insert(&make_key(&key, 0), &make_value(&[i]));
@@ -1071,7 +1073,7 @@ mod tests {
 
     #[test]
     fn double_ended_range() {
-        let map = SkipMap::new();
+        let map = new_map();
         for i in 0u8..10 {
             let key = vec![b'a' + i];
             map.insert(&make_key(&key, 0), &make_value(&[i]));
@@ -1089,7 +1091,7 @@ mod tests {
 
     #[test]
     fn empty_value() {
-        let map = SkipMap::new();
+        let map = new_map();
         map.insert(&make_key(b"k", 0), &make_value(b""));
         let entry = map.iter().next().unwrap();
         assert!(entry.value().is_empty());
@@ -1099,7 +1101,7 @@ mod tests {
     fn concurrent_inserts() {
         use std::sync::Arc;
 
-        let map = Arc::new(SkipMap::new());
+        let map = Arc::new(new_map());
         let n_threads = 8;
         let n_per_thread = 1000;
 
@@ -1132,7 +1134,7 @@ mod tests {
 
     #[test]
     fn mvcc_point_lookup_via_range() {
-        let map = SkipMap::new();
+        let map = new_map();
 
         // Insert 3 versions of "key" at seqnos 1, 2, 3.
         map.insert(&make_key(b"key", 1), &make_value(b"v1"));
@@ -1175,7 +1177,7 @@ mod tests {
 
     #[test]
     fn empty_iter_next_back() {
-        let map = SkipMap::new();
+        let map = new_map();
         let mut iter = map.iter();
         assert!(iter.next().is_none());
         assert!(iter.next_back().is_none());
@@ -1183,7 +1185,7 @@ mod tests {
 
     #[test]
     fn empty_range_next_back() {
-        let map = SkipMap::new();
+        let map = new_map();
         let lo = make_key(b"a", SeqNo::MAX);
         let hi = make_key(b"z", 0);
         let mut range = map.range(lo..=hi);
@@ -1193,7 +1195,7 @@ mod tests {
 
     #[test]
     fn range_excluded_end_next_back() {
-        let map = SkipMap::new();
+        let map = new_map();
         for i in 0u8..5 {
             map.insert(&make_key(&[b'a' + i], 0), &make_value(&[i]));
         }
@@ -1211,7 +1213,7 @@ mod tests {
 
     #[test]
     fn seek_le_all_greater_returns_none() {
-        let map = SkipMap::new();
+        let map = new_map();
         map.insert(&make_key(b"m", 0), &make_value(b"v"));
 
         // All keys > "a", so seek_le("a") returns UNSET → next_back = None
@@ -1222,7 +1224,7 @@ mod tests {
 
     #[test]
     fn next_back_on_first_element() {
-        let map = SkipMap::new();
+        let map = new_map();
         map.insert(&make_key(b"only", 0), &make_value(b"v"));
 
         let mut iter = map.iter();
@@ -1231,12 +1233,5 @@ mod tests {
         assert_eq!(&*entry.key().user_key, b"only");
         assert!(iter.next().is_none());
         assert!(iter.next_back().is_none());
-    }
-
-    #[test]
-    fn default_impl() {
-        let map = SkipMap::default();
-        assert!(map.is_empty());
-        assert_eq!(map.len(), 0);
     }
 }

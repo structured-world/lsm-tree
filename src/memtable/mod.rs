@@ -98,8 +98,8 @@ impl Memtable {
     pub fn new(id: MemtableId, comparator: SharedComparator) -> Self {
         Self {
             id,
+            items: skiplist::SkipMap::new(comparator.clone()),
             comparator,
-            items: skiplist::SkipMap::new(),
             range_tombstones: RwLock::new(interval_tree::IntervalTree::new()),
             approximate_size: AtomicU64::default(),
             highest_seqno: AtomicU64::default(),
