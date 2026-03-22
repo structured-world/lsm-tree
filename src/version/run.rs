@@ -2,6 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
+use crate::comparator::UserComparator;
 use crate::KeyRange;
 use std::ops::{Bound, RangeBounds};
 
@@ -81,6 +82,14 @@ impl<T: Ranged> Run<T> {
             .sort_by(|a, b| a.key_range().min().cmp(b.key_range().min()));
     }
 
+    /// Like [`push`], but sorts tables using a custom comparator for key ordering.
+    pub fn push_cmp(&mut self, item: T, cmp: &dyn UserComparator) {
+        self.0.push(item);
+
+        self.0
+            .sort_by(|a, b| cmp.compare(a.key_range().min(), b.key_range().min()));
+    }
+
     pub fn extend(&mut self, items: Vec<T>) {
         self.0.extend(items);
     }
@@ -141,6 +150,21 @@ impl<T: Ranged> Run<T> {
         let range = key_range.min()..=key_range.max();
 
         let Some((lo, hi)) = self.range_overlap_indexes::<crate::Slice, _>(&range) else {
+            return &[];
+        };
+
+        self.get(lo..=hi).unwrap_or_default()
+    }
+
+    /// Like [`get_overlapping`], but uses a custom comparator for key ordering.
+    pub fn get_overlapping_cmp<'a>(
+        &'a self,
+        key_range: &'a KeyRange,
+        cmp: &dyn UserComparator,
+    ) -> &'a [T] {
+        let range = key_range.min()..=key_range.max();
+
+        let Some((lo, hi)) = self.range_overlap_indexes_cmp::<crate::Slice, _>(&range, cmp) else {
             return &[];
         };
 
@@ -224,6 +248,68 @@ impl<T: Ranged> Run<T> {
                 }
 
                 idx.saturating_sub(1) // To avoid underflow
+            }
+        };
+
+        if lo > hi {
+            return None;
+        }
+
+        Some((lo, hi))
+    }
+
+    /// Like [`range_overlap_indexes`], but uses a custom comparator for key ordering.
+    pub fn range_overlap_indexes_cmp<K: AsRef<[u8]>, R: RangeBounds<K>>(
+        &self,
+        key_range: &R,
+        cmp: &dyn UserComparator,
+    ) -> Option<(usize, usize)> {
+        use std::cmp::Ordering;
+
+        let level = &self.0;
+
+        let lo = match key_range.start_bound() {
+            Bound::Unbounded => 0,
+            Bound::Included(start_key) => level.partition_point(|x| {
+                cmp.compare(x.key_range().max(), start_key.as_ref()) == Ordering::Less
+            }),
+            Bound::Excluded(start_key) => level.partition_point(|x| {
+                cmp.compare(x.key_range().max(), start_key.as_ref()) != Ordering::Greater
+            }),
+        };
+
+        if lo >= level.len() {
+            return None;
+        }
+
+        #[expect(clippy::indexing_slicing)]
+        let truncated_level = &level[lo..];
+
+        let hi = match key_range.end_bound() {
+            Bound::Unbounded => level.len() - 1,
+            Bound::Included(end_key) => {
+                let idx = lo
+                    + truncated_level.partition_point(|x| {
+                        cmp.compare(x.key_range().min(), end_key.as_ref()) != Ordering::Greater
+                    });
+
+                if idx == 0 {
+                    return None;
+                }
+
+                idx.saturating_sub(1)
+            }
+            Bound::Excluded(end_key) => {
+                let idx = lo
+                    + truncated_level.partition_point(|x| {
+                        cmp.compare(x.key_range().min(), end_key.as_ref()) == Ordering::Less
+                    });
+
+                if idx == 0 {
+                    return None;
+                }
+
+                idx.saturating_sub(1)
             }
         };
 

@@ -75,6 +75,19 @@ impl KeyRange {
         end1 >= start2 && start1 <= end2
     }
 
+    /// Like [`overlaps_with_key_range`], but uses a custom comparator for key ordering.
+    #[must_use]
+    pub fn overlaps_with_key_range_cmp(
+        &self,
+        other: &Self,
+        cmp: &dyn crate::comparator::UserComparator,
+    ) -> bool {
+        let (start1, end1) = self.as_tuple();
+        let (start2, end2) = other.as_tuple();
+        cmp.compare(end1, start2) != std::cmp::Ordering::Less
+            && cmp.compare(start1, end2) != std::cmp::Ordering::Greater
+    }
+
     /// Returns `true` if the ranges overlap partially or fully.
     #[must_use]
     pub fn overlaps_with_bounds(&self, bounds: &(Bound<&[u8]>, Bound<&[u8]>)) -> bool {

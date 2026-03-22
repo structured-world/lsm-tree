@@ -262,7 +262,6 @@ fn u64_comparator_compaction_with_tombstones() -> lsm_tree::Result<()> {
 // ===========================================================================
 
 #[test]
-#[ignore = "Run::push() sorts tables lexicographically, not by custom comparator"]
 fn reverse_comparator_leveled_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
@@ -297,7 +296,6 @@ fn reverse_comparator_leveled_compaction() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "Run::push() sorts tables lexicographically, not by custom comparator"]
 fn reverse_comparator_size_tiered_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
@@ -330,7 +328,6 @@ fn reverse_comparator_size_tiered_compaction() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "Run::push() sorts tables lexicographically, not by custom comparator"]
 fn reverse_comparator_major_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
@@ -365,7 +362,6 @@ fn reverse_comparator_major_compaction() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "Run::push() sorts tables lexicographically, not by custom comparator"]
 fn reverse_comparator_compaction_with_updates() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
@@ -414,7 +410,7 @@ fn reverse_comparator_compaction_with_updates() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "Run::push() sorts tables lexicographically, not by custom comparator"]
+#[ignore = "RunReader::new() uses lexicographic range_overlap_indexes — needs comparator plumbing"]
 fn reverse_comparator_range_scan_after_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
@@ -715,7 +711,6 @@ fn reverse_comparator_merge_after_single_flush() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "Run::push() sorts tables lexicographically, not by custom comparator"]
 fn reverse_comparator_merge_across_flush_boundary() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
@@ -742,7 +737,6 @@ fn reverse_comparator_merge_across_flush_boundary() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "Run::push() sorts tables lexicographically, not by custom comparator"]
 fn reverse_comparator_merge_after_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
@@ -794,7 +788,7 @@ fn reverse_comparator_merge_after_compaction() -> lsm_tree::Result<()> {
 }
 
 #[test]
-#[ignore = "Run::push() sorts tables lexicographically, not by custom comparator"]
+#[ignore = "RunReader::new() uses lexicographic range_overlap_indexes — needs comparator plumbing"]
 fn reverse_comparator_merge_range_scan_after_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let seqno = SequenceNumberCounter::default();
