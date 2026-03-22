@@ -6,10 +6,6 @@ use crate::{
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::{io::BufWriter, path::Path};
 
-/// Maximum comparator name length, enforced symmetrically on write
-/// (here) and read (`Manifest::decode_from`).
-const MAX_COMPARATOR_NAME_LEN: usize = 256;
-
 pub fn persist_version(
     folder: &Path,
     version: &Version,
@@ -18,8 +14,9 @@ pub fn persist_version(
     // Panic is intentional: `UserComparator::name()` returns `&'static str`,
     // so an oversized name is a programmer error, not a runtime condition.
     assert!(
-        comparator_name.len() <= MAX_COMPARATOR_NAME_LEN,
-        "comparator name exceeds {MAX_COMPARATOR_NAME_LEN} bytes",
+        comparator_name.len() <= crate::comparator::MAX_COMPARATOR_NAME_BYTES,
+        "comparator name exceeds {} bytes",
+        crate::comparator::MAX_COMPARATOR_NAME_BYTES,
     );
 
     log::trace!(

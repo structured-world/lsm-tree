@@ -116,6 +116,11 @@ impl UserComparator for DefaultUserComparator {
 /// Shared reference to a [`UserComparator`].
 pub type SharedComparator = Arc<dyn UserComparator>;
 
+/// Maximum byte length for a comparator name.
+///
+/// Enforced on write (`persist_version`) and read (`Manifest::decode_from`).
+pub(crate) const MAX_COMPARATOR_NAME_BYTES: usize = 256;
+
 /// Returns the default comparator (lexicographic byte ordering).
 ///
 /// Uses a shared static instance to avoid repeated allocations.

@@ -98,12 +98,12 @@ impl Manifest {
         // Custom comparators cannot exist in old manifests.
         let comparator_name = match toc.section(b"comparator_name") {
             Some(section) => {
-                const MAX_COMPARATOR_NAME_LEN: u64 = 256;
+                let limit = crate::comparator::MAX_COMPARATOR_NAME_BYTES as u64;
 
-                if section.len() > MAX_COMPARATOR_NAME_LEN {
+                if section.len() > limit {
                     return Err(crate::Error::DecompressedSizeTooLarge {
                         declared: section.len(),
-                        limit: MAX_COMPARATOR_NAME_LEN,
+                        limit,
                     });
                 }
 

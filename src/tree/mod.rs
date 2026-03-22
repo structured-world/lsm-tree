@@ -1345,7 +1345,7 @@ impl Tree {
 
             let supplied_name = config.comparator.name();
             if manifest.comparator_name != supplied_name {
-                log::error!(
+                log::warn!(
                     "Comparator mismatch: tree was created with {:?} but opened with {:?}",
                     manifest.comparator_name,
                     supplied_name,
