@@ -38,9 +38,6 @@ use std::fs::File;
 /// independent storage formats that may diverge in the future.
 const MAX_DECOMPRESSION_SIZE: u32 = 256 * 1024 * 1024;
 
-/// Maximum encryption overhead per block (12-byte nonce + 16-byte GCM tag).
-const ENCRYPTION_OVERHEAD: u32 = 28;
-
 /// A block on disk
 ///
 /// Consists of a fixed-size header and some bytes (the data/payload).
@@ -161,11 +158,17 @@ impl Block {
 
         // Validate both size fields before any I/O or hashing to fail fast
         // on malformed headers. The on-disk data_length may include encryption
-        // overhead (nonce + auth tag), so allow a bounded margin.
-        if header.data_length > MAX_DECOMPRESSION_SIZE + ENCRYPTION_OVERHEAD {
+        // overhead (nonce + auth tag), so allow the provider's declared margin.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "overhead is a few dozen bytes"
+        )]
+        let enc_overhead = encryption.map_or(0u32, |e| e.max_overhead() as u32);
+
+        if header.data_length > MAX_DECOMPRESSION_SIZE + enc_overhead {
             return Err(crate::Error::DecompressedSizeTooLarge {
                 declared: u64::from(header.data_length),
-                limit: u64::from(MAX_DECOMPRESSION_SIZE + ENCRYPTION_OVERHEAD),
+                limit: u64::from(MAX_DECOMPRESSION_SIZE + enc_overhead),
             });
         }
 
@@ -260,10 +263,10 @@ impl Block {
         encryption: Option<&dyn EncryptionProvider>,
     ) -> crate::Result<Self> {
         // handle.size() includes Header::serialized_len(), so allow that overhead.
-        // Encrypted blocks add nonce + tag to the on-disk size.
-        let max_on_disk_size = u64::from(MAX_DECOMPRESSION_SIZE)
-            + Header::serialized_len() as u64
-            + u64::from(ENCRYPTION_OVERHEAD);
+        // Encrypted blocks add provider-specific overhead to the on-disk size.
+        let enc_overhead = encryption.map_or(0u64, |e| e.max_overhead() as u64);
+        let max_on_disk_size =
+            u64::from(MAX_DECOMPRESSION_SIZE) + Header::serialized_len() as u64 + enc_overhead;
 
         if u64::from(handle.size()) > max_on_disk_size {
             return Err(crate::Error::DecompressedSizeTooLarge {
@@ -736,8 +739,8 @@ mod tests {
         let mut header = Header::decode_from(&mut reader).unwrap();
         let payload: Vec<u8> = reader.to_vec();
 
-        // Set data_length past the limit (MAX + encryption overhead + 1)
-        header.data_length = MAX_DECOMPRESSION_SIZE + 28 + 1;
+        // Set data_length past the limit (no encryption → overhead is 0)
+        header.data_length = MAX_DECOMPRESSION_SIZE + 1;
         let mut tampered = header.encode_into_vec();
         tampered.extend_from_slice(&payload);
 

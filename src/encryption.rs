@@ -42,6 +42,12 @@ pub trait EncryptionProvider:
     /// Returns [`crate::Error::Encrypt`] if the encryption operation fails.
     fn encrypt(&self, plaintext: &[u8]) -> crate::Result<Vec<u8>>;
 
+    /// Maximum number of bytes that encryption adds to a plaintext payload.
+    ///
+    /// Used by block I/O to account for encryption overhead in size
+    /// validation. For AES-256-GCM this is 28 (12-byte nonce + 16-byte tag).
+    fn max_overhead(&self) -> usize;
+
     /// Decrypt `ciphertext` previously produced by [`encrypt`](EncryptionProvider::encrypt).
     ///
     /// # Errors
@@ -115,6 +121,10 @@ impl Aes256GcmProvider {
 
 #[cfg(feature = "encryption")]
 impl EncryptionProvider for Aes256GcmProvider {
+    fn max_overhead(&self) -> usize {
+        Self::OVERHEAD
+    }
+
     fn encrypt(&self, plaintext: &[u8]) -> crate::Result<Vec<u8>> {
         use aes_gcm::aead::OsRng;
         use aes_gcm::AeadCore;
