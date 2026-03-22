@@ -945,7 +945,7 @@ fn merge_disk_base_via_point_lookup() -> lsm_tree::Result<()> {
 }
 
 /// Merge with Tombstone base in sealed memtable — exercises sealed memtable
-/// scan path in resolve_merge_via_pipeline (lines ~868-877).
+/// scan path in resolve_merge_via_pipeline.
 #[test]
 fn merge_tombstone_in_sealed_memtable() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;

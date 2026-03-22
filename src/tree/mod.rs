@@ -804,6 +804,9 @@ impl Tree {
             metrics: None,
         };
 
+        // Intentionally reuses the full TreeIter pipeline (with bloom pre-filter)
+        // rather than a hand-rolled loop, to share merge/RT/Indirection logic
+        // with range scans. The bloom hash skips most tables at the filter level.
         let mut iter = TreeIter::create_range(iter_state, range, seqno);
 
         match iter.next() {
