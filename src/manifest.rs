@@ -208,4 +208,38 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn manifest_rejects_invalid_utf8_comparator_name() -> crate::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("manifest");
+
+        // Write manifest with invalid UTF-8 bytes in comparator_name
+        let file = std::fs::File::create(&path)?;
+        let mut writer = sfa::Writer::from_writer(std::io::BufWriter::new(file));
+
+        writer.start("format_version")?;
+        writer.write_u8(FormatVersion::V4.into())?;
+        writer.start("tree_type")?;
+        writer.write_u8(TreeType::Standard.into())?;
+        writer.start("level_count")?;
+        writer.write_u8(7)?;
+        writer.start("filter_hash_type")?;
+        writer.write_u8(u8::from(ChecksumType::Xxh3))?;
+        writer.start("comparator_name")?;
+        writer.write_all(&[0xFF, 0xFE])?;
+
+        writer.finish().map_err(|e| match e {
+            sfa::Error::Io(e) => crate::Error::from(e),
+            _ => unreachable!(),
+        })?;
+
+        let reader = sfa::Reader::new(&path)?;
+        let result = Manifest::decode_from(&path, &reader);
+        assert!(
+            matches!(result, Err(crate::Error::Utf8(_))),
+            "expected Utf8 error"
+        );
+        Ok(())
+    }
 }
