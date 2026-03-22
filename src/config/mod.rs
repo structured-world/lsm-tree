@@ -580,6 +580,14 @@ impl Config {
     /// The caller is responsible for key management and rotation.
     /// See [`crate::Aes256GcmProvider`] (behind the `encryption` feature)
     /// for a ready-to-use AES-256-GCM implementation.
+    ///
+    /// **Important constraints:**
+    /// - Encryption state is NOT recorded in SST metadata. Opening an
+    ///   encrypted tree without the correct provider (or vice versa) will
+    ///   cause block validation errors, not silent corruption.
+    /// - Blob files (KV-separated large values) are NOT covered by
+    ///   block-level encryption. Large values stored via KV separation
+    ///   remain in plaintext on disk.
     #[must_use]
     pub fn with_encryption(mut self, encryption: Option<Arc<dyn EncryptionProvider>>) -> Self {
         self.encryption = encryption;

@@ -121,6 +121,10 @@ impl Block {
         // enforced on the read path (MAX_DECOMPRESSION_SIZE + encryption overhead).
         // Check in u64 first to produce the correct DecompressedSizeTooLarge error,
         // then narrow to u32 for the header field.
+        //
+        // NOTE: max_overhead() is used only for the LIMIT — the actual ciphertext
+        // length is checked against it regardless. A buggy provider that expands
+        // beyond max_overhead() will be caught by this check (payload > limit).
         let max_payload = u64::from(MAX_DECOMPRESSION_SIZE)
             + encryption.map_or(0u64, |enc| enc.max_overhead() as u64);
 

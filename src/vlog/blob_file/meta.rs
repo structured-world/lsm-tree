@@ -98,12 +98,15 @@ impl Metadata {
         // TODO: no binary index
         let buf = DataBlock::encode_into_vec(&meta_items, 1, 0.0)?;
 
-        // Blob file metadata is not encrypted. It contains structural fields
-        // (version, counts, compression) plus key_range (min/max keys) which
-        // may leak key prefixes. Full blob-level encryption (including metadata)
-        // is planned as a follow-up to block-level encryption.
-        // TODO: encrypt blob metadata when encryption provider is threaded
-        // through the blob file writer/reader paths.
+        // Blob files are currently not encrypted at all: neither this metadata
+        // block nor the blob value frames/contents are covered by block-level
+        // encryption. The metadata contains structural fields (version, counts,
+        // compression) plus key_range (min/max keys), which may leak key
+        // prefixes, and KV separation can leave large values on disk in
+        // plaintext. Full blob-level encryption (metadata + contents) is
+        // planned as a follow-up to block-level encryption.
+        // TODO: encrypt blob metadata and blob contents when an encryption
+        // provider is threaded through the blob file writer/reader paths.
         Block::write_into(
             writer,
             &buf,
