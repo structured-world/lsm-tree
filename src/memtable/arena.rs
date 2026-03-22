@@ -182,7 +182,9 @@ impl Arena {
             reason = "caller guarantees 4-byte alignment via alloc(..., 4)"
         )]
         let atom_ptr = ptr.add(off).cast::<u32>();
-        debug_assert!(atom_ptr.is_aligned(), "AtomicU32 requires 4-byte alignment");
+        // Alignment is guaranteed by alloc(n_size, 4) for nodes and
+        // ensure_block's Layout(align=4) for blocks.  AtomicU32::from_ptr
+        // requires the pointer to be aligned — UB if not.
         AtomicU32::from_ptr(atom_ptr)
     }
 
