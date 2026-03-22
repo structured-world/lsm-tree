@@ -42,6 +42,9 @@ impl UserComparator for U64BigEndianComparator {
             let b_u64 = u64::from_be_bytes(b.try_into().unwrap());
             a_u64.cmp(&b_u64)
         } else {
+            // Fallback for non-8-byte keys (e.g. internal metadata). All test
+            // keys are 8-byte u64s so this branch doesn't affect test ordering.
+            // Matches the pattern in tests/custom_comparator.rs.
             a.cmp(b)
         }
     }
