@@ -9,9 +9,17 @@ use std::sync::Arc;
 /// Comparators must be safe across unwind boundaries since they are stored
 /// in tree structures that may be referenced inside `catch_unwind` blocks.
 ///
-/// Implementations define the sort order for user keys stored in the LSM-tree.
-/// The comparator must be consistent: if `compare(a, b)` returns `Ordering::Less`,
-/// then `compare(b, a)` must return `Ordering::Greater`, and vice versa.
+/// Implementations must define a **strict total order** suitable for use in
+/// sorted data structures (memtable skip list, SST block index, merge heap).
+/// Specifically:
+///
+/// - **Totality**: for all `a`, `b`, exactly one of `Less`, `Equal`, `Greater` holds
+/// - **Transitivity**: `a < b` and `b < c` implies `a < c`
+/// - **Antisymmetry**: `compare(a, b) == Less` iff `compare(b, a) == Greater`
+/// - **Reflexivity**: `compare(a, a) == Equal`
+///
+/// Violating these invariants corrupts the sort order and produces incorrect
+/// query results.
 ///
 /// # Important
 ///
@@ -39,6 +47,15 @@ use std::sync::Arc;
 pub trait UserComparator: Send + Sync + std::panic::RefUnwindSafe + 'static {
     /// Compares two user keys, returning their ordering.
     fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering;
+
+    /// Returns `true` if this comparator is lexicographic byte ordering.
+    ///
+    /// When `true`, internal optimizations can avoid allocations in
+    /// prefix-compressed block comparisons. Override only if your
+    /// comparator is truly equivalent to `a.cmp(b)` on raw bytes.
+    fn is_lexicographic(&self) -> bool {
+        false
+    }
 }
 
 /// Default comparator using lexicographic byte ordering.
@@ -53,13 +70,23 @@ impl UserComparator for DefaultUserComparator {
     fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
         a.cmp(b)
     }
+
+    #[inline]
+    fn is_lexicographic(&self) -> bool {
+        true
+    }
 }
 
 /// Shared reference to a [`UserComparator`].
 pub type SharedComparator = Arc<dyn UserComparator>;
 
 /// Returns the default comparator (lexicographic byte ordering).
+///
+/// Uses a shared static instance to avoid repeated allocations.
 #[must_use]
 pub(crate) fn default_comparator() -> SharedComparator {
-    Arc::new(DefaultUserComparator)
+    // LazyLock creates the Arc once; subsequent calls just clone the Arc (ref-count bump).
+    static DEFAULT: std::sync::LazyLock<SharedComparator> =
+        std::sync::LazyLock::new(|| Arc::new(DefaultUserComparator));
+    DEFAULT.clone()
 }

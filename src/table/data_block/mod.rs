@@ -284,6 +284,8 @@ impl ParsedItem<InternalValue> for DataBlockParsedItem {
         bytes: &[u8],
         cmp: &dyn crate::comparator::UserComparator,
     ) -> std::cmp::Ordering {
+        // SAFETY: slice indexes come from the block parser which validates them
+        // during decoding. The block format guarantees they are within bounds.
         if let Some(prefix) = &self.prefix {
             let prefix = unsafe { bytes.get_unchecked(prefix.0..prefix.1) };
             let rest_key = unsafe { bytes.get_unchecked(self.key.0..self.key.1) };

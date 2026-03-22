@@ -43,12 +43,7 @@ pub struct Merger<I> {
 
 impl<I: Iterator<Item = IterItem>> Merger<I> {
     #[must_use]
-    pub fn new(iterators: Vec<I>) -> Self {
-        Self::with_comparator(iterators, comparator::default_comparator())
-    }
-
-    #[must_use]
-    pub fn with_comparator(iterators: Vec<I>, comparator: SharedComparator) -> Self {
+    pub fn new(iterators: Vec<I>, comparator: SharedComparator) -> Self {
         let heap = Heap::with_capacity(iterators.len());
 
         let iterators = iterators.into_iter().collect::<Vec<_>>();
@@ -145,7 +140,10 @@ mod tests {
             Ok(InternalValue::from_components("b", b"", 0, Value)),
         ];
 
-        let mut iter = Merger::new(vec![a.into_iter(), b.into_iter()]);
+        let mut iter = Merger::new(
+            vec![a.into_iter(), b.into_iter()],
+            comparator::default_comparator(),
+        );
 
         assert_eq!(
             iter.next().unwrap()?,
@@ -173,7 +171,10 @@ mod tests {
             Ok(InternalValue::from_components("a", b"", 0, Value)),
         ];
 
-        let mut iter = Merger::new(vec![a.into_iter(), b.into_iter()]);
+        let mut iter = Merger::new(
+            vec![a.into_iter(), b.into_iter()],
+            comparator::default_comparator(),
+        );
 
         assert_eq!(
             iter.next().unwrap()?,

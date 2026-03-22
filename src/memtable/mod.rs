@@ -122,6 +122,9 @@ impl Memtable {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    // NOTE: #[doc(hidden)] — internal API, not part of the semver contract.
+    // The comparator parameter is mandatory because memtable ordering must
+    // match the tree's comparator; a default would silently produce wrong order.
     #[doc(hidden)]
     #[must_use]
     pub fn new(id: MemtableId, comparator: SharedComparator) -> Self {

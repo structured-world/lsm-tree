@@ -844,6 +844,7 @@ impl Tree {
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
         merge_operator: Option<Arc<dyn crate::merge_operator::MergeOperator>>,
+        comparator: crate::comparator::SharedComparator,
     ) -> impl DoubleEndedIterator<Item = crate::Result<InternalValue>> + 'static {
         Self::create_internal_range_with_prefix_hash(
             version,
@@ -851,6 +852,7 @@ impl Tree {
             seqno,
             ephemeral,
             merge_operator,
+            comparator,
             None,
         )
     }
@@ -868,6 +870,7 @@ impl Tree {
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
         merge_operator: Option<Arc<dyn crate::merge_operator::MergeOperator>>,
+        comparator: crate::comparator::SharedComparator,
         prefix_hash: Option<u64>,
     ) -> impl DoubleEndedIterator<Item = crate::Result<InternalValue>> + 'static {
         use crate::range::{IterState, TreeIter};
@@ -891,6 +894,7 @@ impl Tree {
             version,
             ephemeral,
             merge_operator,
+            comparator,
             prefix_hash,
             key_hash: None,
             #[cfg(feature = "metrics")]
@@ -1216,6 +1220,7 @@ impl Tree {
             seqno,
             ephemeral,
             self.config.merge_operator.clone(),
+            self.config.comparator.clone(),
         )
         .map(|item| match item {
             Ok(kv) => Ok((kv.key.user_key, kv.value)),
@@ -1250,6 +1255,7 @@ impl Tree {
             version: super_version,
             ephemeral,
             merge_operator: self.config.merge_operator.clone(),
+            comparator: self.config.comparator.clone(),
             prefix_hash,
             key_hash: None,
             #[cfg(feature = "metrics")]

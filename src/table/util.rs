@@ -146,6 +146,13 @@ pub fn longest_shared_prefix_length(s1: &[u8], s2: &[u8]) -> usize {
         .count()
 }
 
+/// Compares the conceptual concatenation `prefix + suffix` against `needle`
+/// using the given comparator.
+///
+/// For the default lexicographic comparator this performs a zero-allocation
+/// bytewise comparison. Custom comparators fall back to concatenating prefix
+/// and suffix into a temporary `Vec` so that `UserComparator::compare` always
+/// receives a complete key.
 #[must_use]
 pub fn compare_prefixed_slice(
     prefix: &[u8],
@@ -153,17 +160,62 @@ pub fn compare_prefixed_slice(
     needle: &[u8],
     cmp: &dyn crate::comparator::UserComparator,
 ) -> std::cmp::Ordering {
-    // Reconstruct the full key and delegate to the comparator.
-    // This avoids splitting the comparison logic and ensures the custom
-    // comparator always sees complete keys.
-    //
-    // TODO: For very large keys this creates a temporary allocation.
-    // A future optimization could add a `compare_concat` method to
-    // UserComparator for prefix+suffix comparison without allocation.
+    use std::cmp::Ordering::{Equal, Greater, Less};
+
+    // Fast path: zero-allocation bytewise comparison for the default
+    // (lexicographic) comparator. This is the hot path for block index
+    // and data block binary searches.
+    if cmp.is_lexicographic() {
+        return compare_prefixed_slice_lexicographic(prefix, suffix, needle);
+    }
+
+    // Slow path: reconstruct the full key for custom comparators.
     let mut full_key = Vec::with_capacity(prefix.len() + suffix.len());
     full_key.extend_from_slice(prefix);
     full_key.extend_from_slice(suffix);
     cmp.compare(&full_key, needle)
+}
+
+/// Zero-allocation lexicographic comparison of `prefix + suffix` against `needle`.
+#[must_use]
+fn compare_prefixed_slice_lexicographic(
+    prefix: &[u8],
+    suffix: &[u8],
+    needle: &[u8],
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering::{Equal, Greater};
+
+    if needle.is_empty() {
+        let combined_len = prefix.len() + suffix.len();
+        return if combined_len > 0 { Greater } else { Equal };
+    }
+
+    let max_pfx_len = prefix.len().min(needle.len());
+
+    {
+        #[expect(unsafe_code, reason = "We checked for max_pfx_len")]
+        let pfx = unsafe { prefix.get_unchecked(0..max_pfx_len) };
+
+        #[expect(unsafe_code, reason = "We checked for max_pfx_len")]
+        let ndl = unsafe { needle.get_unchecked(0..max_pfx_len) };
+
+        match pfx.cmp(ndl) {
+            Equal => {}
+            ordering => return ordering,
+        }
+    }
+
+    let rest_len = prefix.len().saturating_sub(needle.len());
+    if rest_len > 0 {
+        return Greater;
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "prefix is not longer than needle so we can safely truncate"
+    )]
+    let remaining_needle = unsafe { needle.get_unchecked(max_pfx_len..) };
+    suffix.cmp(remaining_needle)
 }
 
 #[cfg(test)]

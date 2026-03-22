@@ -1,4 +1,4 @@
-use lsm_tree::{AbstractTree, Config, Guard, SharedComparator, UserComparator};
+use lsm_tree::{AbstractTree, Config, Guard as _, SharedComparator, UserComparator};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
