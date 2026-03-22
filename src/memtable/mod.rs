@@ -232,10 +232,13 @@ impl Memtable {
             clippy::expect_used,
             reason = "keys are limited to 16-bit length + values are limited to 32-bit length"
         )]
-        let item_size =
-            (item.key.user_key.len() + item.value.len() + std::mem::size_of::<InternalValue>())
-                .try_into()
-                .expect("should fit into u64");
+        // Account for MemtableKey overhead (InternalKey + Arc<dyn UserComparator>)
+        let item_size = (item.key.user_key.len()
+            + item.value.len()
+            + std::mem::size_of::<InternalValue>()
+            + std::mem::size_of::<SharedComparator>())
+        .try_into()
+        .expect("should fit into u64");
 
         let size_before = self
             .approximate_size
