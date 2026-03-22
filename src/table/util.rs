@@ -168,6 +168,9 @@ pub fn compare_prefixed_slice(
     }
 
     // Slow path: reconstruct the full key for custom comparators.
+    // Allocates a temporary Vec per comparison. This is acceptable because
+    // custom comparators are uncommon and the allocation is short-lived.
+    // A future `UserComparator::compare_concat` method could eliminate this.
     let mut full_key = Vec::with_capacity(prefix.len() + suffix.len());
     full_key.extend_from_slice(prefix);
     full_key.extend_from_slice(suffix);
@@ -191,10 +194,18 @@ fn compare_prefixed_slice_lexicographic(
     let max_pfx_len = prefix.len().min(needle.len());
 
     {
-        #[expect(unsafe_code, reason = "We checked for max_pfx_len")]
+        // SAFETY: max_pfx_len = min(prefix.len(), needle.len()), so both
+        // slices [0..max_pfx_len] are within bounds by construction.
+        #[expect(
+            unsafe_code,
+            reason = "max_pfx_len <= prefix.len() && max_pfx_len <= needle.len()"
+        )]
         let pfx = unsafe { prefix.get_unchecked(0..max_pfx_len) };
 
-        #[expect(unsafe_code, reason = "We checked for max_pfx_len")]
+        #[expect(
+            unsafe_code,
+            reason = "max_pfx_len <= prefix.len() && max_pfx_len <= needle.len()"
+        )]
         let ndl = unsafe { needle.get_unchecked(0..max_pfx_len) };
 
         match pfx.cmp(ndl) {

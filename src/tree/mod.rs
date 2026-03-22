@@ -1003,12 +1003,20 @@ impl Tree {
         //
         // Per-table RT lists are sorted by start key (using comparator) on load,
         // so binary search narrows candidates to RTs with start <= key.
+        // The key_range early reject uses the comparator so it works with
+        // non-lexicographic orderings.
         for table in super_version
             .version
             .iter_levels()
             .flat_map(|lvl| lvl.iter())
             .flat_map(|run| run.iter())
             .filter(|t| !t.range_tombstones().is_empty())
+            .filter(|t| {
+                // Early reject: skip tables whose key range doesn't contain the key.
+                let kr = &t.metadata.key_range;
+                comparator.compare(kr.min(), key) != std::cmp::Ordering::Greater
+                    && comparator.compare(key, kr.max()) != std::cmp::Ordering::Greater
+            })
         {
             let rts = table.range_tombstones();
 
