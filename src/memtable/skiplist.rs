@@ -1045,7 +1045,7 @@ mod tests {
         }
 
         // Range from 'e' onwards → e, f, g, h, i, j
-        let bound = make_key(b"e", SeqNo::MAX);
+        let bound = make_key(b"e", crate::MAX_SEQNO);
         let keys: Vec<u8> = map.range(bound..).map(|e| e.key().user_key[0]).collect();
         assert_eq!(keys, vec![b'e', b'f', b'g', b'h', b'i', b'j']);
     }
@@ -1058,7 +1058,7 @@ mod tests {
             map.insert(&make_key(&key, 0), &make_value(&[i]));
         }
 
-        let lo = make_key(b"c", SeqNo::MAX);
+        let lo = make_key(b"c", crate::MAX_SEQNO);
         let hi = make_key(b"f", 0);
         let keys: Vec<u8> = map.range(lo..=hi).map(|e| e.key().user_key[0]).collect();
         assert_eq!(keys, vec![b'c', b'd', b'e', b'f']);
@@ -1090,7 +1090,7 @@ mod tests {
             map.insert(&make_key(&key, 0), &make_value(&[i]));
         }
 
-        let lo = make_key(b"c", SeqNo::MAX);
+        let lo = make_key(b"c", crate::MAX_SEQNO);
         let hi = make_key(b"g", 0);
         let rev: Vec<u8> = map
             .range(lo..=hi)
@@ -1175,8 +1175,8 @@ mod tests {
         assert_eq!(entry2.key().seqno, 1);
         assert_eq!(&*entry2.value(), b"v1");
 
-        // At read_seqno=SeqNo::MAX, lower_bound = ("key", MAX-1), yields seqno=3 (latest).
-        let lower3 = InternalKey::new(b"key".to_vec(), SeqNo::MAX - 1, ValueType::Value);
+        // At read_seqno=crate::MAX_SEQNO, lower_bound = ("key", MAX-1), yields seqno=3 (latest).
+        let lower3 = InternalKey::new(b"key".to_vec(), crate::MAX_SEQNO - 1, ValueType::Value);
         let entry3 = map
             .range(lower3..)
             .next()
@@ -1197,7 +1197,7 @@ mod tests {
     #[test]
     fn empty_range_next_back() {
         let map = new_map();
-        let lo = make_key(b"a", SeqNo::MAX);
+        let lo = make_key(b"a", crate::MAX_SEQNO);
         let hi = make_key(b"z", 0);
         let mut range = map.range(lo..=hi);
         assert!(range.next().is_none());
@@ -1212,8 +1212,8 @@ mod tests {
         }
 
         // Excluded end "d" → range is [a, d) = a, b, c
-        let lo = make_key(b"a", SeqNo::MAX);
-        let hi = make_key(b"d", SeqNo::MAX);
+        let lo = make_key(b"a", crate::MAX_SEQNO);
+        let hi = make_key(b"d", crate::MAX_SEQNO);
         let rev: Vec<u8> = map
             .range(lo..hi)
             .rev()

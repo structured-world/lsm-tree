@@ -130,7 +130,7 @@ impl Memtable {
     /// Returns the item by key if it exists.
     ///
     /// Returns the version with the highest seqno that is strictly less than
-    /// the given `seqno`.  Pass `SeqNo::MAX` to retrieve the latest version.
+    /// the given `seqno`.  Pass [`MAX_SEQNO`](crate::MAX_SEQNO) to retrieve the latest version.
     #[doc(hidden)]
     pub fn get(&self, key: &[u8], seqno: SeqNo) -> Option<InternalValue> {
         if seqno == 0 {

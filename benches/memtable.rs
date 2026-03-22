@@ -1,9 +1,10 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use lsm_tree::{InternalValue, Memtable, SeqNo};
+use lsm_tree::{DefaultUserComparator, InternalValue, Memtable, SharedComparator, MAX_SEQNO};
 use nanoid::nanoid;
+use std::sync::Arc;
 
 fn memtable_get_hit(c: &mut Criterion) {
-    let memtable = Memtable::new(0);
+    let memtable = Memtable::new(0, Arc::new(DefaultUserComparator) as SharedComparator);
 
     memtable.insert(InternalValue::from_components(
         "abc_w5wa35aw35naw",
@@ -26,7 +27,7 @@ fn memtable_get_hit(c: &mut Criterion) {
             assert_eq!(
                 [1, 2, 3],
                 &*memtable
-                    .get(b"abc_w5wa35aw35naw", SeqNo::MAX)
+                    .get(b"abc_w5wa35aw35naw", lsm_tree::MAX_SEQNO)
                     .unwrap()
                     .value,
             )
@@ -35,7 +36,7 @@ fn memtable_get_hit(c: &mut Criterion) {
 }
 
 fn memtable_get_snapshot(c: &mut Criterion) {
-    let memtable = Memtable::new(0);
+    let memtable = Memtable::new(0, Arc::new(DefaultUserComparator) as SharedComparator);
 
     memtable.insert(InternalValue::from_components(
         "abc_w5wa35aw35naw",
@@ -70,7 +71,7 @@ fn memtable_get_snapshot(c: &mut Criterion) {
 }
 
 fn memtable_get_miss(c: &mut Criterion) {
-    let memtable = Memtable::new(0);
+    let memtable = Memtable::new(0, Arc::new(DefaultUserComparator) as SharedComparator);
 
     for _ in 0..1_000_000 {
         memtable.insert(InternalValue::from_components(
@@ -82,13 +83,13 @@ fn memtable_get_miss(c: &mut Criterion) {
     }
 
     c.bench_function("memtable get miss", |b| {
-        b.iter(|| assert!(memtable.get(b"abc_564321", SeqNo::MAX).is_none()));
+        b.iter(|| assert!(memtable.get(b"abc_564321", lsm_tree::MAX_SEQNO).is_none()));
     });
 }
 
 fn memtable_highest_seqno(c: &mut Criterion) {
     c.bench_function("memtable highest seqno", |b| {
-        let memtable = Memtable::new(0);
+        let memtable = Memtable::new(0, Arc::new(DefaultUserComparator) as SharedComparator);
 
         for x in 0..100_000 {
             memtable.insert(InternalValue::from_components(
