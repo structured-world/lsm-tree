@@ -253,10 +253,7 @@ proptest! {
         .. ProptestConfig::default()
     })]
 
-    // Known bug: L0 MVCC resolution returns stale values when active
-    // memtable is non-empty. See prop_regression_rt_tombstone.rs.
     #[test]
-    #[ignore = "known bug: L0 MVCC resolution with active memtable (issue #52)"]
     fn prop_btreemap_oracle_correctness(ops in ops_strategy()) {
         run_oracle_test(ops)?;
     }

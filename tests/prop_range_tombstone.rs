@@ -255,10 +255,7 @@ proptest! {
         .. ProptestConfig::default()
     })]
 
-    // Known bug: point tombstones not visible when RT exists in prior SST.
-    // See prop_regression_rt_tombstone.rs for the minimal reproducer.
     #[test]
-    #[ignore = "known bug: RT + point tombstone interaction across SSTs (issue #53)"]
     fn prop_range_tombstone_correctness(ops in rt_ops_strategy()) {
         run_rt_test(ops)?;
     }

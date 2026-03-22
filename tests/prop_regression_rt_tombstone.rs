@@ -8,12 +8,11 @@
 // BUG 2 (regression_remove_range_then_insert_then_remove): Range tombstone +
 // point tombstone interaction across SSTs — the point tombstone is not visible.
 //
-// TODO: fix the MVCC resolution bugs and remove #[ignore]
+// Fixed in PR #56: L0 MVCC resolution and RT + point tombstone interaction.
 
 use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
 
 #[test]
-#[ignore = "known bug: point tombstone not visible when RT exists in prior SST (issue #53)"]
 fn regression_remove_range_then_insert_then_remove() -> lsm_tree::Result<()> {
     let tmpdir = lsm_tree::get_tmp_folder();
     let tree = Config::new(
@@ -73,7 +72,6 @@ fn regression_remove_range_then_insert_then_remove() -> lsm_tree::Result<()> {
 /// Regression: overwrite across SSTs — tree returns old value.
 /// Found by prop_btreemap_oracle (no range tombstones involved).
 #[test]
-#[ignore = "known bug: L0 MVCC resolution with active memtable (issue #52)"]
 fn regression_overwrite_across_ssts() -> lsm_tree::Result<()> {
     let tmpdir = lsm_tree::get_tmp_folder();
     let tree = Config::new(
@@ -179,7 +177,6 @@ fn regression_three_ssts_overwrite() -> lsm_tree::Result<()> {
 
 /// Three SSTs + active memtable data.
 #[test]
-#[ignore = "known bug: L0 MVCC resolution with active memtable (issue #52)"]
 fn regression_three_ssts_plus_memtable() -> lsm_tree::Result<()> {
     let tmpdir = lsm_tree::get_tmp_folder();
     let tree = Config::new(
