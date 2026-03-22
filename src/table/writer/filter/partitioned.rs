@@ -38,6 +38,9 @@ pub struct PartitionedFilterWriter {
 
     compression: CompressionType,
 
+    // Accepted to keep the FilterWriter API uniform — written by
+    // set_prefix_extractor but not read (partitioned filters cannot be
+    // probed by prefix hash; see Table::maybe_contains_prefix).
     prefix_extractor: Option<Arc<dyn PrefixExtractor>>,
 }
 
