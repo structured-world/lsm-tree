@@ -1,34 +1,63 @@
 use crate::config::BenchConfig;
-use crate::db::{make_sequential_key, make_value};
+use crate::db::make_sequential_key;
 use crate::reporter::Reporter;
 use crate::workloads::Workload;
-use lsm_tree::{AbstractTree, AnyTree};
+use lsm_tree::{
+    config::BlockSizePolicy, AbstractTree, AnyTree, Cache, Config, MergeOperator,
+    SequenceNumberCounter, UserValue,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
-/// Writes to a small set of "hot" keys repeatedly, flushing periodically
-/// to create overlapping SSTs that stress the compaction merge path.
+/// Counter merge operator: sums i64 operands.
+/// Used by the `mergerandom` benchmark to exercise real merge resolution.
+struct CounterMerge;
+
+impl MergeOperator for CounterMerge {
+    fn merge(
+        &self,
+        _key: &[u8],
+        base_value: Option<&[u8]>,
+        operands: &[&[u8]],
+    ) -> lsm_tree::Result<UserValue> {
+        let mut counter: i64 = match base_value {
+            Some(bytes) if bytes.len() == 8 => {
+                i64::from_le_bytes(bytes.try_into().expect("checked length"))
+            }
+            Some(_) => return Err(lsm_tree::Error::MergeOperator),
+            None => 0,
+        };
+
+        for operand in operands {
+            if operand.len() != 8 {
+                return Err(lsm_tree::Error::MergeOperator);
+            }
+            counter += i64::from_le_bytes((*operand).try_into().expect("checked length"));
+        }
+
+        Ok(counter.to_le_bytes().to_vec().into())
+    }
+}
+
+/// Writes merge operands to a small set of "hot" keys, flushing periodically
+/// to create overlapping SSTs. Exercises the full merge path: operand storage,
+/// lazy resolution during reads, and merge-aware compaction.
 ///
-/// NOTE: This uses `insert()` (full overwrites), not merge operands —
-/// lsm-tree's merge operator API is internal to compaction. The workload
-/// exercises the SST-level k-way merge during major compaction, which is
-/// the primary merge cost path. True merge-operand benchmarks will be
-/// added when the public merge API is available (CoordiNode posting lists).
+/// This is the lsm-tree equivalent of RocksDB's `mergerandom` benchmark.
 pub struct MergeRandom;
 
 impl Workload for MergeRandom {
     fn run(
         &self,
-        tree: &AnyTree,
+        _tree: &AnyTree,
         config: &BenchConfig,
         seqno: &AtomicU64,
         reporter: &mut Reporter,
     ) -> lsm_tree::Result<()> {
-        // Use a small hot key set (1024 keys) to create heavy overlap.
         let hot_keys: u64 = 1024;
         let flush_interval: u64 = 5_000;
 
-        // 1024 hot keys need at least 2 bytes of key space (2^16 = 65536 > 1024).
         if config.key_size < 2 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -37,39 +66,57 @@ impl Workload for MergeRandom {
             .into());
         }
 
+        // Create a dedicated tree with a merge operator — the shared tree
+        // from main doesn't have one configured.
+        let tmpdir =
+            tempfile::tempdir().map_err(|e| std::io::Error::other(format!("tmpdir: {e}")))?;
+        let cache = Arc::new(Cache::with_capacity_bytes(config.cache_mb * 1024 * 1024));
+        let tree = Config::new(
+            tmpdir.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .data_block_size_policy(BlockSizePolicy::all(config.block_size))
+        .use_cache(cache)
+        .with_merge_operator(Some(Arc::new(CounterMerge)))
+        .open()?;
+
         reporter.start();
 
         for i in 0..config.num {
             let key_idx = i % hot_keys;
             let key = make_sequential_key(key_idx, config.key_size);
-            let value = make_value(config.value_size);
+            // Each operand adds 1 to the counter for this key.
+            let operand = 1_i64.to_le_bytes();
             let seq = seqno.fetch_add(1, Ordering::Relaxed);
 
             let t = Instant::now();
-            tree.insert(key, value, seq);
+            tree.merge(key, operand.as_slice(), seq);
             reporter.record_duration(t.elapsed());
 
             if (i + 1) % flush_interval == 0 {
-                // Flush/compact are NOT recorded in the per-op histogram —
-                // they are maintenance ops whose latency would skew write P99.
-                // Their cost is reflected in wall-clock `elapsed` (throughput).
                 tree.flush_active_memtable(0)?;
             }
         }
 
-        // Final flush + major compaction to exercise merge.
+        // Final flush + compaction to exercise merge resolution.
         tree.flush_active_memtable(0)?;
         let compact_seqno = seqno.load(Ordering::Relaxed);
         tree.major_compact(64 * 1024 * 1024, compact_seqno)?;
 
         reporter.stop();
 
-        eprintln!(
-            "Merged {} writes over {} hot keys, {} tables after compaction",
-            config.num,
-            hot_keys,
-            tree.table_count(),
-        );
+        // Verify: each hot key should have counter = num / hot_keys.
+        let expected = (config.num / hot_keys) as i64;
+        let read_seqno = seqno.load(Ordering::Relaxed);
+        let sample_key = make_sequential_key(0, config.key_size);
+        if let Some(val) = tree.get(&sample_key, read_seqno)? {
+            let actual = i64::from_le_bytes(val[..8].try_into().unwrap_or_default());
+            eprintln!(
+                "Merged {} operands over {} hot keys, sample counter: {actual} (expected {expected}), {} tables",
+                config.num, hot_keys, tree.table_count(),
+            );
+        }
 
         Ok(())
     }
