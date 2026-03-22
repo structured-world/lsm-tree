@@ -369,6 +369,7 @@ impl Table {
             block_count,
             self.metadata.data_block_compression,
             self.global_seqno(),
+            self.encryption.clone(),
             self.comparator.clone(),
         )
     }

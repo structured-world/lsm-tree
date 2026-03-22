@@ -88,9 +88,8 @@ impl Aes256GcmProvider {
 
     /// Create a new provider from a 256-bit (32-byte) key.
     ///
-    /// # Panics
-    ///
-    /// Panics if `key` is not exactly 32 bytes.
+    /// The key length is enforced at compile time by the `[u8; 32]` type.
+    /// For runtime-checked construction from a slice, use [`from_slice`](Self::from_slice).
     #[must_use]
     pub fn new(key: &[u8; 32]) -> Self {
         use aes_gcm::KeyInit;
@@ -129,6 +128,10 @@ impl EncryptionProvider for Aes256GcmProvider {
 
         // encrypt_in_place_detached operates on buf[NONCE_LEN..] (the plaintext portion).
         // Indexing is safe: buf was allocated as nonce + plaintext.
+        //
+        // TODO: pass block context (table_id, offset, block_type) as AAD to
+        // bind ciphertext authenticity to its position and prevent block
+        // substitution attacks. Requires extending EncryptionProvider API.
         #[expect(
             clippy::indexing_slicing,
             reason = "buf length = NONCE_LEN + plaintext.len()"

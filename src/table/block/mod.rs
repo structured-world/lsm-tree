@@ -157,11 +157,14 @@ impl Block {
         let header = Header::decode_from(reader)?;
 
         // Validate both size fields before any I/O or hashing to fail fast
-        // on malformed headers.
-        if header.data_length > MAX_DECOMPRESSION_SIZE {
+        // on malformed headers. The on-disk data_length may include encryption
+        // overhead (nonce + auth tag), so allow a bounded margin.
+        const ENCRYPTION_OVERHEAD: u32 = 28; // 12-byte nonce + 16-byte GCM tag
+
+        if header.data_length > MAX_DECOMPRESSION_SIZE + ENCRYPTION_OVERHEAD {
             return Err(crate::Error::DecompressedSizeTooLarge {
                 declared: u64::from(header.data_length),
-                limit: u64::from(MAX_DECOMPRESSION_SIZE),
+                limit: u64::from(MAX_DECOMPRESSION_SIZE + ENCRYPTION_OVERHEAD),
             });
         }
 
@@ -255,8 +258,12 @@ impl Block {
         compression: CompressionType,
         encryption: Option<&dyn EncryptionProvider>,
     ) -> crate::Result<Self> {
-        // handle.size() includes Header::serialized_len(), so allow that overhead
-        let max_on_disk_size = u64::from(MAX_DECOMPRESSION_SIZE) + Header::serialized_len() as u64;
+        // handle.size() includes Header::serialized_len(), so allow that overhead.
+        // Encrypted blocks add nonce + tag (28 bytes) to the on-disk size.
+        const ENCRYPTION_OVERHEAD: u64 = 28;
+        let max_on_disk_size = u64::from(MAX_DECOMPRESSION_SIZE)
+            + Header::serialized_len() as u64
+            + ENCRYPTION_OVERHEAD;
 
         if u64::from(handle.size()) > max_on_disk_size {
             return Err(crate::Error::DecompressedSizeTooLarge {
@@ -729,7 +736,8 @@ mod tests {
         let mut header = Header::decode_from(&mut reader).unwrap();
         let payload: Vec<u8> = reader.to_vec();
 
-        header.data_length = MAX_DECOMPRESSION_SIZE + 1;
+        // Set data_length past the limit (MAX + encryption overhead + 1)
+        header.data_length = MAX_DECOMPRESSION_SIZE + 28 + 1;
         let mut tampered = header.encode_into_vec();
         tampered.extend_from_slice(&payload);
 
