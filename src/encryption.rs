@@ -63,6 +63,10 @@ pub trait EncryptionProvider:
     /// The default implementation delegates to [`encrypt`](EncryptionProvider::encrypt).
     /// Providers may override this to avoid an extra allocation by prepending
     /// the nonce and appending the tag in-place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Encrypt`] if the encryption operation fails.
     fn encrypt_vec(&self, plaintext: Vec<u8>) -> crate::Result<Vec<u8>> {
         self.encrypt(&plaintext)
     }
@@ -72,6 +76,11 @@ pub trait EncryptionProvider:
     /// The default implementation delegates to [`decrypt`](EncryptionProvider::decrypt).
     /// Providers may override this to decrypt in-place, stripping the nonce
     /// prefix and tag suffix without a second allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Decrypt`] if the ciphertext is invalid,
+    /// tampered, or encrypted with a different key.
     fn decrypt_vec(&self, ciphertext: Vec<u8>) -> crate::Result<Vec<u8>> {
         self.decrypt(&ciphertext)
     }

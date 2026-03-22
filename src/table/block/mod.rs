@@ -189,6 +189,10 @@ impl Block {
     /// or provider will typically surface as a read/validation error
     /// (checksum, length, or decompression failure) rather than
     /// silently producing valid-looking plaintext.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "encrypt/no-encrypt branches are inherently verbose"
+    )]
     pub fn from_reader<R: std::io::Read>(
         reader: &mut R,
         compression: CompressionType,
@@ -343,6 +347,10 @@ impl Block {
     ///
     /// Pipeline: read → verify checksum → decrypt → decompress.
     /// When `encryption` is `None`, the decrypt step is skipped.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "encrypt/no-encrypt branches are inherently verbose"
+    )]
     pub fn from_file(
         file: &dyn FsFile,
         handle: BlockHandle,
@@ -391,16 +399,19 @@ impl Block {
         })?;
 
         // When encryption is active, copy the payload into an owned Vec and
-        // drop the original Slice before decrypting in-place. This reduces
-        // peak memory from (Slice + decrypted Vec) to max(Slice, Vec).
-        let buf = if let Some(enc) = encryption {
+        // explicitly drop the original Slice before decrypting in-place.
+        // This reduces peak memory from (Slice + decrypted Vec) to
+        // max(Slice, Vec) — the two never coexist.
+        let data = if let Some(enc) = encryption {
             #[expect(
                 clippy::indexing_slicing,
                 reason = "header was decoded from buf, so it has at least Header::serialized_len() bytes"
             )]
             let payload_vec = buf[Header::serialized_len()..].to_vec();
-            // `buf` (Slice) is dropped here — no longer holding both encrypted
-            // and decrypted data simultaneously.
+            // Explicitly drop the original Slice to reduce peak memory
+            // before decrypting in-place. Shadowing alone does NOT trigger
+            // drop — the outer `buf` would persist until function return.
+            drop(buf);
 
             let decrypted = enc.decrypt_vec(payload_vec)?;
 
@@ -502,7 +513,7 @@ impl Block {
             }
         };
 
-        Ok(Self { header, data: buf })
+        Ok(Self { header, data })
     }
 }
 
