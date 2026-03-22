@@ -126,9 +126,13 @@ fn main() {
 
     // Collect github-action-benchmark entries when --github-json is set.
     let mut github_entries: Vec<serde_json::Value> = Vec::new();
+    let mut failures = 0u32;
 
     for benchmark_name in &benchmarks {
-        run_single(benchmark_name, &bench_config, &cli, &mut github_entries);
+        if let Err(e) = run_single(benchmark_name, &bench_config, &cli, &mut github_entries) {
+            eprintln!("Error: {benchmark_name} failed: {e}");
+            failures += 1;
+        }
     }
 
     if cli.github_json {
@@ -138,6 +142,11 @@ fn main() {
             serde_json::to_string_pretty(&array).expect("failed to serialize")
         );
     }
+
+    if failures > 0 {
+        eprintln!("{failures} benchmark(s) failed");
+        std::process::exit(1);
+    }
 }
 
 fn run_single(
@@ -145,16 +154,13 @@ fn run_single(
     bench_config: &BenchConfig,
     cli: &Cli,
     github_entries: &mut Vec<serde_json::Value>,
-) {
+) -> Result<(), Box<dyn std::error::Error>> {
     // Each benchmark gets a fresh temp directory.
     let _tmpdir;
     let db_path = match &cli.db {
         Some(p) => p.clone(),
         None => {
-            _tmpdir = tempfile::tempdir().unwrap_or_else(|e| {
-                eprintln!("Error: failed to create temp directory: {e}");
-                std::process::exit(1);
-            });
+            _tmpdir = tempfile::tempdir()?;
             _tmpdir.path().to_path_buf()
         }
     };
@@ -165,25 +171,14 @@ fn run_single(
         cli.num, cli.key_size, cli.value_size, cli.threads, cli.cache_mb,
     );
 
-    let tree = match config::create_tree(&db_path, bench_config) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Error: failed to open tree: {e}");
-            return;
-        }
-    };
+    let tree = config::create_tree(&db_path, bench_config)?;
     let seqno = AtomicU64::new(1);
     let mut reporter = Reporter::new();
 
-    let Some(workload) = create_workload(benchmark_name) else {
-        eprintln!("Error: unknown benchmark '{benchmark_name}'");
-        return;
-    };
+    let workload = create_workload(benchmark_name)
+        .ok_or_else(|| format!("unknown benchmark '{benchmark_name}'"))?;
 
-    if let Err(e) = workload.run(&tree, bench_config, &seqno, &mut reporter) {
-        eprintln!("Error: {benchmark_name} failed: {e}");
-        return;
-    }
+    workload.run(&tree, bench_config, &seqno, &mut reporter)?;
 
     let entry_size = bench_config.entry_size();
 
@@ -211,4 +206,6 @@ fn run_single(
     } else {
         reporter.print_human(benchmark_name, entry_size);
     }
+
+    Ok(())
 }

@@ -70,7 +70,10 @@ impl Workload for MergeRandom {
         // from main doesn't have one configured.
         let tmpdir =
             tempfile::tempdir().map_err(|e| std::io::Error::other(format!("tmpdir: {e}")))?;
-        let cache = Arc::new(Cache::with_capacity_bytes(config.cache_mb * 1024 * 1024));
+        let cache_bytes = config.cache_mb.checked_mul(1024 * 1024).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "cache size overflows u64")
+        })?;
+        let cache = Arc::new(Cache::with_capacity_bytes(cache_bytes));
         let tree = Config::new(
             tmpdir.path(),
             SequenceNumberCounter::default(),
