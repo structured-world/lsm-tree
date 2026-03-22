@@ -116,6 +116,7 @@ impl Table {
                 if let Some(fd) = self.file_accessor.access_for_table(&table_id) {
                     (fd, false)
                 } else {
+                    // Unsizing coercion needed: if-branch returns Arc<dyn FsFile>
                     (
                         Arc::new(std::fs::File::open(&*self.path)?) as Arc<dyn FsFile>,
                         true,

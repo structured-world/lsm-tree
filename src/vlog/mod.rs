@@ -101,7 +101,7 @@ pub fn recover_blob_files(
             let file_accessor = if let Some(dt) = descriptor_table.cloned() {
                 FileAccessor::DescriptorTable(dt)
             } else {
-                FileAccessor::File(Arc::new(file) as Arc<dyn crate::fs::FsFile>)
+                FileAccessor::File(Arc::new(file))
             };
 
             blob_files.push(BlobFile(Arc::new(BlobFileInner {

@@ -3,6 +3,7 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
+    fs::FsFile,
     vlog::{
         blob_file::writer::{
             validate_header_crc, BLOB_HEADER_LEN_V4, BLOB_HEADER_MAGIC_V3, BLOB_HEADER_MAGIC_V4,
@@ -11,6 +12,8 @@ use crate::{
     },
     BlobFile, Checksum, CompressionType, UserValue,
 };
+use byteorder::{LittleEndian, ReadBytesExt};
+use std::io::{Cursor, Read};
 
 /// Safety cap on blob value size (256 MiB).
 ///
@@ -23,9 +26,6 @@ use crate::{
 /// `table::block` rather than shared, because blocks and blobs are
 /// independent storage formats that may diverge in the future.
 const MAX_DECOMPRESSION_SIZE: usize = 256 * 1024 * 1024;
-use crate::fs::FsFile;
-use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::{Cursor, Read};
 
 /// Reads a single blob from a blob file
 pub struct Reader<'a> {
