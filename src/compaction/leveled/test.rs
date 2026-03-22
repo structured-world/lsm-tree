@@ -692,19 +692,25 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
     )
     .open()?;
 
-    let leveled = Arc::new(Strategy::default().with_l0_threshold(4));
+    // Use tiny target_size so data actually propagates through L1 into L2.
+    let leveled = Arc::new(
+        Strategy::default()
+            .with_l0_threshold(4)
+            .with_table_target_size(1),
+    );
     let mut seqno = 0u64;
 
     // Step 1: Populate L1+L2 with data across the full keyspace.
     // Flush each range separately so tables have narrow key ranges.
-    for _round in 0..3 {
+    // Multiple rounds + multiple compactions per round push data to L2.
+    for _round in 0..5 {
         // Low range [a,d]
         tree.insert("a", "val", seqno);
         tree.insert("d", "val", seqno);
         tree.flush_active_memtable(seqno)?;
         seqno += 1;
 
-        // Gap range [m,n] — will end up in L2 as gap-filling tables
+        // Gap range [m,n] — ends up in L2 as gap-filling tables
         tree.insert("m", "gap_val", seqno);
         tree.insert("n", "gap_val", seqno);
         tree.flush_active_memtable(seqno)?;
@@ -722,8 +728,20 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
         tree.flush_active_memtable(seqno)?;
         seqno += 1;
 
-        tree.compact(leveled.clone(), seqno)?;
+        // Compact multiple times to propagate through levels
+        for _ in 0..3 {
+            tree.compact(leveled.clone(), seqno)?;
+        }
     }
+
+    // Verify L2 actually has data before multi-level test
+    let version = tree.current_version();
+    let l2_non_empty =
+        (2..version.level_count()).any(|idx| version.level(idx).is_some_and(|l| !l.is_empty()));
+    assert!(
+        l2_non_empty,
+        "L2+ must have data for multi-level overlap test to be meaningful",
+    );
 
     // Step 2: Flush narrow-range L0 tables (only low + high, no gap).
     // Each flush creates a table with a narrow key_range.
