@@ -4,8 +4,8 @@
 
 use super::{Block, BlockHandle, GlobalTableId};
 use crate::{
-    encryption::EncryptionProvider, file_accessor::FileAccessor, table::block::BlockType,
-    version::run::Ranged, Cache, CompressionType, KeyRange, Table,
+    encryption::EncryptionProvider, file_accessor::FileAccessor, fs::FsFile,
+    table::block::BlockType, version::run::Ranged, Cache, CompressionType, KeyRange, Table,
 };
 use std::{path::Path, sync::Arc};
 
@@ -81,7 +81,7 @@ pub fn load_block(
         #[cfg(feature = "metrics")]
         metrics.table_file_opened_uncached.fetch_add(1, Relaxed);
 
-        (Arc::new(fd), true)
+        (Arc::new(fd) as Arc<dyn FsFile>, true)
     };
 
     let block = Block::from_file(&*fd, *handle, compression, encryption)?;

@@ -3,6 +3,7 @@
 // (found in the LICENSE-* files in the repository)
 
 use super::writer::Writer;
+use crate::fs::FsFile;
 use crate::{
     file_accessor::FileAccessor,
     vlog::{
@@ -12,7 +13,6 @@ use crate::{
     BlobFile, CompressionType, DescriptorTable, SeqNo, SequenceNumberCounter, TreeId,
 };
 use std::{
-    fs::File,
     path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc},
 };
@@ -136,7 +136,7 @@ impl MultiWriter {
 
             let (metadata, checksum) = writer.finish()?;
 
-            let file = Arc::new(File::open(&path)?);
+            let file: Arc<dyn FsFile> = Arc::new(std::fs::File::open(&path)?);
             let file_accessor = descriptor_table.map_or(FileAccessor::File(file.clone()), |dt| {
                 FileAccessor::DescriptorTable(dt)
             });

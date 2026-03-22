@@ -48,7 +48,6 @@ use inner::Inner;
 use iter::Iter;
 use std::{
     borrow::Cow,
-    fs::File,
     ops::{Bound, RangeBounds},
     path::PathBuf,
     sync::Arc,
@@ -117,7 +116,10 @@ impl Table {
                 if let Some(fd) = self.file_accessor.access_for_table(&table_id) {
                     (fd, false)
                 } else {
-                    (Arc::new(File::open(&*self.path)?), true)
+                    (
+                        Arc::new(std::fs::File::open(&*self.path)?) as Arc<dyn FsFile>,
+                        true,
+                    )
                 };
 
             // Read the exact region using pread-style helper
@@ -430,7 +432,7 @@ impl Table {
 
     fn read_tli(
         regions: &ParsedRegions,
-        file: &impl FsFile,
+        file: &dyn FsFile,
         compression: CompressionType,
         encryption: Option<&dyn crate::encryption::EncryptionProvider>,
     ) -> crate::Result<IndexBlock> {
@@ -487,7 +489,7 @@ impl Table {
         let metadata =
             ParsedMeta::load_with_handle(&file, &regions.metadata, encryption.as_deref())?;
 
-        let file = Arc::new(file);
+        let file: Arc<dyn FsFile> = Arc::new(file);
 
         let file_accessor = if let Some(dt) = descriptor_table {
             FileAccessor::DescriptorTable(dt)

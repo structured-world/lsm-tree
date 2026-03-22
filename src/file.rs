@@ -11,16 +11,19 @@ pub const TABLES_FOLDER: &str = "tables";
 pub const BLOBS_FOLDER: &str = "blobs";
 pub const CURRENT_VERSION_FILE: &str = "current";
 
-/// Reads bytes from a file using `pread`.
-pub fn read_exact(file: &impl FsFile, offset: u64, size: usize) -> std::io::Result<Slice> {
+/// Reads bytes from a file at the given offset without changing the cursor.
+///
+/// Uses [`FsFile::read_at`] (equivalent to `pread(2)`) so multiple threads
+/// can call this concurrently on the same file handle.
+pub fn read_exact(file: &dyn FsFile, offset: u64, size: usize) -> std::io::Result<Slice> {
     // SAFETY: This slice builder starts uninitialized, but we know its length
     //
-    // We use FsFile::read_at which gives us the number of bytes read
+    // We use FsFile::read_at which gives us the number of bytes read.
     // If that number does not match the slice length, the function errors,
-    // so the (partially) uninitialized buffer is discarded
+    // so the (partially) uninitialized buffer is discarded.
     //
     // Additionally, generally, block loads furthermore do a checksum check which
-    // would likely catch the buffer being wrong somehow
+    // would likely catch the buffer being wrong somehow.
     #[expect(unsafe_code, reason = "see safety")]
     let mut builder = unsafe { Slice::builder_unzeroed(size) };
 
