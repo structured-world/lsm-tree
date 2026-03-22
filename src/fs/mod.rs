@@ -211,8 +211,9 @@ pub trait FsFile: Read + Write + Seek + Send + Sync {
 pub trait Fs: Send + Sync + 'static {
     /// Opens a file at `path` with the given options.
     ///
-    /// Returns a boxed file handle. The allocation cost (~50 ns) is
-    /// negligible compared to the I/O syscall (~5 μs).
+    /// Returns a boxed file handle. For syscall-backed implementations
+    /// like [`StdFs`], the allocation and dynamic dispatch overhead is
+    /// typically negligible compared to the underlying I/O operations.
     ///
     /// # Errors
     ///
