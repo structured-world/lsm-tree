@@ -117,29 +117,24 @@ impl Block {
         let encrypted_buf = encryption.map(|enc| enc.encrypt(payload)).transpose()?;
         let payload: &[u8] = encrypted_buf.as_deref().unwrap_or(payload);
 
-        // Validate the final on-disk payload against the same limit enforced on
-        // the read path. This prevents writing blocks that readers would reject
-        // as too large (e.g., after encryption expanded the compressed payload).
-        let payload_len = u32::try_from(payload.len()).map_err(|_| {
-            crate::Error::Encrypt("encrypted payload exceeds u32::MAX block format limit")
-        })?;
+        // Validate the final on-disk payload against the same size limit
+        // enforced on the read path (MAX_DECOMPRESSION_SIZE + encryption overhead).
+        // Check in u64 first to produce the correct DecompressedSizeTooLarge error,
+        // then narrow to u32 for the header field.
+        let max_payload = u64::from(MAX_DECOMPRESSION_SIZE)
+            + encryption.map_or(0u64, |enc| enc.max_overhead() as u64);
 
-        // Mirror the read-path bound: MAX_DECOMPRESSION_SIZE plus any encryption
-        // overhead. Without encryption, this reduces to MAX_DECOMPRESSION_SIZE.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "max_overhead() is contractually bounded to u32 (see EncryptionProvider doc)"
-        )]
-        let max_payload = encryption.map_or(MAX_DECOMPRESSION_SIZE, |enc| {
-            MAX_DECOMPRESSION_SIZE + enc.max_overhead() as u32
-        });
-
-        if payload_len > max_payload {
+        if payload.len() as u64 > max_payload {
             return Err(crate::Error::DecompressedSizeTooLarge {
-                declared: u64::from(payload_len),
-                limit: u64::from(max_payload),
+                declared: payload.len() as u64,
+                limit: max_payload,
             });
         }
+
+        // Safe: payload.len() <= max_payload <= MAX_DECOMPRESSION_SIZE + overhead,
+        // which is well within u32 range.
+        #[expect(clippy::cast_possible_truncation, reason = "bounded by check above")]
+        let payload_len = payload.len() as u32;
 
         header.data_length = payload_len;
         header.checksum = Checksum::from_raw(crate::hash::hash128(payload));
