@@ -43,9 +43,16 @@ use std::sync::Arc;
 ///
 /// impl UserComparator for U64Comparator {
 ///     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
-///         let a = u64::from_be_bytes(a.try_into().unwrap_or([0; 8]));
-///         let b = u64::from_be_bytes(b.try_into().unwrap_or([0; 8]));
-///         a.cmp(&b)
+///         if a.len() == 8 && b.len() == 8 {
+///             // Length checked, conversion cannot fail.
+///             let a_u64 = u64::from_be_bytes(a.try_into().unwrap());
+///             let b_u64 = u64::from_be_bytes(b.try_into().unwrap());
+///             a_u64.cmp(&b_u64)
+///         } else {
+///             // Non-8-byte keys: fall back to lexicographic ordering
+///             // to preserve the bytewise-equality invariant.
+///             a.cmp(b)
+///         }
 ///     }
 /// }
 /// ```

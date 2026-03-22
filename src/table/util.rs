@@ -210,7 +210,7 @@ fn compare_prefixed_slice_lexicographic(
 
     #[expect(
         unsafe_code,
-        reason = "prefix is not longer than needle so we can safely truncate"
+        reason = "max_pfx_len is min(prefix.len(), needle.len()), so needle[max_pfx_len..] is always in-bounds"
     )]
     let remaining_needle = unsafe { needle.get_unchecked(max_pfx_len..) };
     suffix.cmp(remaining_needle)

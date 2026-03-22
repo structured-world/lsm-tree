@@ -16,17 +16,15 @@ struct U64BigEndianComparator;
 
 impl UserComparator for U64BigEndianComparator {
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
-        let a = if a.len() >= 8 {
-            u64::from_be_bytes(a[..8].try_into().unwrap())
+        if a.len() == 8 && b.len() == 8 {
+            let a_u64 = u64::from_be_bytes(a.try_into().unwrap());
+            let b_u64 = u64::from_be_bytes(b.try_into().unwrap());
+            a_u64.cmp(&b_u64)
         } else {
-            0
-        };
-        let b = if b.len() >= 8 {
-            u64::from_be_bytes(b[..8].try_into().unwrap())
-        } else {
-            0
-        };
-        a.cmp(&b)
+            // Non-8-byte keys: fall back to lexicographic ordering
+            // to preserve the bytewise-equality invariant.
+            a.cmp(b)
+        }
     }
 }
 

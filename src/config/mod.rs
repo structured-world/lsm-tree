@@ -548,6 +548,10 @@ impl Config {
     /// Once a tree is created with a custom comparator, it **must** be
     /// re-opened with the same comparator. Using a different comparator
     /// on an existing tree produces incorrect results.
+    ///
+    /// The comparator identity is **not** persisted to disk — the caller
+    /// is responsible for ensuring the same comparator is used across
+    /// open/close cycles (same approach as RocksDB).
     #[must_use]
     pub fn comparator(mut self, comparator: SharedComparator) -> Self {
         self.comparator = comparator;
