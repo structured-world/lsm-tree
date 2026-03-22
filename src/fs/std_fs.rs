@@ -117,6 +117,7 @@ impl Fs for StdFs {
         #[cfg(not(target_os = "windows"))]
         {
             let dir = File::open(path)?;
+            debug_assert!(dir.metadata()?.is_dir());
             dir.sync_all()
         }
 
