@@ -24,7 +24,10 @@ impl Iterator for StdReadDir {
         self.0.next().map(|res| {
             let entry = res?;
             let file_type = entry.file_type()?;
-            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let file_name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 filename"))?;
             Ok(FsDirEntry {
                 path: entry.path(),
                 file_name,
@@ -58,6 +61,25 @@ impl FsFile for File {
 
     fn set_len(&self, size: u64) -> io::Result<()> {
         Self::set_len(self, size)
+    }
+
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileExt;
+            FileExt::read_at(self, buf, offset)
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileExt;
+            FileExt::seek_read(self, buf, offset)
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            compile_error!("unsupported platform");
+        }
     }
 
     fn lock_exclusive(&self) -> io::Result<()> {
@@ -387,6 +409,30 @@ mod tests {
         FsFile::lock_exclusive(&file)?;
 
         // Lock acquired — if we got here without blocking, the test passes
+        Ok(())
+    }
+
+    #[test]
+    fn fs_file_read_at() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let fs = StdFs;
+
+        let path = dir.path().join("pread.bin");
+        let opts = FsOpenOptions::new().write(true).create(true).read(true);
+        let mut file = fs.open(&path, &opts)?;
+        file.write_all(b"hello world")?;
+
+        // read_at at offset 6 should return "world"
+        let mut buf = [0u8; 5];
+        let n = FsFile::read_at(&file, &mut buf, 6)?;
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"world");
+
+        // read_at at offset 0 should return "hello"
+        let n = FsFile::read_at(&file, &mut buf, 0)?;
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"hello");
+
         Ok(())
     }
 

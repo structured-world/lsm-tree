@@ -162,6 +162,17 @@ pub trait FsFile: Read + Write + Seek + Send + Sync {
     /// Returns an I/O error if the length change fails.
     fn set_len(&self, size: u64) -> io::Result<()>;
 
+    /// Reads bytes from the file at the given offset without changing the
+    /// file cursor position.
+    ///
+    /// Equivalent to `pread(2)` on Unix. Multiple threads can call this
+    /// concurrently on the same file handle without synchronization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the read fails.
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize>;
+
     /// Acquires an exclusive (write) lock on this file.
     ///
     /// Blocks until the lock is acquired.
