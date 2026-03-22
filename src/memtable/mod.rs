@@ -127,7 +127,8 @@ impl Memtable {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
-    // NOTE: #[doc(hidden)] — internal API, not part of the semver contract.
+    // `pub` + `#[doc(hidden)]`: used by the host crate (fjall) to construct
+    // ephemeral memtables. Not part of the semver-stable API.
     // The comparator parameter is mandatory because memtable ordering must
     // match the tree's comparator; a default would silently produce wrong order.
     #[doc(hidden)]
