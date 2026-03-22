@@ -423,6 +423,10 @@ impl SkipMap {
     fn node_user_key_bytes(&self, node: u32) -> &[u8] {
         let off = self.node_key_offset(node);
         let len = u32::from(self.node_key_len(node));
+        // SAFETY: `node` is reachable via skiplist links only after publication
+        // (CAS with Release), so its metadata (key_offset, key_len) was fully
+        // written during alloc_node.  The arena block backing off..off+len is
+        // never freed while the SkipMap lives.
         unsafe { self.arena.get_bytes(off, len) }
     }
 
