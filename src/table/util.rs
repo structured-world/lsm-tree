@@ -76,7 +76,7 @@ pub fn load_block(
 
         (cached_fd, false)
     } else {
-        let fd = std::fs::File::open(path)?;
+        let file = std::fs::File::open(path)?;
 
         #[cfg(feature = "metrics")]
         metrics.table_file_opened_uncached.fetch_add(1, Relaxed);
@@ -84,7 +84,7 @@ pub fn load_block(
         // The if-branch returns Arc<dyn FsFile> from the descriptor
         // table, so the else-branch needs an explicit type annotation
         // to trigger unsizing coercion.
-        let fd: Arc<dyn FsFile> = Arc::new(fd);
+        let fd: Arc<dyn FsFile> = Arc::new(file);
         (fd, true)
     };
 
