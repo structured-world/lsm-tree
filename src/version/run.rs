@@ -95,6 +95,8 @@ impl<T: Ranged> Run<T> {
             .sort_by(|a, b| cmp.compare(a.key_range().min(), b.key_range().min()));
     }
 
+    /// Appends items without re-sorting. Callers must ensure the run remains
+    /// sorted (e.g. by calling [`push_cmp`] per item, or by sorting afterward).
     pub fn extend(&mut self, items: Vec<T>) {
         self.0.extend(items);
     }
