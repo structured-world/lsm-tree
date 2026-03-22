@@ -18,6 +18,20 @@ impl PrefixExtractor for ColonSeparatedPrefix {
     }
 }
 
+/// Asserts that L0 contains at least one run with `min_tables` tables.
+///
+/// Panics with a descriptive message if the largest L0 run is too small.
+fn assert_l0_multi_table_run(tree: &Tree, min_tables: usize) {
+    let version = tree.current_version();
+    let l0 = version.level(0).expect("L0 should exist");
+    let max_run_len = l0.iter().map(|r| r.len()).max().unwrap_or(0);
+    assert!(
+        max_run_len >= min_tables,
+        "expected L0 run with >={min_tables} tables, \
+         but largest run has {max_run_len} table(s)",
+    );
+}
+
 fn tree_with_prefix_bloom(folder: &tempfile::TempDir) -> lsm_tree::Result<Tree> {
     let tree = Config::new(
         folder,
@@ -550,17 +564,8 @@ fn prefix_bloom_multi_table_run_skipping() -> lsm_tree::Result<()> {
     tree.insert("delta:2", "v8", 7);
     tree.flush_active_memtable(0)?;
 
-    // Verify L0 contains a multi-table run (not just single-table runs).
-    // optimize_runs fuses disjoint single-table runs into one multi-table
-    // run, so 4 disjoint flushes produce a single run with 4 tables.
-    let version = tree.current_version();
-    let l0 = version.level(0).expect("L0 should exist");
-    let max_run_len = l0.iter().map(|r| r.len()).max().unwrap_or(0);
-    assert!(
-        max_run_len >= 4,
-        "expected a multi-table run with >=4 tables in L0, \
-         but largest run has {max_run_len} table(s)",
-    );
+    // Verify L0 contains a fused multi-table run (4 disjoint flushes).
+    assert_l0_multi_table_run(&tree, 4);
 
     // Each prefix scan should find exactly 2 keys — the bloom filter
     // skips tables that definitely don't contain the queried prefix.
@@ -628,13 +633,7 @@ fn prefix_bloom_multi_table_run_bloom_rejection() -> lsm_tree::Result<()> {
     tree.flush_active_memtable(0)?;
 
     // Verify L0 has a multi-table run (disjoint tables fused).
-    let version = tree.current_version();
-    let l0 = version.level(0).expect("L0 should exist");
-    let max_run_len = l0.iter().map(|r| r.len()).max().unwrap_or(0);
-    assert!(
-        max_run_len >= 2,
-        "expected multi-table run in L0, largest run has {max_run_len}",
-    );
+    assert_l0_multi_table_run(&tree, 2);
 
     // "b:" overlaps table 1's key range [a:1, c:9] but isn't in its bloom.
     // This exercises the Ok(false) bloom rejection path in the multi-table
@@ -690,13 +689,7 @@ fn prefix_bloom_multi_table_run_multiple_survivors() -> lsm_tree::Result<()> {
     tree.flush_active_memtable(0)?;
 
     // Verify L0 has a multi-table run.
-    let version = tree.current_version();
-    let l0 = version.level(0).expect("L0 should exist");
-    let max_run_len = l0.iter().map(|r| r.len()).max().unwrap_or(0);
-    assert!(
-        max_run_len >= 3,
-        "expected multi-table run with >=3 tables, got {max_run_len}",
-    );
+    assert_l0_multi_table_run(&tree, 3);
 
     // Scanning "ns:" matches ALL 3 tables' blooms (all indexed "ns:"
     // at write time). All 3 pass key-range and bloom → surviving.len() >= 2
