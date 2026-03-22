@@ -367,6 +367,55 @@ mod tests {
         fn _assert_object_safe(_: &dyn EncryptionProvider) {}
     }
 
+    /// Minimal provider that only implements required methods,
+    /// exercising the default encrypt_vec/decrypt_vec implementations.
+    struct XorProvider;
+
+    impl std::panic::UnwindSafe for XorProvider {}
+    impl std::panic::RefUnwindSafe for XorProvider {}
+
+    impl EncryptionProvider for XorProvider {
+        fn encrypt(&self, plaintext: &[u8]) -> crate::Result<Vec<u8>> {
+            Ok(plaintext.iter().map(|b| b ^ 0xAA).collect())
+        }
+
+        fn max_overhead(&self) -> u32 {
+            0
+        }
+
+        fn decrypt(&self, ciphertext: &[u8]) -> crate::Result<Vec<u8>> {
+            Ok(ciphertext.iter().map(|b| b ^ 0xAA).collect())
+        }
+    }
+
+    #[test]
+    fn default_encrypt_vec_delegates_to_encrypt() -> crate::Result<()> {
+        let provider = XorProvider;
+        let plaintext = b"test default encrypt_vec";
+
+        let via_encrypt = provider.encrypt(plaintext)?;
+        let via_encrypt_vec = provider.encrypt_vec(plaintext.to_vec())?;
+        assert_eq!(via_encrypt, via_encrypt_vec);
+
+        let decrypted = provider.decrypt(&via_encrypt_vec)?;
+        assert_eq!(decrypted, plaintext);
+        Ok(())
+    }
+
+    #[test]
+    fn default_decrypt_vec_delegates_to_decrypt() -> crate::Result<()> {
+        let provider = XorProvider;
+        let plaintext = b"test default decrypt_vec";
+
+        let ciphertext = provider.encrypt(plaintext)?;
+
+        let via_decrypt = provider.decrypt(&ciphertext)?;
+        let via_decrypt_vec = provider.decrypt_vec(ciphertext.clone())?;
+        assert_eq!(via_decrypt, via_decrypt_vec);
+        assert_eq!(via_decrypt_vec, plaintext);
+        Ok(())
+    }
+
     #[cfg(feature = "encryption")]
     mod aes256gcm {
         use super::*;

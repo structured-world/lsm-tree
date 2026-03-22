@@ -1002,4 +1002,177 @@ mod tests {
 
         Ok(())
     }
+
+    // --- Encrypted block roundtrip tests ---
+    // These exercise the encrypt_vec/decrypt_vec code paths in write_into,
+    // from_reader, and from_file that are untouched by the non-encrypted tests.
+
+    #[cfg(feature = "encryption")]
+    mod encrypted {
+        use crate::table::block::*;
+
+        fn test_provider() -> crate::encryption::Aes256GcmProvider {
+            crate::encryption::Aes256GcmProvider::new(&[0x42; 32])
+        }
+
+        #[test]
+        fn block_roundtrip_encrypted_uncompressed() -> crate::Result<()> {
+            let enc = test_provider();
+            let data = b"plaintext block data for encryption test";
+            let mut writer = vec![];
+
+            Block::write_into(
+                &mut writer,
+                data,
+                BlockType::Data,
+                CompressionType::None,
+                Some(&enc),
+            )?;
+
+            let mut reader = &writer[..];
+            let block = Block::from_reader(&mut reader, CompressionType::None, Some(&enc))?;
+            assert_eq!(data, &*block.data);
+            Ok(())
+        }
+
+        #[test]
+        #[cfg(feature = "lz4")]
+        fn block_roundtrip_encrypted_lz4() -> crate::Result<()> {
+            let enc = test_provider();
+            let data = b"abcdefabcdefabcdef";
+            let mut writer = vec![];
+
+            Block::write_into(
+                &mut writer,
+                data,
+                BlockType::Data,
+                CompressionType::Lz4,
+                Some(&enc),
+            )?;
+
+            let mut reader = &writer[..];
+            let block = Block::from_reader(&mut reader, CompressionType::Lz4, Some(&enc))?;
+            assert_eq!(data, &*block.data);
+            Ok(())
+        }
+
+        #[test]
+        #[cfg(feature = "zstd")]
+        fn block_roundtrip_encrypted_zstd() -> crate::Result<()> {
+            let enc = test_provider();
+            let data = b"abcdefabcdefabcdef";
+            let mut writer = vec![];
+
+            Block::write_into(
+                &mut writer,
+                data,
+                BlockType::Data,
+                CompressionType::Zstd(3),
+                Some(&enc),
+            )?;
+
+            let mut reader = &writer[..];
+            let block = Block::from_reader(&mut reader, CompressionType::Zstd(3), Some(&enc))?;
+            assert_eq!(data, &*block.data);
+            Ok(())
+        }
+
+        #[test]
+        fn block_from_file_encrypted_uncompressed() -> crate::Result<()> {
+            use std::io::Write;
+
+            let enc = test_provider();
+            let data = b"plaintext block data for from_file encryption test";
+            let mut buf = vec![];
+            let header = Block::write_into(
+                &mut buf,
+                data,
+                BlockType::Data,
+                CompressionType::None,
+                Some(&enc),
+            )?;
+
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("block");
+            let mut file = std::fs::File::create(&path)?;
+            file.write_all(&buf)?;
+            file.sync_all()?;
+            drop(file);
+
+            let file = std::fs::File::open(&path)?;
+            let handle = crate::table::BlockHandle::new(
+                BlockOffset(0),
+                header.data_length + Header::serialized_len() as u32,
+            );
+            let block = Block::from_file(&file, handle, CompressionType::None, Some(&enc))?;
+            assert_eq!(data, &*block.data);
+            Ok(())
+        }
+
+        #[test]
+        #[cfg(feature = "lz4")]
+        fn block_from_file_encrypted_lz4() -> crate::Result<()> {
+            use std::io::Write;
+
+            let enc = test_provider();
+            let data = b"abcdefabcdefabcdef";
+            let mut buf = vec![];
+            let header = Block::write_into(
+                &mut buf,
+                data,
+                BlockType::Data,
+                CompressionType::Lz4,
+                Some(&enc),
+            )?;
+
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("block");
+            let mut file = std::fs::File::create(&path)?;
+            file.write_all(&buf)?;
+            file.sync_all()?;
+            drop(file);
+
+            let file = std::fs::File::open(&path)?;
+            let handle = crate::table::BlockHandle::new(
+                BlockOffset(0),
+                header.data_length + Header::serialized_len() as u32,
+            );
+            let block = Block::from_file(&file, handle, CompressionType::Lz4, Some(&enc))?;
+            assert_eq!(data, &*block.data);
+            Ok(())
+        }
+
+        #[test]
+        #[cfg(feature = "zstd")]
+        fn block_from_file_encrypted_zstd() -> crate::Result<()> {
+            use std::io::Write;
+
+            let enc = test_provider();
+            let data = b"abcdefabcdefabcdef";
+            let mut buf = vec![];
+            let header = Block::write_into(
+                &mut buf,
+                data,
+                BlockType::Data,
+                CompressionType::Zstd(3),
+                Some(&enc),
+            )?;
+
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("block");
+            let mut file = std::fs::File::create(&path)?;
+            file.write_all(&buf)?;
+            file.sync_all()?;
+            drop(file);
+
+            let file = std::fs::File::open(&path)?;
+            let handle = crate::table::BlockHandle::new(
+                BlockOffset(0),
+                header.data_length + Header::serialized_len() as u32,
+            );
+            let block = Block::from_file(&file, handle, CompressionType::Zstd(3), Some(&enc))?;
+            assert_eq!(data, &*block.data);
+            Ok(())
+        }
+    }
 }
