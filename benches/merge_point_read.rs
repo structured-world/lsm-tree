@@ -1,5 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use lsm_tree::{AbstractTree, Cache, Config, MergeOperator, SequenceNumberCounter, UserValue};
+use lsm_tree::{
+    AbstractTree, AnyTree, Cache, Config, MergeOperator, SequenceNumberCounter, UserValue,
+};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -28,11 +30,36 @@ impl MergeOperator for CounterMerge {
     }
 }
 
+/// Populates a tree with a base value + N-1 unrelated tables + 1 merge operand.
+/// Returns the seqno to use for reads.
+fn populate_merge_tree(tree: &AnyTree, table_count: u64) -> u64 {
+    let mut seqno = 0u64;
+
+    // Base value on disk
+    tree.insert("counter", 100_i64.to_le_bytes(), seqno);
+    seqno += 1;
+    tree.flush_active_memtable(0).unwrap();
+
+    // Create many tables with unrelated keys (bloom should reject these)
+    for i in 1..table_count {
+        let key = format!("other_{i:04}");
+        tree.insert(key, 0_i64.to_le_bytes(), seqno);
+        seqno += 1;
+        tree.flush_active_memtable(0).unwrap();
+    }
+
+    // Merge operand in active memtable
+    tree.merge("counter", 1_i64.to_le_bytes(), seqno);
+    seqno += 1;
+
+    seqno
+}
+
 fn merge_point_read_deep_tree(c: &mut Criterion) {
     let mut group = c.benchmark_group("merge point read");
     group.sample_size(100);
 
-    for table_count in [10, 50, 100] {
+    for table_count in [10u64, 50, 100] {
         // --- Uncached: cold disk reads ---
         let folder = tempdir().unwrap();
         let tree = Config::new(
@@ -45,24 +72,7 @@ fn merge_point_read_deep_tree(c: &mut Criterion) {
         .open()
         .unwrap();
 
-        let mut seqno = 0u64;
-
-        // Base value on disk
-        tree.insert("counter", 100_i64.to_le_bytes(), seqno);
-        seqno += 1;
-        tree.flush_active_memtable(0).unwrap();
-
-        // Create many tables with unrelated keys (bloom should reject these)
-        for i in 1..table_count {
-            let key = format!("other_{i:04}");
-            tree.insert(key, 0_i64.to_le_bytes(), seqno);
-            seqno += 1;
-            tree.flush_active_memtable(0).unwrap();
-        }
-
-        // Merge operand in active memtable
-        tree.merge("counter", 1_i64.to_le_bytes(), seqno);
-        seqno += 1;
+        let seqno = populate_merge_tree(&tree, table_count);
 
         group.bench_function(format!("merge get, {table_count} tables (uncached)"), |b| {
             b.iter(|| {
@@ -84,27 +94,14 @@ fn merge_point_read_deep_tree(c: &mut Criterion) {
         .open()
         .unwrap();
 
-        let mut s = 0u64;
-        tree_cached.insert("counter", 100_i64.to_le_bytes(), s);
-        s += 1;
-        tree_cached.flush_active_memtable(0).unwrap();
-
-        for i in 1..table_count {
-            let key = format!("other_{i:04}");
-            tree_cached.insert(key, 0_i64.to_le_bytes(), s);
-            s += 1;
-            tree_cached.flush_active_memtable(0).unwrap();
-        }
-
-        tree_cached.merge("counter", 1_i64.to_le_bytes(), s);
-        s += 1;
+        let seqno_cached = populate_merge_tree(&tree_cached, table_count);
 
         // Warm the cache
-        let _ = tree_cached.get("counter", s).unwrap();
+        let _ = tree_cached.get("counter", seqno_cached).unwrap();
 
         group.bench_function(format!("merge get, {table_count} tables (cached)"), |b| {
             b.iter(|| {
-                let val = tree_cached.get("counter", s).unwrap().unwrap();
+                let val = tree_cached.get("counter", seqno_cached).unwrap().unwrap();
                 let n = i64::from_le_bytes((*val).try_into().unwrap());
                 assert_eq!(n, 101);
             });
