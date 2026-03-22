@@ -108,9 +108,9 @@ pub fn prefill_prefix_keys(
 /// For key_size < 8: trailing (least-significant) bytes so small indices
 /// produce distinct keys (e.g. key_size=4, index=1 → `[0,0,0,1]`).
 /// # Panics
-/// Panics if `key_size` is 0. All CLI workloads use `key_size >= 2` (validated
-/// at workload level) and clap defaults to 16, so this cannot be triggered
-/// through normal usage.
+/// Panics if `key_size` is 0. CLI validates `key_size > 0` in `main.rs`;
+/// workloads add stricter guards (mergerandom >= 2, prefixscan >= 4).
+/// Default `--key-size` is 16.
 #[inline]
 pub fn make_sequential_key(index: u64, key_size: usize) -> Vec<u8> {
     assert!(key_size > 0, "key_size must be > 0");
