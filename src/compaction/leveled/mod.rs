@@ -335,7 +335,9 @@ impl Strategy {
 
                 for idx in (1..lmax_idx).rev() {
                     let canonical = idx.saturating_sub(level_shift);
-                    let ratio_idx = canonical.saturating_sub(2);
+                    // In the forward formula, target(k+1)/target(k) = ratio[k-1],
+                    // so backwards: target(k) = target(k+1) / ratio[k-1]
+                    let ratio_idx = canonical.saturating_sub(1);
                     let ratio = f64::from(
                         self.level_ratio_policy
                             .get(ratio_idx)

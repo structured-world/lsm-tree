@@ -417,6 +417,14 @@ fn multi_level_no_skip_when_l1_has_room() -> crate::Result<()> {
     // Data should still be compacted and readable
     assert!(tree.table_count() < 4);
 
+    // Verify data went to L1 (not skipped to L2) — L2 should be empty
+    assert!(
+        tree.current_version()
+            .level(2)
+            .map_or(true, |l| l.is_empty()),
+        "L2 should remain empty when L1 has room (no multi-level skip)",
+    );
+
     for i in 0..4u8 {
         assert!(tree.get([b'k', i].as_slice(), MAX_SEQNO)?.is_some());
     }

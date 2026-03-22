@@ -203,9 +203,9 @@ impl CompactionStrategy for Strategy {
                 crate::UserValue::from(
                     #[expect(
                         clippy::cast_possible_truncation,
-                        reason = "min_merge_width fits in u32"
+                        reason = "min_merge_width fits in u32 for persistence; usize::MAX maps to u32::MAX"
                     )]
-                    (self.min_merge_width as u32).to_le_bytes(),
+                    (self.min_merge_width.min(u32::MAX as usize) as u32).to_le_bytes(),
                 ),
             ),
             (
@@ -306,20 +306,24 @@ impl CompactionStrategy for Strategy {
         }
 
         if prefix_len >= self.min_merge_width {
+            // Cap at max_merge_width, but ensure we still meet min_merge_width
+            // (guards against misconfigured max < min)
             let merge_count = prefix_len.min(self.max_merge_width);
 
-            let table_ids: HashSet<TableId> = sorted_runs
-                .iter()
-                .take(merge_count)
-                .flat_map(|r| r.table_ids.iter().copied())
-                .collect();
+            if merge_count >= self.min_merge_width {
+                let table_ids: HashSet<TableId> = sorted_runs
+                    .iter()
+                    .take(merge_count)
+                    .flat_map(|r| r.table_ids.iter().copied())
+                    .collect();
 
-            return Choice::Merge(CompactionInput {
-                table_ids,
-                dest_level: 0,
-                canonical_level: 0,
-                target_size: self.target_size,
-            });
+                return Choice::Merge(CompactionInput {
+                    table_ids,
+                    dest_level: 0,
+                    canonical_level: 0,
+                    target_size: self.target_size,
+                });
+            }
         }
 
         Choice::DoNothing
