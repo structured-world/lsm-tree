@@ -189,9 +189,15 @@ impl Block {
     /// or provider will typically surface as a read/validation error
     /// (checksum, length, or decompression failure) rather than
     /// silently producing valid-looking plaintext.
+    // The encrypted and unencrypted branches duplicate the compression
+    // match because their input types differ: encrypted works with an
+    // owned Vec<u8> (from decrypt_vec), while unencrypted borrows a
+    // Slice (zero-copy on the None-compression path). Unifying them
+    // would require either a Cow/enum wrapper or sacrificing the
+    // zero-copy optimization.
     #[expect(
         clippy::too_many_lines,
-        reason = "encrypt/no-encrypt branches are inherently verbose"
+        reason = "encrypt/no-encrypt branches duplicate compression match — see comment above"
     )]
     pub fn from_reader<R: std::io::Read>(
         reader: &mut R,
@@ -347,9 +353,10 @@ impl Block {
     ///
     /// Pipeline: read → verify checksum → decrypt → decompress.
     /// When `encryption` is `None`, the decrypt step is skipped.
+    // Same duplication rationale as from_reader — see comment there.
     #[expect(
         clippy::too_many_lines,
-        reason = "encrypt/no-encrypt branches are inherently verbose"
+        reason = "encrypt/no-encrypt branches duplicate compression match — see from_reader"
     )]
     pub fn from_file(
         file: &dyn FsFile,
@@ -408,9 +415,8 @@ impl Block {
                 reason = "header was decoded from buf, so it has at least Header::serialized_len() bytes"
             )]
             let payload_vec = buf[Header::serialized_len()..].to_vec();
-            // Explicitly drop the original Slice to reduce peak memory
-            // before decrypting in-place. Shadowing alone does NOT trigger
-            // drop — the outer `buf` would persist until function return.
+            // Explicitly drop the original Slice so it is released before
+            // decryption begins, reducing peak memory.
             drop(buf);
 
             let decrypted = enc.decrypt_vec(payload_vec)?;

@@ -303,16 +303,23 @@ impl EncryptionProvider for Aes256GcmProvider {
 
         let nonce = aes_gcm::Aes256Gcm::generate_nonce(&mut OsRng);
 
-        // Grow the buffer for nonce prefix + tag suffix, then shift the
-        // plaintext right by NONCE_LEN to make room for the nonce at front.
-        // This is a single memmove (typically ≤ block size) and avoids
-        // allocating a second buffer entirely.
-        buf.reserve(Self::NONCE_LEN + Self::TAG_LEN);
-        buf.splice(..0, nonce.iter().copied());
+        // Shift plaintext right by NONCE_LEN to make room for the nonce
+        // at front, then write the nonce into the gap. Single memmove via
+        // copy_within avoids the Splice iterator adapter overhead.
+        let plaintext_len = buf.len();
+        buf.resize(plaintext_len + Self::NONCE_LEN, 0);
+        buf.copy_within(..plaintext_len, Self::NONCE_LEN);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "buf was just resized to include NONCE_LEN"
+        )]
+        buf[..Self::NONCE_LEN].copy_from_slice(&nonce);
+        // Reserve space for the tag that will be appended after encryption.
+        buf.reserve(Self::TAG_LEN);
 
         #[expect(
             clippy::indexing_slicing,
-            reason = "buf length ≥ NONCE_LEN after splice"
+            reason = "buf length ≥ NONCE_LEN after resize + copy_within"
         )]
         let tag = self
             .cipher
@@ -343,9 +350,10 @@ impl EncryptionProvider for Aes256GcmProvider {
         #[expect(clippy::indexing_slicing, reason = "length checked above")]
         let tag = *GenericArray::from_slice(&buf[tag_start..]);
 
-        // Remove tag suffix, then nonce prefix — leaves just ciphertext.
-        buf.truncate(tag_start);
-        buf.drain(..Self::NONCE_LEN);
+        // Strip nonce prefix and tag suffix via copy_within + truncate
+        // (single memmove, avoids Drain iterator adapter overhead).
+        buf.copy_within(Self::NONCE_LEN..tag_start, 0);
+        buf.truncate(tag_start - Self::NONCE_LEN);
 
         self.cipher
             .decrypt_in_place_detached(&nonce, b"", &mut buf, &tag)
