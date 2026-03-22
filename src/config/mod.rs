@@ -256,8 +256,9 @@ pub struct Config {
     /// When set, all key comparisons use this comparator instead of the
     /// default lexicographic byte ordering. Once a tree is opened with a
     /// comparator, it must always be re-opened with the same comparator.
+    // Not `pub` — use `Config::comparator()` builder method as the public API.
     #[doc(hidden)]
-    pub comparator: SharedComparator,
+    pub(crate) comparator: SharedComparator,
 
     /// The global sequence number generator
     ///
