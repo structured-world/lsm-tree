@@ -184,3 +184,68 @@ fn point_read_merge_nonexistent_key() {
 
     assert_eq!(get_counter(&tree, "missing", 1), None);
 }
+
+/// Range tombstone in active memtable (not flushed) suppresses the
+/// base value during merge resolution.
+#[test]
+fn point_read_merge_rt_in_active_memtable() {
+    let folder = tempdir().unwrap();
+    let tree = tree_with_merge(&folder);
+
+    // Base value on disk
+    tree.insert("counter", 100_i64.to_le_bytes(), 0);
+    tree.flush_active_memtable(0).unwrap();
+
+    // RT in active memtable
+    tree.remove_range("c", "d", 2);
+
+    // Merge operand in active memtable
+    tree.merge("counter", 42_i64.to_le_bytes(), 3);
+
+    // RT suppresses base — result is pure merge from None
+    assert_eq!(get_counter(&tree, "counter", 4), Some(42));
+}
+
+/// RT in sealed memtable exercises the sealed memtable RT collection
+/// path in create_range_point.
+#[test]
+fn point_read_merge_rt_in_sealed_memtable() {
+    let folder = tempdir().unwrap();
+    let tree = tree_with_merge(&folder);
+
+    // Base value on disk
+    tree.insert("counter", 100_i64.to_le_bytes(), 0);
+    tree.flush_active_memtable(0).unwrap();
+
+    // RT in sealed memtable
+    tree.remove_range("c", "d", 2);
+    tree.rotate_memtable();
+
+    // Merge operand in active memtable
+    tree.merge("counter", 42_i64.to_le_bytes(), 3);
+
+    assert_eq!(get_counter(&tree, "counter", 4), Some(42));
+}
+
+/// Tables whose key range does not overlap the target key are skipped
+/// during RT collection (exercises the key-range continue path).
+#[test]
+fn point_read_merge_non_overlapping_tables_skipped() {
+    let folder = tempdir().unwrap();
+    let tree = tree_with_merge(&folder);
+
+    // Tables with keys far from "counter" — key range won't overlap
+    tree.insert("zzz_far_away", vec![0u8; 8], 0);
+    tree.flush_active_memtable(0).unwrap();
+    tree.insert("yyy_also_far", vec![0u8; 8], 1);
+    tree.flush_active_memtable(0).unwrap();
+
+    // Base value
+    tree.insert("counter", 50_i64.to_le_bytes(), 2);
+    tree.flush_active_memtable(0).unwrap();
+
+    // Merge operand
+    tree.merge("counter", 10_i64.to_le_bytes(), 3);
+
+    assert_eq!(get_counter(&tree, "counter", 4), Some(60));
+}
