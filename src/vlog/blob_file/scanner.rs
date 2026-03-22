@@ -484,60 +484,67 @@ mod tests {
         Ok(())
     }
 
-    /// Scanner rejects blob files where the SFA TOC has a corrupted
-    /// data section offset that would overflow u64.
+    /// Scanner rejects blob files where the SFA TOC reports a data
+    /// section whose pos + len overflows u64.
     #[test]
     fn blob_scanner_rejects_data_section_offset_overflow() -> crate::Result<()> {
+        use byteorder::{LittleEndian, WriteBytesExt};
+        use std::io::Write;
+
         let dir = tempdir()?;
         let blob_file_path = dir.path().join("0");
 
-        // Write a valid blob file, then corrupt the SFA TOC to produce
-        // an overflowing data section length.
-        {
-            let mut writer = BlobFileWriter::new(&blob_file_path, 0, 0)?;
-            writer.write(b"k", 0, b"v")?;
-            writer.finish()?;
-        }
-
-        // Read the raw file and corrupt the TOC's data section length
-        // to u64::MAX so that pos + len overflows.
-        let mut raw = std::fs::read(&blob_file_path)?;
-        let file_len = raw.len();
-
-        // SFA trailer is at the end of the file. The TOC entry for
-        // "data" contains a length field (u64 LE). Find and corrupt it.
-        // The TOC is written before the trailer. The data section length
-        // is stored as the first entry's len field.
+        // Craft a valid SFA file with a "data" TOC entry where
+        // pos=1 and len=u64::MAX, causing pos+len to overflow.
         //
-        // Rather than parsing the binary format, overwrite the data
-        // section length by finding the known value and replacing it.
-        // Data section length = total blob frame bytes (header + key + value).
-        use crate::vlog::blob_file::writer::BLOB_HEADER_LEN_V4;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "test data section length fits in usize"
-        )]
-        let data_len = (BLOB_HEADER_LEN_V4 + 1 + 1) as u64; // header + key("k") + value("v")
-        let data_len_bytes = data_len.to_le_bytes();
+        // SFA layout: [section data...] [TOC] [Trailer]
+        // TOC entry:  [pos: u64 LE] [len: u64 LE] [name_len: u16 LE] [name]
+        // TOC header: [magic: "TOC!"] [entry_count: u32 LE] [entries...]
+        // Trailer:    [magic: "SFA!"] [version: u8] [checksum_type: u8]
+        //             [toc_checksum: u128 LE] [toc_pos: u64 LE] [toc_len: u64 LE]
+        {
+            let mut file = std::fs::File::create(&blob_file_path)?;
 
-        // Search backwards from the end (TOC is near the end) for the
-        // data section length value.
-        let toc_region = &mut raw[file_len / 2..];
-        if let Some(pos) = toc_region.windows(8).position(|w| w == data_len_bytes) {
-            toc_region[pos..pos + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-            std::fs::write(&blob_file_path, &raw)?;
+            // Write 1 byte of dummy data so toc_pos > 0.
+            file.write_all(b"\x00")?;
+            let toc_pos: u64 = 1;
 
-            // May fail with InvalidHeader (overflow) or with an SFA
-            // checksum error (corrupted TOC). Both are acceptable —
-            // the point is it doesn't succeed.
-            assert!(
-                Scanner::new(&blob_file_path, 0).is_err(),
-                "expected error for overflowing data section",
-            );
+            // Build TOC bytes: one entry named "data" with pos=1, len=u64::MAX.
+            let mut toc_buf = Vec::new();
+            toc_buf.write_all(b"TOC!")?;
+            toc_buf.write_u32::<LittleEndian>(1)?; // 1 entry
+            toc_buf.write_u64::<LittleEndian>(1)?; // pos = 1
+            toc_buf.write_u64::<LittleEndian>(u64::MAX)?; // len = u64::MAX → overflow
+            toc_buf.write_u16::<LittleEndian>(4)?; // name len
+            toc_buf.write_all(b"data")?; // name
+
+            // Compute TOC checksum (xxh3-128 over the raw TOC bytes).
+            let toc_checksum = xxhash_rust::xxh3::xxh3_128(&toc_buf);
+
+            let toc_len = toc_buf.len() as u64;
+            file.write_all(&toc_buf)?;
+
+            // Write trailer.
+            file.write_all(b"SFA!")?;
+            file.write_u8(0x1)?; // version
+            file.write_u8(0x0)?; // checksum type (xxh3)
+            file.write_u128::<LittleEndian>(toc_checksum)?;
+            file.write_u64::<LittleEndian>(toc_pos)?;
+            file.write_u64::<LittleEndian>(toc_len)?;
+
+            file.sync_all()?;
         }
-        // If the pattern wasn't found, the SFA binary layout doesn't
-        // match our assumption — skip the test silently rather than
-        // produce a false failure.
+
+        let result = Scanner::new(&blob_file_path, 0);
+        assert!(
+            result.is_err(),
+            "expected error for overflowing data section"
+        );
+        let err = result.err().unwrap();
+        assert!(
+            matches!(err, crate::Error::InvalidHeader("BlobFile")),
+            "expected InvalidHeader(\"BlobFile\") for overflow, got: {err:?}",
+        );
 
         Ok(())
     }
