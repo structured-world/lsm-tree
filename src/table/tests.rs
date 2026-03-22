@@ -1816,7 +1816,7 @@ fn meta_seqno_kv_max_corruption_returns_invalid_data() -> crate::Result<()> {
 }
 
 /// bloom_may_contain_key with full (non-partitioned) filter delegates to
-/// bloom_may_contain_hash and correctly rejects a non-matching key.
+/// bloom_may_contain_hash. Both methods agree for full filters.
 #[test]
 fn bloom_may_contain_key_full_filter() -> crate::Result<()> {
     let items: Vec<InternalValue> = ["a", "c", "e"]
@@ -1830,19 +1830,27 @@ fn bloom_may_contain_key_full_filter() -> crate::Result<()> {
     test_with_table(
         &items,
         |table| {
-            let hash_b = BloomBuilder::get_hash(b"b");
             let hash_a = BloomBuilder::get_hash(b"a");
+            let hash_b = BloomBuilder::get_hash(b"b");
 
-            // "b" is not in the table — bloom should reject (or conservatively accept)
-            let result_b = table.bloom_may_contain_key(b"b", hash_b)?;
-            // "a" IS in the table — bloom must accept
-            let result_a = table.bloom_may_contain_key(b"a", hash_a)?;
-            assert!(result_a, "bloom must not reject a key that exists");
+            // Existing key: both methods must accept
+            assert!(
+                table.bloom_may_contain_key(b"a", hash_a)?,
+                "bloom_may_contain_key must not reject existing key"
+            );
+            assert!(
+                table.bloom_may_contain_key_hash(hash_a)?,
+                "bloom_may_contain_key_hash must not reject existing key"
+            );
 
-            // If bloom rejects "b", that's the expected optimization
-            if !result_b {
-                // Good — bloom correctly filtered out non-matching key
-            }
+            // For full filters, bloom_may_contain_key delegates to the same
+            // hash-only path, so both methods return the same result.
+            let key_result = table.bloom_may_contain_key(b"b", hash_b)?;
+            let hash_result = table.bloom_may_contain_key_hash(hash_b)?;
+            assert_eq!(
+                key_result, hash_result,
+                "full filter: key-based and hash-only should agree"
+            );
 
             Ok(())
         },
@@ -1853,6 +1861,10 @@ fn bloom_may_contain_key_full_filter() -> crate::Result<()> {
 
 /// bloom_may_contain_key with partitioned filter seeks the correct partition
 /// and returns Ok(false) for a key beyond all partition boundaries.
+///
+/// Contrast: bloom_may_contain_key_hash returns Ok(true) conservatively
+/// for the same key because it cannot seek partitions by hash alone.
+/// This is the core behavioral improvement introduced by this PR.
 #[test]
 fn bloom_may_contain_key_partitioned_filter() -> crate::Result<()> {
     let items: Vec<InternalValue> = (0u64..100)
@@ -1865,18 +1877,26 @@ fn bloom_may_contain_key_partitioned_filter() -> crate::Result<()> {
     test_with_table(
         &items,
         |table| {
-            // Key that exists
+            // Key that exists: both methods must accept
             let hash_exist = BloomBuilder::get_hash(b"key_0050");
-            let result = table.bloom_may_contain_key(b"key_0050", hash_exist)?;
             assert!(
-                result,
+                table.bloom_may_contain_key(b"key_0050", hash_exist)?,
                 "bloom must not reject existing key in partitioned filter"
             );
 
-            // Key beyond all partitions
+            // Key beyond all partitions: key-based rejects, hash-only is conservative
             let hash_beyond = BloomBuilder::get_hash(b"zzz_beyond");
-            let result = table.bloom_may_contain_key(b"zzz_beyond", hash_beyond)?;
-            assert!(!result, "key beyond all partitions should be rejected");
+            assert!(
+                !table.bloom_may_contain_key(b"zzz_beyond", hash_beyond)?,
+                "key beyond all partitions should be rejected by key-based check"
+            );
+
+            // Hash-only path returns Ok(true) conservatively for partitioned filters
+            // because it cannot seek the TLI without a user key.
+            assert!(
+                table.bloom_may_contain_key_hash(hash_beyond)?,
+                "hash-only bloom check should remain conservative for partitioned filters"
+            );
 
             Ok(())
         },

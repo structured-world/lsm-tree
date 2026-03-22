@@ -1,3 +1,33 @@
+use lsm_tree::MergeOperator;
+
+/// i64 summation merge operator shared across merge pipeline tests.
+struct SumMerge;
+impl MergeOperator for SumMerge {
+    fn merge(
+        &self,
+        _key: &[u8],
+        base_value: Option<&[u8]>,
+        operands: &[&[u8]],
+    ) -> lsm_tree::Result<lsm_tree::Slice> {
+        let mut sum: i64 = base_value
+            .map(|b| {
+                i64::from_le_bytes(
+                    b.try_into()
+                        .expect("invalid base value length for i64 in SumMerge"),
+                )
+            })
+            .unwrap_or(0);
+        for op in operands {
+            sum += i64::from_le_bytes(
+                (*op)
+                    .try_into()
+                    .expect("invalid operand length for i64 in SumMerge"),
+            );
+        }
+        Ok(sum.to_le_bytes().to_vec().into())
+    }
+}
+
 /// Tests that partitioned bloom filters correctly skip non-matching keys
 /// via the Table::get path (which has partition-aware bloom seeking).
 ///
@@ -86,36 +116,9 @@ fn partitioned_bloom_skip_beyond_partitions() -> lsm_tree::Result<()> {
 #[test_log::test]
 fn partitioned_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
     use lsm_tree::{
-        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, MergeOperator,
-        SequenceNumberCounter, MAX_SEQNO,
+        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, SequenceNumberCounter,
+        MAX_SEQNO,
     };
-
-    struct SumMerge;
-    impl MergeOperator for SumMerge {
-        fn merge(
-            &self,
-            _key: &[u8],
-            base_value: Option<&[u8]>,
-            operands: &[&[u8]],
-        ) -> lsm_tree::Result<lsm_tree::Slice> {
-            let mut sum: i64 = base_value
-                .map(|b| {
-                    i64::from_le_bytes(
-                        b.try_into()
-                            .expect("invalid base value length for i64 in SumMerge"),
-                    )
-                })
-                .unwrap_or(0);
-            for op in operands {
-                sum += i64::from_le_bytes(
-                    (*op)
-                        .try_into()
-                        .expect("invalid operand length for i64 in SumMerge"),
-                );
-            }
-            Ok(sum.to_le_bytes().to_vec().into())
-        }
-    }
 
     let folder = get_tmp_folder();
     let path = folder.path();
@@ -154,36 +157,9 @@ fn partitioned_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
 #[test_log::test]
 fn full_filter_bloom_skip_merge_pipeline() -> lsm_tree::Result<()> {
     use lsm_tree::{
-        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, MergeOperator,
-        SequenceNumberCounter, MAX_SEQNO,
+        config::PinningPolicy, get_tmp_folder, AbstractTree, Config, SequenceNumberCounter,
+        MAX_SEQNO,
     };
-
-    struct SumMerge;
-    impl MergeOperator for SumMerge {
-        fn merge(
-            &self,
-            _key: &[u8],
-            base_value: Option<&[u8]>,
-            operands: &[&[u8]],
-        ) -> lsm_tree::Result<lsm_tree::Slice> {
-            let mut sum: i64 = base_value
-                .map(|b| {
-                    i64::from_le_bytes(
-                        b.try_into()
-                            .expect("invalid base value length for i64 in SumMerge"),
-                    )
-                })
-                .unwrap_or(0);
-            for op in operands {
-                sum += i64::from_le_bytes(
-                    (*op)
-                        .try_into()
-                        .expect("invalid operand length for i64 in SumMerge"),
-                );
-            }
-            Ok(sum.to_le_bytes().to_vec().into())
-        }
-    }
 
     let folder = get_tmp_folder();
     let path = folder.path();
