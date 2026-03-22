@@ -994,11 +994,11 @@ fn merge_operands_across_active_and_disk() -> lsm_tree::Result<()> {
     Ok(())
 }
 
-/// Bloom pre-filter skips tables whose key_range overlaps but whose bloom
-/// filter reports the key absent. Exercises the Ok(false) → skip path in
-/// the bloom-filtered iterator pipeline (bloom_passes + key_hash).
+/// Merge correctness when bloom pre-filtering is enabled and there exists an
+/// overlapping table whose bloom filter reports the key absent. This ensures
+/// the extra overlapping table does not affect the merged result.
 #[test]
-fn merge_bloom_skips_non_matching_tables() -> lsm_tree::Result<()> {
+fn merge_bloom_with_overlapping_non_matching_table() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let tree = open_tree_with_counter(&folder);
 

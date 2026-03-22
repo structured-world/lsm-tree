@@ -780,8 +780,8 @@ impl Tree {
     /// reuses the unified merge/RT/Indirection resolution logic from `MvccStream`
     /// instead of duplicating it in a hand-rolled collection loop.
     ///
-    /// Bloom pre-filtering ensures that 95%+ of disk tables are rejected at the
-    /// filter level, preserving O(1) reject performance on deep LSM trees.
+    /// Bloom pre-filtering can reject many disk tables at the filter level,
+    /// which typically improves point-read performance on deep LSM trees.
     fn resolve_merge_via_pipeline(
         version: SuperVersion,
         key: &[u8],

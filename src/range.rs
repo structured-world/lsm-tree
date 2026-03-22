@@ -159,7 +159,7 @@ fn bloom_passes(state: &IterState, table: &crate::table::Table) -> bool {
     }
 
     if let Some(key_hash) = state.key_hash {
-        match table.bloom_may_contain_key(key_hash) {
+        match table.bloom_may_contain_key_hash(key_hash) {
             Ok(false) => return false,
             Err(e) => {
                 log::debug!("key bloom check failed for table {:?}: {e}", table.id(),);

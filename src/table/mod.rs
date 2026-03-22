@@ -831,14 +831,14 @@ impl Table {
         self.bloom_may_contain_hash(prefix_hash)
     }
 
-    /// Checks the bloom filter for a key hash.
+    /// Checks the bloom filter for a precomputed key hash.
     ///
     /// Returns `Ok(true)` if the key may exist in this table (or if no
     /// filter is available), `Ok(false)` if the key is definitely absent.
     ///
     /// Used by the point-read merge pipeline to pre-filter disk tables
     /// before building range iterators.
-    pub(crate) fn bloom_may_contain_key(&self, key_hash: u64) -> crate::Result<bool> {
+    pub(crate) fn bloom_may_contain_key_hash(&self, key_hash: u64) -> crate::Result<bool> {
         self.bloom_may_contain_hash(key_hash)
     }
 
