@@ -659,6 +659,57 @@ fn prefix_bloom_multi_table_run_bloom_rejection() -> lsm_tree::Result<()> {
     Ok(())
 }
 
+/// Exercises the multi-table run path where 2+ tables survive both
+/// the key-range guard and bloom check (the `_ =>` match arm that
+/// constructs a new Run from survivors).
+///
+/// Tables share a common broad prefix ("ns:") but have disjoint
+/// sub-prefixes ("ns:a:", "ns:b:", "ns:c:"). Scanning "ns:" matches
+/// all tables' blooms, keeping 3 survivors in the multi-table path.
+#[test]
+fn prefix_bloom_multi_table_run_multiple_survivors() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = tree_with_prefix_bloom(&folder)?;
+
+    // 3 disjoint flushes that share the broad prefix "ns:".
+    tree.insert("ns:a:1", "v1", 0);
+    tree.insert("ns:a:2", "v2", 1);
+    tree.flush_active_memtable(0)?;
+
+    tree.insert("ns:b:1", "v3", 2);
+    tree.insert("ns:b:2", "v4", 3);
+    tree.flush_active_memtable(0)?;
+
+    tree.insert("ns:c:1", "v5", 4);
+    tree.insert("ns:c:2", "v6", 5);
+    tree.flush_active_memtable(0)?;
+
+    // Verify L0 has a multi-table run.
+    let version = tree.current_version();
+    let l0 = version.level(0).expect("L0 should exist");
+    let max_run_len = l0.iter().map(|r| r.len()).max().unwrap_or(0);
+    assert!(
+        max_run_len >= 3,
+        "expected multi-table run with >=3 tables, got {max_run_len}",
+    );
+
+    // Scanning "ns:" matches ALL 3 tables' blooms (all indexed "ns:"
+    // at write time). All 3 pass key-range and bloom → surviving.len() >= 2
+    // → hits the `_ =>` branch that builds a new Run from survivors.
+    let results: Vec<_> = tree
+        .create_prefix("ns:", 6, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 6);
+
+    // Narrow prefix: only 1 table survives → demoted to single-table path.
+    let results: Vec<_> = tree
+        .create_prefix("ns:b:", 6, None)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(results.len(), 2);
+
+    Ok(())
+}
+
 /// Verify that multi-table run prefix bloom skipping works correctly
 /// with overlapping key ranges (L0 tables may overlap). Two flushes
 /// with interleaved keys ensure the tables' key ranges overlap, and
