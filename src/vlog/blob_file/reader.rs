@@ -539,8 +539,8 @@ mod tests {
         let blob_file = blob_file.first().unwrap();
 
         // Tamper on-disk key bytes.
-        // Header layout: MAGIC(4) + Checksum(16) + SeqNo(8) + KeyLen(2) + RealValLen(4) + OnDiskValLen(4) = 38
-        // Key starts at offset 38 from blob start.
+        // V4 header layout: MAGIC(4) + Checksum(16) + SeqNo(8) + KeyLen(2) + RealValLen(4) + OnDiskValLen(4) + HeaderCrc(4) = 42
+        // Key starts at offset 42 from blob start (BLOB_HEADER_LEN_V4).
         let key_offset = handle.offset as usize + BLOB_HEADER_LEN_V4;
         let mut raw = std::fs::read(&blob_file.0.path)?;
         raw[key_offset] ^= 0xFF; // flip bits in first key byte
