@@ -244,19 +244,15 @@ impl CompactionStrategy for Strategy {
         let largest_run_size = runs.iter().map(|r| r.size).max().unwrap_or(0);
 
         if largest_run_size > 0 {
-            // space_amp_pct = ((total / largest) - 1) * 100
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "precision loss is acceptable for amplification calculation"
-            )]
-            let space_amp_pct = ((total_size as f64 / largest_run_size as f64) - 1.0) * 100.0;
+            // Integer arithmetic to avoid f64 precision loss on large sizes.
+            //   (total / largest - 1) * 100 >= threshold
+            // is equivalent to:
+            //   total * 100 >= largest * (100 + threshold)
+            let lhs = u128::from(total_size) * 100;
+            let rhs = u128::from(largest_run_size)
+                * (100 + u128::from(self.max_space_amplification_percent));
 
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "space_amp_pct is always non-negative and within u64 range"
-            )]
-            if (space_amp_pct as u64) >= self.max_space_amplification_percent {
+            if lhs >= rhs {
                 let table_ids: HashSet<TableId> = runs
                     .iter()
                     .flat_map(|r| r.table_ids.iter().copied())
@@ -281,7 +277,7 @@ impl CompactionStrategy for Strategy {
         let mut prefix_len = 1;
 
         for window in sorted_runs.windows(2) {
-            // SAFETY: windows(2) guarantees exactly 2 elements
+            // NOTE: windows(2) guarantees exactly 2 elements
             let (Some(smaller), Some(larger)) = (window.first(), window.get(1)) else {
                 unreachable!("windows(2) always yields slices of length 2");
             };

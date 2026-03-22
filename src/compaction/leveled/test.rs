@@ -616,28 +616,31 @@ fn multi_level_skip_fires_when_l1_oversized() -> crate::Result<()> {
         tree.compact(leveled.clone(), seqno)?;
     }
 
-    // Step 2: Now flush many more overlapping tables and compact with
-    // multi_level + same default target. After enough L0→L1 compactions,
-    // L1 will eventually exceed its target and the multi-level check in
-    // choose() (l1_score > 1.0) will be evaluated on every L0→L1 decision.
+    // Step 2: Switch to tiny target_size so L1 target (target_size * l0_threshold
+    // = 64 * 4 = 256 bytes) is small enough that any real table in L1 causes
+    // l1_score > 1.0, but L0 with 8+ tables still wins overall scoring
+    // (L0 score = tables/threshold = 8/4 = 2.0 > l1_score ≈ 1.x).
+    // This makes level_idx_with_highest_score == 0 AND l1_score > 1.0,
+    // which is the condition for multi-level skip to fire.
     let multi = Arc::new(
         Strategy::default()
             .with_multi_level(true)
+            .with_table_target_size(64)
             .with_l0_threshold(4),
     );
 
-    for _round in 0..6 {
-        for _k in 0..4 {
-            tree.insert("a", "val", seqno);
-            tree.insert(format!("k_{seqno}").as_bytes(), "val", seqno);
-            tree.insert("z", "val", seqno);
-            tree.flush_active_memtable(seqno)?;
-            seqno += 1;
-        }
-        for _ in 0..3 {
-            tree.compact(multi.clone(), seqno)?;
-        }
+    // Flush 8 overlapping tables so L0 scores 2.0 (8/4)
+    for _k in 0..8 {
+        tree.insert("a", "val", seqno);
+        tree.insert(format!("k_{seqno}").as_bytes(), "val", seqno);
+        tree.insert("z", "val", seqno);
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
     }
+
+    // Single compact should trigger multi-level: L0 wins scoring,
+    // L1 is oversized (real table > 256 byte target) → L0+L1→L2 skip
+    tree.compact(multi.clone(), seqno)?;
 
     // Data MUST have propagated beyond L1 into deeper levels.
     // NOTE: We cannot assert the specific L0+L1→L2 skip path fired because
