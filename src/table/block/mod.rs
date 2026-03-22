@@ -117,10 +117,19 @@ impl Block {
         let encrypted_buf = encryption.map(|enc| enc.encrypt(payload)).transpose()?;
         let payload: &[u8] = encrypted_buf.as_deref().unwrap_or(payload);
 
-        // Validate encrypted payload fits in the u32 on-disk format before casting.
+        // Validate the final on-disk payload against the same limit enforced on
+        // the read path. This prevents writing blocks that readers would reject
+        // as too large (e.g., after encryption expanded the compressed payload).
         let payload_len = u32::try_from(payload.len()).map_err(|_| {
             crate::Error::Encrypt("encrypted payload exceeds u32::MAX block format limit")
         })?;
+
+        if payload_len > MAX_DECOMPRESSION_SIZE {
+            return Err(crate::Error::DecompressedSizeTooLarge {
+                declared: u64::from(payload_len),
+                limit: u64::from(MAX_DECOMPRESSION_SIZE),
+            });
+        }
 
         header.data_length = payload_len;
         header.checksum = Checksum::from_raw(crate::hash::hash128(payload));
