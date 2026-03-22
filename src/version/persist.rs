@@ -15,6 +15,8 @@ pub fn persist_version(
     version: &Version,
     comparator_name: &str,
 ) -> crate::Result<()> {
+    // Panic is intentional: `UserComparator::name()` returns `&'static str`,
+    // so an oversized name is a programmer error, not a runtime condition.
     assert!(
         comparator_name.len() <= MAX_COMPARATOR_NAME_LEN,
         "comparator name exceeds {MAX_COMPARATOR_NAME_LEN} bytes",
