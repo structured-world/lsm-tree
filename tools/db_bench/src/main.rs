@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicU64;
     about = "LSM-tree benchmark suite (RocksDB db_bench compatible)"
 )]
 struct Cli {
-    /// Benchmark workload to run.
+    /// Benchmark workload to run. Use "all" to run every workload.
     #[arg(long, value_parser = parse_benchmark)]
     benchmark: String,
 
@@ -56,18 +56,26 @@ struct Cli {
     #[arg(long)]
     json: bool,
 
+    /// Output results in github-action-benchmark format (customBiggerIsBetter).
+    /// Implies running all benchmarks if --benchmark is "all".
+    #[arg(long)]
+    github_json: bool,
+
     /// Database directory path. If not set, a temporary directory is used.
     #[arg(long)]
     db: Option<PathBuf>,
 }
 
 fn parse_benchmark(s: &str) -> Result<String, String> {
+    if s == "all" {
+        return Ok(s.to_string());
+    }
     let available = available_benchmarks();
     if available.contains(&s) {
         Ok(s.to_string())
     } else {
         Err(format!(
-            "unknown benchmark '{}'. Available: {}",
+            "unknown benchmark '{}'. Available: all, {}",
             s,
             available.join(", ")
         ))
@@ -110,13 +118,39 @@ fn main() {
         }
     }
 
-    // Use provided path or create a temp directory.
+    let benchmarks: Vec<&str> = if cli.benchmark == "all" {
+        available_benchmarks().to_vec()
+    } else {
+        vec![&cli.benchmark]
+    };
+
+    // Collect github-action-benchmark entries when --github-json is set.
+    let mut github_entries: Vec<serde_json::Value> = Vec::new();
+
+    for benchmark_name in &benchmarks {
+        run_single(benchmark_name, &bench_config, &cli, &mut github_entries);
+    }
+
+    if cli.github_json {
+        let array = serde_json::Value::Array(github_entries);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&array).expect("failed to serialize")
+        );
+    }
+}
+
+fn run_single(
+    benchmark_name: &str,
+    bench_config: &BenchConfig,
+    cli: &Cli,
+    github_entries: &mut Vec<serde_json::Value>,
+) {
+    // Each benchmark gets a fresh temp directory.
     let _tmpdir;
     let db_path = match &cli.db {
         Some(p) => p.clone(),
         None => {
-            // process::exit skips Drop, but no resources need cleanup at
-            // this point (tree not yet opened, no temp dir to remove).
             _tmpdir = tempfile::tempdir().unwrap_or_else(|e| {
                 eprintln!("Error: failed to create temp directory: {e}");
                 std::process::exit(1);
@@ -125,51 +159,56 @@ fn main() {
         }
     };
 
-    eprintln!("=== db_bench ===");
-    eprintln!("Benchmark:   {}", cli.benchmark);
-    eprintln!("Num ops:     {}", cli.num);
-    eprintln!("Key size:    {} bytes", cli.key_size);
-    eprintln!("Value size:  {} bytes", cli.value_size);
-    eprintln!("Threads:     {}", cli.threads);
-    eprintln!("Cache:       {} MB", cli.cache_mb);
-    eprintln!("Compression: {:?}", cli.compression);
-    eprintln!("Block size:  {} bytes", cli.block_size);
-    eprintln!("BlobTree:    {}", cli.use_blob_tree);
-    eprintln!("DB path:     {}", db_path.display());
-    eprintln!();
+    eprintln!("=== db_bench: {benchmark_name} ===");
+    eprintln!(
+        "num={} key_size={} value_size={} threads={} cache={}MB",
+        cli.num, cli.key_size, cli.value_size, cli.threads, cli.cache_mb,
+    );
 
-    let tree = match config::create_tree(&db_path, &bench_config) {
+    let tree = match config::create_tree(&db_path, bench_config) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("Error: failed to open tree: {e}");
-            // Drop _tmpdir naturally by returning from main instead of exit()
             return;
         }
     };
     let seqno = AtomicU64::new(1);
     let mut reporter = Reporter::new();
 
-    let Some(workload) = create_workload(&cli.benchmark) else {
-        eprintln!("Error: unknown benchmark '{}'", cli.benchmark);
+    let Some(workload) = create_workload(benchmark_name) else {
+        eprintln!("Error: unknown benchmark '{benchmark_name}'");
         return;
     };
 
-    if let Err(e) = workload.run(&tree, &bench_config, &seqno, &mut reporter) {
-        eprintln!("Error: benchmark failed: {e}");
+    if let Err(e) = workload.run(&tree, bench_config, &seqno, &mut reporter) {
+        eprintln!("Error: {benchmark_name} failed: {e}");
         return;
     }
 
-    if cli.json {
+    let entry_size = bench_config.entry_size();
+
+    if cli.github_json {
+        let s = reporter.summary(entry_size);
+        github_entries.push(serde_json::json!({
+            "name": benchmark_name,
+            "value": s.ops_per_sec,
+            "unit": "ops/sec",
+            "extra": format!(
+                "P50: {:.1}us | P99: {:.1}us | P99.9: {:.1}us\nthreads: {} | elapsed: {:.2}s | num: {}",
+                s.p50, s.p99, s.p999, cli.threads, s.secs, cli.num,
+            ),
+        }));
+    } else if cli.json {
         let json_config = JsonConfig {
             num: cli.num,
             key_size: cli.key_size,
             value_size: cli.value_size,
-            entry_size: bench_config.entry_size(),
+            entry_size,
             threads: cli.threads,
             compression: cli.compression.to_string(),
         };
-        println!("{}", reporter.to_json(&cli.benchmark, &json_config));
+        println!("{}", reporter.to_json(benchmark_name, &json_config));
     } else {
-        reporter.print_human(&cli.benchmark, bench_config.entry_size());
+        reporter.print_human(benchmark_name, entry_size);
     }
 }

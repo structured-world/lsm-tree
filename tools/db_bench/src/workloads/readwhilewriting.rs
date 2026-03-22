@@ -24,7 +24,8 @@ impl Workload for ReadWhileWriting {
         // Minimum 2 threads (1 reader + 1 writer). Cap readers so each
         // spawned reader does useful work (no empty-loop threads).
         let mut threads = config.threads.max(2);
-        let max_readers = (config.num.max(1)) as usize;
+        // Benchmark tool targets 64-bit; on 32-bit this caps at usize::MAX readers.
+        let max_readers = usize::try_from(config.num.max(1)).unwrap_or(usize::MAX);
         let reader_count = std::cmp::min(threads - 1, max_readers);
         threads = reader_count + 1; // recompute for barrier
                                     // Distribute ops across readers, giving remainder to the last reader.

@@ -111,7 +111,12 @@ impl Workload for MergeRandom {
         let read_seqno = seqno.load(Ordering::Relaxed);
         let sample_key = make_sequential_key(0, config.key_size);
         if let Some(val) = tree.get(&sample_key, read_seqno)? {
-            let actual = i64::from_le_bytes(val[..8].try_into().unwrap_or_default());
+            let actual = if val.len() >= 8 {
+                i64::from_le_bytes(val[..8].try_into().expect("checked length"))
+            } else {
+                eprintln!("Warning: merge result too short ({} bytes)", val.len());
+                0
+            };
             eprintln!(
                 "Merged {} operands over {} hot keys, sample counter: {actual} (expected {expected}), {} tables",
                 config.num, hot_keys, tree.table_count(),

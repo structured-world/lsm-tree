@@ -3,15 +3,15 @@ use serde::Serialize;
 use std::time::{Duration, Instant};
 
 /// Derived metrics from a benchmark run.
-struct Summary {
-    secs: f64,
-    ops: u64,
-    ops_per_sec: f64,
-    mb_per_sec: f64,
-    p50: f64,
-    p99: f64,
-    p999: f64,
-    p9999: f64,
+pub struct Summary {
+    pub secs: f64,
+    pub ops: u64,
+    pub ops_per_sec: f64,
+    pub mb_per_sec: f64,
+    pub p50: f64,
+    pub p99: f64,
+    pub p999: f64,
+    pub p9999: f64,
 }
 
 /// Collects per-operation latencies and computes summary statistics.
@@ -89,7 +89,7 @@ impl Reporter {
 
     /// Compute derived metrics from raw histogram + elapsed time.
     /// Shared by both human-readable and JSON output to avoid drift.
-    fn summary(&self, entry_size: usize) -> Summary {
+    pub fn summary(&self, entry_size: usize) -> Summary {
         let secs = self.elapsed.as_secs_f64();
         let ops = self.ops_counted;
         let ops_per_sec = if secs > 0.0 { ops as f64 / secs } else { 0.0 };

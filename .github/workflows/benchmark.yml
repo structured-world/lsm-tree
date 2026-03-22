@@ -1,0 +1,49 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  deployments: write
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: Performance regression check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: bench
+
+      - name: Run benchmarks
+        run: .github/scripts/run-benchmarks.sh 200000
+
+      - name: Store benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "lsm-tree db_bench"
+          tool: customBiggerIsBetter
+          output-file-path: benchmark-results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Push results to gh-pages only on main (not PRs)
+          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # On PRs, comment with comparison against baseline
+          comment-on-alert: true
+          alert-comment-cc-users: "@polaz"
+          # 15% regression = alert, 25% = fail
+          alert-threshold: "115%"
+          fail-threshold: "125%"
+          fail-on-alert: ${{ github.event_name == 'pull_request' }}
+          # Store data for PRs without pushing (compare only)
+          save-data-file: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          benchmark-data-dir-path: dev/bench
