@@ -5,6 +5,7 @@
 pub mod arena;
 pub mod interval_tree;
 pub mod skiplist;
+pub mod value_store;
 
 use crate::comparator::SharedComparator;
 use crate::key::InternalKey;

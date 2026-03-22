@@ -7,14 +7,15 @@
 //! Nodes are allocated from a contiguous [`Arena`] for cache locality and O(1)
 //! bulk deallocation when the memtable is dropped.  Concurrent skiplist
 //! traversal is lock-free (atomic loads on next-pointers); inserts use CAS with
-//! retry on tower links.  Values are stored in a separate mutex-protected Vec,
-//! so value access acquires a brief lock.
+//! retry on tower links.  Values are stored in a lock-free segmented
+//! [`ValueStore`](super::value_store::ValueStore) — reads are wait-free.
 //!
 //! The design follows the arena-skiplist pattern used by Pebble/CockroachDB
 //! and Badger, adapted for Rust's ownership model and the lsm-tree
 //! `InternalKey` ordering (`user_key` ASC, seqno DESC).
 
 use super::arena::Arena;
+use super::value_store::ValueStore;
 use crate::key::InternalKey;
 use crate::value::{SeqNo, UserValue};
 use crate::{UserKey, ValueType};
@@ -22,7 +23,6 @@ use crate::{UserKey, ValueType};
 use std::cmp::Ordering as CmpOrdering;
 use std::ops::{Bound, RangeBounds};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -80,10 +80,10 @@ const fn node_size(height: usize) -> u32 {
 /// `user_key` ascending, then seqno descending).
 pub struct SkipMap {
     arena: Arena,
-    /// Heap-backed storage for values.  Keys live in the arena for cache
-    /// locality during comparisons; values live here so large blobs don't
-    /// exhaust the fixed-size arena.  Indexed by `value_idx` stored in each node.
-    values: Mutex<Vec<UserValue>>,
+    /// Lock-free segmented storage for values.  Keys live in the arena for
+    /// cache locality during comparisons; values live here so large blobs
+    /// don't exhaust the arena.  Indexed by `value_idx` stored in each node.
+    values: ValueStore,
     /// Offset of the sentinel head node in the arena.
     head: u32,
     /// Current maximum height of any inserted node.
@@ -143,7 +143,7 @@ impl SkipMap {
 
         Self {
             arena,
-            values: Mutex::new(Vec::new()),
+            values: ValueStore::new(),
             head,
             height: AtomicUsize::new(1),
             len: AtomicUsize::new(0),
@@ -297,17 +297,8 @@ impl SkipMap {
                 .copy_from_slice(key_bytes);
         }
 
-        // Store value in the heap-backed Vec.
-        #[expect(
-            clippy::expect_used,
-            reason = "Mutex is never poisoned in normal operation"
-        )]
-        let value_idx = {
-            let mut vals = self.values.lock().expect("values lock poisoned");
-            let idx = vals.len() as u32;
-            vals.push(value.clone());
-            idx
-        };
+        // Store value in the lock-free segmented store.
+        let value_idx = self.values.append(value);
 
         // Allocate the node header + tower.
         let n_size = node_size(height);
@@ -444,17 +435,9 @@ impl SkipMap {
         }
     }
 
-    /// Clones the value for `node` from the heap-backed values Vec.
-    #[expect(
-        clippy::expect_used,
-        reason = "Mutex is never poisoned in normal operation; value_idx is always valid"
-    )]
+    /// Reads the value for `node` from the lock-free value store (wait-free).
     fn node_value(&self, node: u32) -> UserValue {
-        let idx = self.node_value_idx(node) as usize;
-        let vals = self.values.lock().expect("values lock poisoned");
-        vals.get(idx)
-            .expect("value_idx is set during alloc_node and always valid")
-            .clone()
+        self.values.get(self.node_value_idx(node))
     }
 
     // -----------------------------------------------------------------------
