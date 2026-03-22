@@ -551,7 +551,7 @@ impl Config {
     ///
     /// The comparator identity is **not** persisted to disk — the caller
     /// is responsible for ensuring the same comparator is used across
-    /// open/close cycles (same approach as RocksDB).
+    /// open/close cycles (same approach as `RocksDB`).
     #[must_use]
     pub fn comparator(mut self, comparator: SharedComparator) -> Self {
         self.comparator = comparator;
