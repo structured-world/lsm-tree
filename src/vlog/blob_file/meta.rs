@@ -228,8 +228,8 @@ mod tests {
         let buf = Slice::from(buf);
         let result = Metadata::from_slice(&buf);
         assert!(
-            result.is_err(),
-            "expected Err for missing 'compression', got {result:?}",
+            matches!(result, Err(crate::Error::InvalidHeader("BlobFileMeta"))),
+            "expected Err(InvalidHeader(\"BlobFileMeta\")), got {result:?}",
         );
     }
 
