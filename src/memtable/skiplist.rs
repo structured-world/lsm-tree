@@ -34,20 +34,6 @@ const MAX_HEIGHT: usize = 20;
 /// Sentinel offset meaning "no node".  Offset 0 is reserved in the arena.
 const UNSET: u32 = 0;
 
-/// Default arena capacity.
-///
-/// On 32-bit targets the virtual address space is limited (~3 GiB user),
-/// so a smaller default prevents OOM when multiple memtables coexist
-/// (e.g. in test suites).  The arena stores only key bytes and node
-/// metadata — values live in a separate heap-backed Vec — so 4 MiB
-/// handles tens of thousands of entries comfortably.
-#[cfg(target_pointer_width = "32")]
-const DEFAULT_ARENA_CAPACITY: u32 = 4 * 1024 * 1024;
-
-/// Default arena capacity (64 MiB) for 64-bit targets.
-#[cfg(not(target_pointer_width = "32"))]
-const DEFAULT_ARENA_CAPACITY: u32 = 64 * 1024 * 1024;
-
 // ---------------------------------------------------------------------------
 // Node layout (offsets within a node allocation)
 // ---------------------------------------------------------------------------
@@ -109,14 +95,11 @@ pub struct SkipMap {
 }
 
 impl SkipMap {
-    /// Creates a new empty skiplist with default arena capacity (64 MiB).
+    /// Creates a new empty skiplist.
+    ///
+    /// The arena grows lazily in 4 MiB blocks — no large upfront allocation.
     pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_ARENA_CAPACITY)
-    }
-
-    /// Creates a new empty skiplist with the given arena capacity in bytes.
-    pub fn with_capacity(capacity: u32) -> Self {
-        let arena = Arena::new(capacity);
+        let arena = Arena::new();
 
         // Allocate the head sentinel with MAX_HEIGHT.
         let head_size = node_size(MAX_HEIGHT);
@@ -542,19 +525,16 @@ impl SkipMap {
         let mut node = self.head;
 
         for level in (0..list_h).rev() {
-            loop {
-                let next = self.next_at(node, level);
-                if next == UNSET {
-                    break;
-                }
-                if self.compare_key(next, key) == CmpOrdering::Less {
-                    node = next;
-                } else {
-                    break;
-                }
+            // Track the successor from the comparison loop — do NOT re-read
+            // from the list, as a concurrent insert could return a node that
+            // sorts before our key, leading to an out-of-order CAS.
+            let mut next = self.next_at(node, level);
+            while next != UNSET && self.compare_key(next, key) == CmpOrdering::Less {
+                node = next;
+                next = self.next_at(node, level);
             }
             preds[level] = node;
-            succs[level] = self.next_at(node, level);
+            succs[level] = next;
         }
     }
 
@@ -600,21 +580,15 @@ impl SkipMap {
             }
         }
 
-        // Now search at the target level.
-        loop {
-            let next = self.next_at(node, level);
-            if next == UNSET {
-                break;
-            }
-            if self.compare_key(next, key) == CmpOrdering::Less {
-                node = next;
-            } else {
-                break;
-            }
+        // Now search at the target level — track successor from the loop.
+        let mut next = self.next_at(node, level);
+        while next != UNSET && self.compare_key(next, key) == CmpOrdering::Less {
+            node = next;
+            next = self.next_at(node, level);
         }
 
         preds[level] = node;
-        succs[level] = self.next_at(node, level);
+        succs[level] = next;
     }
 
     /// Finds the first node whose key >= `target`, or UNSET.
@@ -1145,7 +1119,7 @@ mod tests {
     fn concurrent_inserts() {
         use std::sync::Arc;
 
-        let map = Arc::new(SkipMap::with_capacity(4 * 1024 * 1024));
+        let map = Arc::new(SkipMap::new());
         let n_threads = 8;
         let n_per_thread = 1000;
 
