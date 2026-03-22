@@ -121,13 +121,14 @@ impl Aes256GcmProvider {
     }
 }
 
-/// Access a thread-local CSPRNG seeded from the OS RNG in a fork-safe way.
+/// Access a thread-local CSPRNG seeded from the OS RNG in a fork-aware way.
 ///
 /// Using a thread-local [`ChaCha20Rng`](rand_chacha::ChaCha20Rng) avoids a
 /// `getrandom` syscall on every nonce generation, which saves 1-10 µs per
 /// block under contention. The RNG is cryptographically secure and seeded
-/// from `OsRng` on first access per thread, and is automatically reseeded
-/// if the process ID changes (e.g., after a `fork()`).
+/// from `OsRng` on first access per thread, and is lazily reseeded on the
+/// next use if the process ID changes (e.g., after a `fork()`) to reduce
+/// the risk of nonce reuse across processes.
 #[cfg(feature = "encryption")]
 fn thread_local_rng<R>(f: impl FnOnce(&mut rand_chacha::ChaCha20Rng) -> R) -> R {
     fn new_chacha_rng() -> rand_chacha::ChaCha20Rng {
@@ -363,6 +364,30 @@ mod tests {
             let ciphertext = provider.encrypt(&plaintext)?;
             let decrypted = provider.decrypt(&ciphertext)?;
             assert_eq!(decrypted, plaintext);
+            Ok(())
+        }
+
+        /// Verify the thread-local CSPRNG produces unique nonces across many
+        /// encrypt calls — no nonce reuse even under rapid sequential use.
+        #[test]
+        fn thread_local_rng_produces_unique_nonces() -> crate::Result<()> {
+            let provider = Aes256GcmProvider::new(&test_key());
+            let plaintext = b"nonce uniqueness test";
+
+            let mut nonces = std::collections::HashSet::new();
+            for _ in 0..1000 {
+                let ct = provider.encrypt(plaintext)?;
+
+                #[expect(clippy::indexing_slicing, reason = "ct always >= NONCE_LEN")]
+                let nonce: [u8; 12] = ct[..Aes256GcmProvider::NONCE_LEN]
+                    .try_into()
+                    .expect("nonce is 12 bytes");
+
+                assert!(
+                    nonces.insert(nonce),
+                    "nonce collision detected — CSPRNG produced duplicate nonce"
+                );
+            }
             Ok(())
         }
     }
