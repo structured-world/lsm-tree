@@ -22,6 +22,7 @@ fn pick_minimal_compaction(
     hidden_set: &HiddenSet,
     _overshoot: u64,
     table_base_size: u64,
+    cmp: &dyn crate::comparator::UserComparator,
 ) -> Option<(HashSet<TableId>, bool)> {
     // NOTE: Find largest trivial move (if it exists)
     if let Some(window) = curr_run.shrinking_windows().find(|window| {
@@ -38,7 +39,7 @@ fn pick_minimal_compaction(
 
         let key_range = aggregate_run_key_range(window);
 
-        next_run.get_overlapping(&key_range).is_empty()
+        next_run.get_overlapping_cmp(&key_range, cmp).is_empty()
     }) {
         let ids = window.iter().map(Table::id).collect();
         return Some((ids, true));
@@ -66,7 +67,7 @@ fn pick_minimal_compaction(
                 let key_range = aggregate_run_key_range(window);
 
                 // Pull in all contained tables in current level into compaction
-                let curr_level_pull_in = curr_run.get_contained(&key_range);
+                let curr_level_pull_in = curr_run.get_contained_cmp(&key_range, cmp);
 
                 let curr_level_size = curr_level_pull_in.iter().map(Table::file_size).sum::<u64>();
 
@@ -456,8 +457,9 @@ impl CompactionStrategy for Strategy {
     }
 
     #[expect(clippy::too_many_lines)]
-    fn choose(&self, version: &Version, _: &Config, state: &CompactionState) -> Choice {
+    fn choose(&self, version: &Version, config: &Config, state: &CompactionState) -> Choice {
         assert!(version.level_count() == 7, "should have exactly 7 levels");
+        let cmp = config.comparator.as_ref();
 
         // Trivial move into Lmax
         'trivial_lmax: {
@@ -489,8 +491,8 @@ impl CompactionStrategy for Strategy {
                 let lmax = version.level(lmax_index).expect("last level should exist");
 
                 if !lmax
-                    .aggregate_key_range()
-                    .overlaps_with_key_range(&l0.aggregate_key_range())
+                    .aggregate_key_range_cmp(cmp)
+                    .overlaps_with_key_range_cmp(&l0.aggregate_key_range_cmp(cmp), cmp)
                 {
                     return Choice::Move(CompactionInput {
                         table_ids: l0.list_ids(),
@@ -573,12 +575,12 @@ impl CompactionStrategy for Strategy {
                     break 'trivial;
                 }
 
-                let key_range = first_level.aggregate_key_range();
+                let key_range = first_level.aggregate_key_range_cmp(cmp);
 
                 // Get overlapping tables in next level
                 let get_overlapping = target_level
                     .iter()
-                    .flat_map(|run| run.get_overlapping(&key_range))
+                    .flat_map(|run| run.get_overlapping_cmp(&key_range, cmp))
                     .map(Table::id)
                     .next();
 
@@ -719,12 +721,12 @@ impl CompactionStrategy for Strategy {
 
             let mut table_ids = first_level.list_ids();
 
-            let key_range = first_level.aggregate_key_range();
+            let key_range = first_level.aggregate_key_range_cmp(cmp);
 
             // Get overlapping tables in next level
             let target_level_overlapping_table_ids: Vec<_> = target_level
                 .iter()
-                .flat_map(|run| run.get_overlapping(&key_range))
+                .flat_map(|run| run.get_overlapping_cmp(&key_range, cmp))
                 .map(Table::id)
                 .collect();
 
@@ -762,7 +764,7 @@ impl CompactionStrategy for Strategy {
                         for run in l2.iter() {
                             for input_run in target_level.iter().chain(first_level.iter()) {
                                 for t in input_run.iter() {
-                                    for l2t in run.get_overlapping(t.key_range()) {
+                                    for l2t in run.get_overlapping_cmp(t.key_range(), cmp) {
                                         table_ids.insert(Table::id(l2t));
                                     }
                                 }
@@ -829,6 +831,7 @@ impl CompactionStrategy for Strategy {
             state.hidden_set(),
             overshoot_bytes,
             self.target_size,
+            cmp,
         ) else {
             return Choice::DoNothing;
         };

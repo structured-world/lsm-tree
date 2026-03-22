@@ -72,12 +72,14 @@ impl CompactionStrategy for Strategy {
         "DropRangeCompaction"
     }
 
-    fn choose(&self, version: &Version, _: &Config, state: &CompactionState) -> Choice {
+    fn choose(&self, version: &Version, config: &Config, state: &CompactionState) -> Choice {
+        let cmp = config.comparator.as_ref();
+
         let table_ids: HashSet<_> = version
             .iter_levels()
             .flat_map(|lvl| lvl.iter())
             .flat_map(|run| {
-                run.range_overlap_indexes(&self.bounds)
+                run.range_overlap_indexes_cmp(&self.bounds, cmp)
                     .and_then(|(lo, hi)| run.get(lo..=hi))
                     .unwrap_or_default()
                     .iter()

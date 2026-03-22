@@ -53,6 +53,20 @@ impl RunReader {
         Some(Self::culled(run, range, (Some(lo), Some(hi))))
     }
 
+    /// Like [`new`], but uses a custom comparator for key ordering.
+    #[must_use]
+    pub fn new_cmp<R: RangeBounds<UserKey> + Clone + Send + 'static>(
+        run: Arc<Run<Table>>,
+        range: R,
+        cmp: &dyn crate::comparator::UserComparator,
+    ) -> Option<Self> {
+        assert!(!run.is_empty(), "level reader cannot read empty level");
+
+        let (lo, hi) = run.range_overlap_indexes_cmp(&range, cmp)?;
+
+        Some(Self::culled(run, range, (Some(lo), Some(hi))))
+    }
+
     #[must_use]
     pub fn culled<R: RangeBounds<UserKey> + Clone + Send + 'static>(
         run: Arc<Run<Table>>,

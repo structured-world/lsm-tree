@@ -613,7 +613,9 @@ impl TreeIter {
             }
 
             for run in multi_runs {
-                if let Some(reader) = RunReader::new(run, user_range.clone()) {
+                if let Some(reader) =
+                    RunReader::new_cmp(run, user_range.clone(), lock.comparator.as_ref())
+                {
                     iters.push(Box::new(reader.filter(move |item| match item {
                         Ok(item) => seqno_filter(item.key.seqno, seqno),
                         Err(_) => true,

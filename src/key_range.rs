@@ -71,6 +71,19 @@ impl KeyRange {
         start1 <= start2 && end1 >= end2
     }
 
+    /// Like [`contains_range`], but uses a custom comparator for key ordering.
+    #[must_use]
+    pub fn contains_range_cmp(
+        &self,
+        other: &Self,
+        cmp: &dyn crate::comparator::UserComparator,
+    ) -> bool {
+        let (start1, end1) = self.as_tuple();
+        let (start2, end2) = other.as_tuple();
+        cmp.compare(start1, start2) != std::cmp::Ordering::Greater
+            && cmp.compare(end1, end2) != std::cmp::Ordering::Less
+    }
+
     /// Returns `true` if the `other` overlaps at least partially with this range.
     #[must_use]
     pub fn overlaps_with_key_range(&self, other: &Self) -> bool {
@@ -150,6 +163,33 @@ impl KeyRange {
 
             let x = other.max();
             if x > max {
+                max = x;
+            }
+        }
+
+        Self(min.clone(), max.clone())
+    }
+
+    /// Like [`aggregate`], but uses a custom comparator for key ordering.
+    pub fn aggregate_cmp<'a>(
+        mut iter: impl Iterator<Item = &'a Self>,
+        cmp: &dyn crate::comparator::UserComparator,
+    ) -> Self {
+        let Some(first) = iter.next() else {
+            return Self::empty();
+        };
+
+        let mut min = first.min();
+        let mut max = first.max();
+
+        for other in iter {
+            let x = other.min();
+            if cmp.compare(x, min) == std::cmp::Ordering::Less {
+                min = x;
+            }
+
+            let x = other.max();
+            if cmp.compare(x, max) == std::cmp::Ordering::Greater {
                 max = x;
             }
         }

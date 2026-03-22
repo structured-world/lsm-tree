@@ -223,6 +223,37 @@ impl<T: Ranged> Run<T> {
             .unwrap_or_default()
     }
 
+    /// Like [`get_contained`], but uses a custom comparator for key ordering.
+    pub fn get_contained_cmp<'a>(
+        &'a self,
+        key_range: &KeyRange,
+        cmp: &dyn UserComparator,
+    ) -> &'a [T] {
+        fn trim_slice<T, F>(s: &[T], pred: F) -> &[T]
+        where
+            F: Fn(&T) -> bool,
+        {
+            let start = s.iter().position(&pred).unwrap_or(s.len());
+            let end = s.iter().rposition(&pred).map_or(start, |i| i + 1);
+
+            #[expect(
+                clippy::expect_used,
+                reason = "start..end are derived from position/rposition on the same slice"
+            )]
+            s.get(start..end).expect("should be in range")
+        }
+
+        let range = key_range.min()..=key_range.max();
+
+        let Some((lo, hi)) = self.range_overlap_indexes_cmp::<crate::Slice, _>(&range, cmp) else {
+            return &[];
+        };
+
+        self.get(lo..=hi)
+            .map(|slice| trim_slice(slice, |x| key_range.contains_range_cmp(x.key_range(), cmp)))
+            .unwrap_or_default()
+    }
+
     /// Returns the indexes of the interval [min, max] of tables that overlap with a given range.
     pub fn range_overlap_indexes<K: AsRef<[u8]>, R: RangeBounds<K>>(
         &self,

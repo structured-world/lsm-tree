@@ -137,6 +137,27 @@ impl Level {
             KeyRange::aggregate(key_ranges.iter())
         }
     }
+
+    /// Like [`aggregate_key_range`], but uses a custom comparator for key ordering.
+    pub fn aggregate_key_range_cmp(&self, cmp: &dyn crate::comparator::UserComparator) -> KeyRange {
+        if self.run_count() == 1 {
+            #[expect(
+                clippy::expect_used,
+                reason = "we check for run_count, so the first run must exist"
+            )]
+            self.runs
+                .first()
+                .expect("should exist")
+                .aggregate_key_range()
+        } else {
+            let key_ranges = self
+                .iter()
+                .map(|x| Run::aggregate_key_range(x))
+                .collect::<Vec<_>>();
+
+            KeyRange::aggregate_cmp(key_ranges.iter(), cmp)
+        }
+    }
 }
 
 pub struct VersionInner {

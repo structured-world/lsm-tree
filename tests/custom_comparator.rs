@@ -288,6 +288,8 @@ fn u64_comparator_bounded_range_scan() -> lsm_tree::Result<()> {
     Ok(())
 }
 
+// --- Tests from #101: comparator name persistence and mismatch detection ---
+
 #[test]
 fn reopen_with_same_comparator_succeeds() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
@@ -422,4 +424,183 @@ fn oversized_comparator_name_rejected_on_create() {
         Ok(_) => panic!("expected InvalidInput error for oversized comparator name"),
         Err(e) => panic!("expected InvalidInput Io error, got {e:?}"),
     }
+}
+
+// --- Regression tests for #98: Run::push() comparator bug ---
+
+/// Regression test for #98: Run::push() sorted tables lexicographically,
+/// breaking iteration order after compaction with non-lexicographic comparators.
+#[test]
+fn reverse_comparator_after_compaction() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let cmp: SharedComparator = Arc::new(ReverseComparator);
+
+    let tree = Config::new(folder, Default::default(), Default::default())
+        .comparator(cmp)
+        .open()?;
+
+    // Flush two separate SSTs so compaction merges them
+    tree.insert("a", "val_a", 0);
+    tree.insert("b", "val_b", 1);
+    tree.flush_active_memtable(2)?;
+
+    tree.insert("c", "val_c", 3);
+    tree.insert("d", "val_d", 4);
+    tree.flush_active_memtable(5)?;
+
+    // Major compaction merges the two SSTs into one
+    tree.major_compact(u64::MAX, 6)?;
+
+    // Iteration order must be reverse: d, c, b, a
+    let items: Vec<_> = tree
+        .iter(7, None)
+        .map(|g| {
+            let (k, _) = g.into_inner().unwrap();
+            String::from_utf8(k.to_vec()).unwrap()
+        })
+        .collect();
+
+    assert_eq!(items, vec!["d", "c", "b", "a"]);
+
+    // Point reads must still work
+    assert_eq!(tree.get("a", 7)?, Some("val_a".as_bytes().into()));
+    assert_eq!(tree.get("d", 7)?, Some("val_d".as_bytes().into()));
+
+    Ok(())
+}
+
+/// Regression test for #98: verify leveled compaction preserves
+/// comparator ordering across multiple flushes.
+#[test]
+fn reverse_comparator_leveled_compaction() -> lsm_tree::Result<()> {
+    use lsm_tree::compaction::Leveled;
+
+    let folder = tempfile::tempdir()?;
+    let cmp: SharedComparator = Arc::new(ReverseComparator);
+
+    let tree = Config::new(folder, Default::default(), Default::default())
+        .comparator(cmp)
+        .open()?;
+
+    // Create multiple flushes to trigger L0 -> L1 compaction.
+    // Use monotonically increasing seqnos to avoid MVCC visibility issues.
+    let mut seqno: u64 = 0;
+    for batch in 0..4u8 {
+        let base = batch * 3;
+        for i in 0..3u8 {
+            let key = [base + i + b'a'];
+            tree.insert(key, format!("val_{}", key[0] as char), seqno);
+            seqno += 1;
+        }
+        tree.flush_active_memtable(seqno)?;
+        seqno += 1;
+    }
+
+    // Compact with leveled strategy
+    tree.compact(Arc::new(Leveled::default()), seqno)?;
+
+    // All 12 keys should iterate in reverse order
+    let items: Vec<_> = tree
+        .iter(seqno, None)
+        .map(|g| {
+            let (k, _) = g.into_inner().unwrap();
+            String::from_utf8(k.to_vec()).unwrap()
+        })
+        .collect();
+
+    // Reverse of a..l is l, k, j, i, h, g, f, e, d, c, b, a
+    let mut expected: Vec<String> = (b'a'..=b'l').map(|c| String::from(c as char)).collect();
+    expected.reverse();
+
+    assert_eq!(items, expected);
+
+    Ok(())
+}
+
+/// Regression test for #98: merge operators must resolve correctly
+/// after compaction with custom comparator.
+#[test]
+fn reverse_comparator_compaction_with_merge_operator() -> lsm_tree::Result<()> {
+    use lsm_tree::MergeOperator;
+
+    struct ConcatMerge;
+    impl MergeOperator for ConcatMerge {
+        fn merge(
+            &self,
+            _key: &[u8],
+            _base: Option<&[u8]>,
+            operands: &[&[u8]],
+        ) -> lsm_tree::Result<lsm_tree::Slice> {
+            let mut result = Vec::new();
+            for (i, op) in operands.iter().enumerate() {
+                if i > 0 {
+                    result.push(b',');
+                }
+                result.extend_from_slice(op);
+            }
+            Ok(result.into())
+        }
+    }
+
+    let folder = tempfile::tempdir()?;
+    let cmp: SharedComparator = Arc::new(ReverseComparator);
+
+    let tree = Config::new(folder, Default::default(), Default::default())
+        .comparator(cmp)
+        .with_merge_operator(Some(Arc::new(ConcatMerge)))
+        .open()?;
+
+    // Two flushes with merge values for the same key
+    tree.merge("key", "v1", 0);
+    tree.flush_active_memtable(1)?;
+
+    tree.merge("key", "v2", 2);
+    tree.flush_active_memtable(3)?;
+
+    // Compaction should merge the values correctly
+    tree.major_compact(u64::MAX, 4)?;
+
+    let val = tree.get("key", 5)?;
+    assert_eq!(val, Some(b"v1,v2".as_ref().into()));
+
+    Ok(())
+}
+
+/// Regression test for #98: tombstones should be applied correctly
+/// after compaction with custom comparator.
+#[test]
+fn reverse_comparator_compaction_with_tombstone() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let cmp: SharedComparator = Arc::new(ReverseComparator);
+
+    let tree = Config::new(folder, Default::default(), Default::default())
+        .comparator(cmp)
+        .open()?;
+
+    tree.insert("a", "val_a", 0);
+    tree.insert("b", "val_b", 1);
+    tree.insert("c", "val_c", 2);
+    tree.flush_active_memtable(3)?;
+
+    // Delete "b" in a second flush
+    tree.remove("b", 4);
+    tree.flush_active_memtable(5)?;
+
+    tree.major_compact(u64::MAX, 6)?;
+
+    // "b" should be gone
+    assert_eq!(tree.get("b", 7)?, None);
+
+    // Remaining keys in reverse order
+    let items: Vec<_> = tree
+        .iter(7, None)
+        .map(|g| {
+            let (k, _) = g.into_inner().unwrap();
+            String::from_utf8(k.to_vec()).unwrap()
+        })
+        .collect();
+
+    assert_eq!(items, vec!["c", "a"]);
+
+    Ok(())
 }
