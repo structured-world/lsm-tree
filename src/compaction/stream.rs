@@ -228,6 +228,8 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
         // Complete merge (base or tombstone found): emit as Value.
         // Partial merge (no boundary in this stream — base may be in lower level):
         // emit as MergeOperand so future compactions can find the real base.
+        // The MergeOperator contract requires stability across re-merging:
+        // future passes may see this pre-merged output as an operand.
         let result_type = if found_boundary {
             ValueType::Value
         } else {

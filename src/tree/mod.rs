@@ -978,6 +978,8 @@ impl Tree {
         for op in operands.iter().rev() {
             operand_refs.push(op.as_ref());
         }
+        // MergeOperator::merge is user code — panics propagate to the caller.
+        // The RefUnwindSafe bound ensures safety if caught externally.
         let merged = merge_op.merge(key, base_value.as_deref(), &operand_refs)?;
 
         Ok(Some(merged))
