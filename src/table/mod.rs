@@ -837,7 +837,9 @@ impl Table {
     /// filter is available), `Ok(false)` if the key is definitely absent.
     ///
     /// Used by the point-read merge pipeline to pre-filter disk tables
-    /// before building range iterators.
+    /// before building range iterators. For partitioned or TLI filter
+    /// configurations, the underlying check returns `Ok(true)` conservatively,
+    /// so pre-filtering is best-effort and configuration-dependent.
     pub(crate) fn bloom_may_contain_key_hash(&self, key_hash: u64) -> crate::Result<bool> {
         self.bloom_may_contain_hash(key_hash)
     }
