@@ -4,9 +4,10 @@
 
 //! Pluggable filesystem abstraction for I/O backends.
 //!
-//! The [`Fs`] trait abstracts all filesystem operations that lsm-tree
-//! performs, allowing alternative backends such as io_uring, in-memory
-//! filesystems for deterministic testing, or cloud blob storage.
+//! The [`Fs`] trait is intended to abstract the filesystem operations
+//! that lsm-tree performs, allowing alternative backends such as
+//! io_uring, in-memory filesystems for deterministic testing, or cloud
+//! blob storage. Call-site migration is tracked in separate issues.
 //!
 //! The default implementation [`StdFs`] delegates to [`std::fs`] and
 //! is a zero-sized type, so it adds no runtime overhead when used as a
@@ -186,7 +187,7 @@ pub trait FsFile: Read + Write + Seek + Send + Sync {
 
 /// Pluggable filesystem abstraction.
 ///
-/// All filesystem operations that lsm-tree performs go through this trait.
+/// Intended to cover all filesystem operations that lsm-tree performs.
 /// The default implementation [`StdFs`] delegates to [`std::fs`].
 ///
 /// # Object safety
