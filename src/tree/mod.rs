@@ -1330,39 +1330,17 @@ impl Tree {
 
         log::info!("Recovering LSM-tree at {}", config.path.display());
 
-        let tree_id = get_next_tree_id();
-
-        #[cfg(feature = "metrics")]
-        let metrics = Arc::new(Metrics::default());
-
-        let version = Self::recover_levels(
-            &config.path,
-            tree_id,
-            &config,
-            #[cfg(feature = "metrics")]
-            &metrics,
-        )?;
-
+        // Validate manifest metadata (format version, tree type, comparator
+        // name) BEFORE recover_levels, so a rejected open is side-effect free
+        // — recover_levels loads tables and cleans up orphans.
         {
-            let manifest_path = config.path.join(format!("v{}", version.id()));
+            let version_id = crate::version::recovery::get_current_version(&config.path)?;
+            let manifest_path = config.path.join(format!("v{version_id}"));
             let reader = sfa::Reader::new(&manifest_path)?;
             let manifest = Manifest::decode_from(&manifest_path, &reader)?;
 
             if !matches!(manifest.version, FormatVersion::V3 | FormatVersion::V4) {
                 return Err(crate::Error::InvalidVersion(manifest.version.into()));
-            }
-
-            let requested_tree_type = match config.kv_separation_opts {
-                Some(_) => crate::TreeType::Blob,
-                None => crate::TreeType::Standard,
-            };
-
-            if version.tree_type() != requested_tree_type {
-                log::error!(
-                    "Tried to open a {requested_tree_type:?}Tree, but the existing tree is of type {:?}Tree. This indicates a misconfiguration or corruption.",
-                    version.tree_type(),
-                );
-                return Err(crate::Error::Unrecoverable);
             }
 
             let supplied_name = config.comparator.name();
@@ -1380,6 +1358,34 @@ impl Tree {
 
             // IMPORTANT: Restore persisted config
             config.level_count = manifest.level_count;
+        }
+
+        let tree_id = get_next_tree_id();
+
+        #[cfg(feature = "metrics")]
+        let metrics = Arc::new(Metrics::default());
+
+        let version = Self::recover_levels(
+            &config.path,
+            tree_id,
+            &config,
+            #[cfg(feature = "metrics")]
+            &metrics,
+        )?;
+
+        {
+            let requested_tree_type = match config.kv_separation_opts {
+                Some(_) => crate::TreeType::Blob,
+                None => crate::TreeType::Standard,
+            };
+
+            if version.tree_type() != requested_tree_type {
+                log::error!(
+                    "Tried to open a {requested_tree_type:?}Tree, but the existing tree is of type {:?}Tree. This indicates a misconfiguration or corruption.",
+                    version.tree_type(),
+                );
+                return Err(crate::Error::Unrecoverable);
+            }
         }
 
         let highest_table_id = version
