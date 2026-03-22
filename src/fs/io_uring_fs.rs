@@ -206,7 +206,7 @@ impl Fs for IoUringFs {
 /// (metadata, truncate, lock), while routing reads, writes, and fsyncs
 /// through the shared `io_uring` ring.
 pub struct IoUringFile {
-    /// Underlying std File — owns the fd, used for metadata/set_len/lock.
+    /// Underlying [`std::fs::File`] — owns the fd, used for metadata/set_len/lock.
     file: File,
 
     /// Tracked cursor position for [`Read`]/[`Write`]/[`Seek`] impls.
