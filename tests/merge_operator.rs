@@ -560,7 +560,7 @@ fn merge_multiple_operands_in_single_table() -> lsm_tree::Result<()> {
     tree.flush_active_memtable(0)?;
 
     // All 4 entries are in the same table. table.get() returns only
-    // the newest (MergeOperand@3), but resolve_merge_get must collect
+    // the newest (MergeOperand@3), but resolve_merge_via_pipeline must collect
     // all entries via range scan to produce the correct result.
     assert_eq!(Some(160), get_counter(&tree, "counter", 4));
 
@@ -898,7 +898,7 @@ fn merge_rt_no_operator_get_and_multi_get_agree() -> lsm_tree::Result<()> {
 
 /// RT suppresses operand in disk range scan during merge resolution.
 /// Exercises the is_rt_suppressed path inside the table.range() fallback
-/// in resolve_merge_get (line ~909).
+/// in resolve_merge_via_pipeline (line ~909).
 #[test]
 fn merge_rt_suppresses_operand_in_disk_range_scan() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
@@ -936,7 +936,7 @@ fn merge_disk_base_via_point_lookup() -> lsm_tree::Result<()> {
     tree.merge("counter", 10_i64.to_le_bytes(), 1);
     tree.merge("counter", 20_i64.to_le_bytes(), 2);
 
-    // resolve_merge_get: active memtable has op@2, op@1
+    // resolve_merge_via_pipeline: active memtable has op@2, op@1
     // Then scans disk: table.get() returns base@0 (Value, not MergeOperand)
     // → process_entry sets base_value, found_base=true
     assert_eq!(Some(130), get_counter(&tree, "counter", 3));
@@ -945,7 +945,7 @@ fn merge_disk_base_via_point_lookup() -> lsm_tree::Result<()> {
 }
 
 /// Merge with Tombstone base in sealed memtable — exercises sealed memtable
-/// scan path in resolve_merge_get (lines ~868-877).
+/// scan path in resolve_merge_via_pipeline (lines ~868-877).
 #[test]
 fn merge_tombstone_in_sealed_memtable() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
@@ -961,7 +961,7 @@ fn merge_tombstone_in_sealed_memtable() -> lsm_tree::Result<()> {
     // New operands in active memtable
     tree.merge("counter", 42_i64.to_le_bytes(), 2);
 
-    // resolve_merge_get scans active (finds op@2), then disk (finds tombstone@1)
+    // resolve_merge_via_pipeline scans active (finds op@2), then disk (finds tombstone@1)
     // tombstone stops scan, merge with no base: merge(None, [42]) = 42
     assert_eq!(Some(42), get_counter(&tree, "counter", 3));
 
@@ -969,7 +969,7 @@ fn merge_tombstone_in_sealed_memtable() -> lsm_tree::Result<()> {
 }
 
 /// Merge where operands span active memtable and disk — tests that
-/// resolve_merge_get correctly collects from all layers.
+/// resolve_merge_via_pipeline correctly collects from all layers.
 #[test]
 fn merge_operands_across_active_and_disk() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
