@@ -390,6 +390,116 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn fs_open_options_default() {
+        let opts = FsOpenOptions::default();
+        assert!(!opts.read);
+        assert!(!opts.write);
+        assert!(!opts.create);
+        assert!(!opts.create_new);
+        assert!(!opts.truncate);
+        assert!(!opts.append);
+    }
+
+    #[test]
+    fn fs_open_options_builders() {
+        let opts = FsOpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .create_new(false)
+            .truncate(true)
+            .append(false);
+        assert!(opts.read);
+        assert!(opts.write);
+        assert!(opts.create);
+        assert!(!opts.create_new);
+        assert!(opts.truncate);
+        assert!(!opts.append);
+    }
+
+    #[test]
+    fn fs_file_sync_data() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let fs = StdFs;
+
+        let path = dir.path().join("sync_data.bin");
+        let opts = FsOpenOptions::new().write(true).create(true);
+        let mut file = fs.open(&path, &opts)?;
+        file.write_all(b"data")?;
+        FsFile::sync_data(&file)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn fs_open_truncate_and_append() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let fs = StdFs;
+        let path = dir.path().join("trunc.txt");
+
+        // Create with content
+        let opts = FsOpenOptions::new().write(true).create(true);
+        let mut file = fs.open(&path, &opts)?;
+        file.write_all(b"hello world")?;
+        drop(file);
+
+        // Truncate on reopen
+        let opts = FsOpenOptions::new().write(true).truncate(true);
+        let mut file = fs.open(&path, &opts)?;
+        file.write_all(b"hi")?;
+        drop(file);
+
+        let meta = fs.metadata(&path)?;
+        assert_eq!(meta.len, 2);
+
+        // Append mode
+        let opts = FsOpenOptions::new().write(true).append(true);
+        let mut file = fs.open(&path, &opts)?;
+        file.write_all(b"!")?;
+        drop(file);
+
+        let meta = fs.metadata(&path)?;
+        assert_eq!(meta.len, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn fs_dir_entry_fields() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let fs = StdFs;
+
+        // Create a subdirectory and a file
+        let sub = dir.path().join("subdir");
+        fs.create_dir_all(&sub)?;
+        let file_path = dir.path().join("file.txt");
+        let opts = FsOpenOptions::new().write(true).create(true);
+        fs.open(&file_path, &opts)?;
+
+        let mut entries: Vec<_> = fs.read_dir(dir.path())?.collect::<io::Result<Vec<_>>>()?;
+        entries.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].file_name, "file.txt");
+        assert!(!entries[0].is_dir);
+        assert_eq!(entries[1].file_name, "subdir");
+        assert!(entries[1].is_dir);
+
+        Ok(())
+    }
+
+    #[test]
+    fn fs_metadata_directory() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let fs = StdFs;
+        let meta = fs.metadata(dir.path())?;
+        assert!(meta.is_dir);
+        assert!(!meta.is_file);
+
+        Ok(())
+    }
+
     /// Compile-time assertion: `Fs` is object-safe when associated types
     /// are specified.
     #[test]
