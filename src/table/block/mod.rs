@@ -396,6 +396,10 @@ impl Block {
                 )));
             }
 
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "buf.len() == block_size == handle.size() ≥ Header::serialized_len()"
+            )]
             let header_copy = Header::decode_from(&mut &buf[..header_len])?;
 
             let actual_data_len = block_size.saturating_sub(header_len);
