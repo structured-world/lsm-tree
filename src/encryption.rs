@@ -167,6 +167,8 @@ impl ForkAwareRng {
             *rng_ref = new_chacha_rng();
         }
 
+        // Deref-coercion: &mut RefMut<ChaCha20Rng> → &mut ChaCha20Rng.
+        // Explicit `&mut *rng_ref` is denied by clippy::explicit_auto_deref.
         f(&mut rng_ref)
     }
 }
@@ -397,9 +399,9 @@ mod tests {
 
                 #[expect(clippy::indexing_slicing, reason = "ct always >= NONCE_LEN")]
                 #[expect(clippy::expect_used, reason = "test assertion")]
-                let nonce: [u8; 12] = ct[..Aes256GcmProvider::NONCE_LEN]
+                let nonce: [u8; Aes256GcmProvider::NONCE_LEN] = ct[..Aes256GcmProvider::NONCE_LEN]
                     .try_into()
-                    .expect("nonce is 12 bytes");
+                    .expect("nonce has expected length");
 
                 assert!(
                     nonces.insert(nonce),
