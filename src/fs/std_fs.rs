@@ -40,6 +40,7 @@ impl Iterator for StdReadDir {
 // ---------------------------------------------------------------------------
 // FsFile for std::fs::File
 // ---------------------------------------------------------------------------
+// Self:: calls delegate to File's inherent methods (clippy::use_self preference).
 
 impl FsFile for File {
     fn sync_all(&self) -> io::Result<()> {
