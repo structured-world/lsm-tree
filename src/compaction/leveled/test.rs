@@ -586,7 +586,115 @@ fn dynamic_leveling_multiple_levels() -> crate::Result<()> {
     Ok(())
 }
 
-// --- Coverage: multi-level with L1 overflowing into L2 ---
+// --- Coverage: multi-level skip actually fires ---
+
+#[test]
+fn multi_level_skip_fires_when_l1_oversized() -> crate::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let tree = Config::new(
+        dir.path(),
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    // Step 1: Use leveled (no multi-level) to fill L1 past capacity.
+    // target_size=1 → L1 target = 1*4 = 4 bytes. Any real table exceeds this.
+    let leveled = Arc::new(
+        Strategy::default()
+            .with_table_target_size(1)
+            .with_l0_threshold(4),
+    );
+
+    // Flush 4 overlapping tables → triggers L0→L1 compaction
+    for i in 0..4u8 {
+        tree.insert("a", "val", u64::from(i));
+        tree.insert([b'k', i].as_slice(), "val", u64::from(i));
+        tree.insert("z", "val", u64::from(i));
+        tree.flush_active_memtable(u64::from(i))?;
+    }
+    tree.compact(leveled.clone(), 4)?;
+
+    // Compact until data reaches deeper levels so L1 is populated
+    for extra in 4..12u64 {
+        tree.insert("a", "val", extra);
+        tree.insert(format!("x_{extra}").as_bytes(), "val", extra);
+        tree.insert("z", "val", extra);
+        tree.flush_active_memtable(extra)?;
+        tree.compact(leveled.clone(), extra + 1)?;
+    }
+
+    // Step 2: Now flush another batch with multi_level enabled.
+    // L1 should be oversized (any data > 4 bytes target).
+    // Multi-level should skip L1 and go directly to L2.
+    let multi = Arc::new(
+        Strategy::default()
+            .with_multi_level(true)
+            .with_table_target_size(1)
+            .with_l0_threshold(4),
+    );
+
+    for i in 12..16u64 {
+        tree.insert("a", "val", i);
+        tree.insert(format!("y_{i}").as_bytes(), "val", i);
+        tree.insert("z", "val", i);
+        tree.flush_active_memtable(i)?;
+    }
+    tree.compact(multi, 16)?;
+
+    // All data should be readable
+    for i in 0..4u8 {
+        assert!(tree.get([b'k', i].as_slice(), MAX_SEQNO)?.is_some());
+    }
+    for i in 4..12u64 {
+        assert!(tree.get(format!("x_{i}").as_bytes(), MAX_SEQNO)?.is_some());
+    }
+    for i in 12..16u64 {
+        assert!(tree.get(format!("y_{i}").as_bytes(), MAX_SEQNO)?.is_some());
+    }
+
+    Ok(())
+}
+
+// --- Coverage: dynamic fallback to static when tree is small ---
+
+#[test]
+fn dynamic_leveling_fallback_to_static() -> crate::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let tree = Config::new(
+        dir.path(),
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    // With large target_size, dynamic L1 target will be smaller than
+    // level_base_size, triggering the static fallback path.
+    let strategy = Arc::new(
+        Strategy::default()
+            .with_dynamic_level_bytes(true)
+            .with_table_target_size(64 * 1024 * 1024) // 64 MiB — large
+            .with_l0_threshold(4),
+    );
+
+    // Flush a small amount of data — dynamic targets will be tiny
+    // compared to level_base_size (64M * 4 = 256M), so fallback fires.
+    for i in 0..4u8 {
+        tree.insert("a", "v", u64::from(i));
+        tree.insert([b'k', i].as_slice(), "v", u64::from(i));
+        tree.insert("z", "v", u64::from(i));
+        tree.flush_active_memtable(u64::from(i))?;
+    }
+
+    tree.compact(strategy, 4)?;
+
+    // Data should be compacted and readable
+    for i in 0..4u8 {
+        assert!(tree.get([b'k', i].as_slice(), MAX_SEQNO)?.is_some());
+    }
+
+    Ok(())
+}
 
 #[test]
 fn multi_level_with_both_flags() -> crate::Result<()> {

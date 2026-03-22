@@ -95,6 +95,8 @@ impl Node {
     clippy::expect_used,
     reason = "rotation invariant: left child must exist"
 )]
+// NOTE: #[allow] not #[expect] — this lint only fires on some Rust versions
+// (present locally but absent on CI), so #[expect] causes unfulfilled-lint-expectation errors.
 #[allow(
     clippy::unnecessary_box_returns,
     reason = "tree rotations pass Box<Node> through; unboxing would add needless allocation"
@@ -112,6 +114,8 @@ fn rotate_right(mut node: Box<Node>) -> Box<Node> {
     clippy::expect_used,
     reason = "rotation invariant: right child must exist"
 )]
+// NOTE: #[allow] not #[expect] — this lint only fires on some Rust versions
+// (present locally but absent on CI), so #[expect] causes unfulfilled-lint-expectation errors.
 #[allow(
     clippy::unnecessary_box_returns,
     reason = "tree rotations pass Box<Node> through; unboxing would add needless allocation"
@@ -129,6 +133,8 @@ fn rotate_left(mut node: Box<Node>) -> Box<Node> {
     clippy::expect_used,
     reason = "balance factor guarantees child existence"
 )]
+// NOTE: #[allow] not #[expect] — this lint only fires on some Rust versions
+// (present locally but absent on CI), so #[expect] causes unfulfilled-lint-expectation errors.
 #[allow(
     clippy::unnecessary_box_returns,
     reason = "tree rotations pass Box<Node> through; unboxing would add needless allocation"

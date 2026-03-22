@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
-    compaction::{state::CompactionState, CompactionStrategy},
-    AbstractTree, Config, SequenceNumberCounter, MAX_SEQNO,
+    compaction::CompactionStrategy, AbstractTree, Config, SequenceNumberCounter, MAX_SEQNO,
 };
 use std::sync::Arc;
 use test_log::test;

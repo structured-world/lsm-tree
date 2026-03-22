@@ -352,6 +352,11 @@ impl Strategy {
                             }),
                     );
 
+                    // Guard against invalid ratios (zero, negative, NaN, infinite)
+                    if !ratio.is_finite() || ratio <= 0.0 {
+                        break;
+                    }
+
                     current_target /= ratio;
 
                     #[expect(
