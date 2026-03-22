@@ -249,8 +249,8 @@ fn run_rt_test(ops: Vec<RtOp>) -> Result<(), TestCaseError> {
 }
 
 proptest! {
+    // cases defaults to 256; CI overrides via PROPTEST_CASES=32
     #![proptest_config(ProptestConfig {
-        cases: 256,
         max_shrink_iters: 1000,
         .. ProptestConfig::default()
     })]

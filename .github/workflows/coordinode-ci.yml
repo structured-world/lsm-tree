@@ -49,6 +49,7 @@ jobs:
           prefix-key: ${{ runner.os }}-cargo
       - uses: taiki-e/install-action@nextest
       - name: Run tests
+        # tools/db_bench is a standalone crate, not in workspace — built separately
         run: cargo nextest run --all-features
         env:
           PROPTEST_CASES: "32"
