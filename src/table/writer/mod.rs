@@ -39,7 +39,9 @@ pub struct LinkedFile {
     pub len: usize,
 }
 
-/// Serializes and compresses values into blocks and writes them to disk as a table
+/// Serializes and compresses values into blocks and writes them to disk as a table.
+///
+/// Not public API — all callers are internal and pass `config.fs`.
 pub struct Writer<FS: Fs = StdFs> {
     /// Filesystem backend
     fs: Arc<FS>,
