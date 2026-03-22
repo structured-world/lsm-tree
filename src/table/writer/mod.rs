@@ -709,8 +709,7 @@ impl<FS: Fs> Writer<FS> {
             clippy::expect_used,
             reason = "if there's no parent folder, something has gone horribly wrong"
         )]
-        self.fs
-            .sync_directory(self.path.parent().expect("should have folder"))?;
+        crate::file::fsync_directory(self.path.parent().expect("should have folder"), &*self.fs)?;
 
         log::debug!(
             "Written {} items in {} blocks into new table file #{}, written {} MiB",
