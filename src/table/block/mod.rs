@@ -145,8 +145,9 @@ impl Block {
     ///
     /// Encryption state is determined by the caller (via [`Config`]),
     /// not recorded in the on-disk block header. Opening an encrypted
-    /// table without the correct provider will produce a checksum or
-    /// decompression error — not silent corruption.
+    /// table without the correct provider will reliably fail during
+    /// block validation (e.g., checksum, length, or decompression),
+    /// rather than causing silent corruption.
     pub fn from_reader<R: std::io::Read>(
         reader: &mut R,
         compression: CompressionType,
