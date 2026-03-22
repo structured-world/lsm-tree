@@ -1706,6 +1706,10 @@ fn load_block_range_tombstone_metrics() -> crate::Result<()> {
 /// Covers the validation path in `validated_kv_seqno` via the real on-disk
 /// deserialization pipeline (not just the unit-level helper).
 #[test]
+#[expect(
+    clippy::expect_used,
+    reason = "test invariants: key and value patterns must exist in the meta block"
+)]
 fn meta_seqno_kv_max_corruption_returns_invalid_data() -> crate::Result<()> {
     use super::block::Header;
     use super::meta::ParsedMeta;
