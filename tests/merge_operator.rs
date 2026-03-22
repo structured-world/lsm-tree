@@ -993,3 +993,33 @@ fn merge_operands_across_active_and_disk() -> lsm_tree::Result<()> {
 
     Ok(())
 }
+
+/// Bloom pre-filter skips tables whose key_range overlaps but whose bloom
+/// filter reports the key absent. Exercises the Ok(false) → skip path in
+/// the bloom-filtered iterator pipeline (bloom_passes + key_hash).
+#[test]
+fn merge_bloom_skips_non_matching_tables() -> lsm_tree::Result<()> {
+    let folder = tempfile::tempdir()?;
+    let tree = open_tree_with_counter(&folder);
+
+    // Table 1: wide key range [aaa, zzz] that does NOT contain "counter".
+    // Its key_range overlaps "counter" but bloom will reject it.
+    tree.insert("aaa", 0_i64.to_le_bytes(), 0);
+    tree.insert("zzz", 0_i64.to_le_bytes(), 1);
+    tree.flush_active_memtable(0)?;
+
+    // Table 2: contains "counter" base value — bloom will accept it.
+    tree.insert("counter", 100_i64.to_le_bytes(), 2);
+    tree.flush_active_memtable(0)?;
+
+    // Merge operand in active memtable
+    tree.merge("counter", 10_i64.to_le_bytes(), 3);
+
+    // resolve_merge_via_pipeline builds a key..=key range with bloom hash:
+    //   Table 1: key_range [aaa,zzz] overlaps "counter" ✓, bloom → Ok(false) → SKIP
+    //   Table 2: key_range [counter,counter] overlaps ✓, bloom → Ok(true) → INCLUDE
+    //   merge(Some(100), [10]) = 110
+    assert_eq!(Some(110), get_counter(&tree, "counter", 4));
+
+    Ok(())
+}
