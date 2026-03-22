@@ -148,7 +148,7 @@ impl Memtable {
         // key -> seqno
         //
         // a   -> 7
-        // abc -> 5 <<< This is the lowest key (highest seqno) that matches the key with seqno=None
+        // abc -> 5 <<< This is the lowest key (highest seqno) that matches the key with seqno=MAX
         // abc -> 4
         // abc -> 3 <<< If searching for abc and seqno=4, we would get this
         // abcdef -> 6

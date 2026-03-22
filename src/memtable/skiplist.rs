@@ -41,7 +41,7 @@ const UNSET: u32 = 0;
 // because the arena is never persisted — it lives only in memory.
 //
 // +0   u32  key_offset    — offset of user_key bytes in the arena
-// +4   u32  value_idx     — index into the SkipMap `values` Vec
+// +4   u32  value_idx     — index into the SkipMap `ValueStore`
 // +8   u16  key_len       — user_key length
 // +10  u8   value_type    — ValueType discriminant
 // +11  u8   height        — tower height (1..=MAX_HEIGHT)
@@ -437,7 +437,10 @@ impl SkipMap {
 
     /// Reads the value for `node` from the lock-free value store (wait-free).
     fn node_value(&self, node: u32) -> UserValue {
-        self.values.get(self.node_value_idx(node))
+        // SAFETY: node_value_idx was set during alloc_node→ValueStore::append,
+        // and this node is only reachable after the skiplist CAS that published
+        // it (establishing happens-before for the value write).
+        unsafe { self.values.get(self.node_value_idx(node)) }
     }
 
     // -----------------------------------------------------------------------

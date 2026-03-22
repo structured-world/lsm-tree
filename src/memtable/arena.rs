@@ -39,8 +39,9 @@ const MAX_BLOCKS: usize = 1 << (32 - BLOCK_SHIFT);
 /// bump cursor.  Blocks are allocated lazily via CAS on `AtomicPtr`, so only
 /// the blocks that are actually needed consume memory.
 ///
-/// The u32 offset returned by [`alloc`](Self::alloc) encodes both the block
-/// index (high 10 bits) and the within-block offset (low 22 bits).
+/// The u32 offset returned by [`alloc`](Self::alloc) encodes the block
+/// index in the high bits and the within-block offset in the low
+/// `BLOCK_SHIFT` bits (26 on 64-bit, 22 on 32-bit).
 pub struct Arena {
     /// Block pointers.  Null means not yet allocated.  Once set to non-null,
     /// a block pointer is never modified — reads may use `Relaxed` ordering

@@ -114,13 +114,16 @@ impl ValueStore {
 
     /// Reads a value by index (wait-free).
     ///
-    /// The caller must establish happens-before (typically via the skiplist
+    /// # Safety
+    ///
+    /// `idx` must have been returned by a prior [`append`](Self::append) call,
+    /// and the caller must establish happens-before (typically via the skiplist
     /// CAS chain) to ensure the value at `idx` has been fully written.
     #[expect(
         clippy::indexing_slicing,
         reason = "seg_idx < MAX_SEGMENTS enforced by u32 index range"
     )]
-    pub fn get(&self, idx: u32) -> UserValue {
+    pub unsafe fn get(&self, idx: u32) -> UserValue {
         let seg_idx = (idx >> SEGMENT_SHIFT) as usize;
         let slot = (idx & SEGMENT_MASK) as usize;
 
@@ -246,15 +249,15 @@ mod tests {
         let i0 = store.append(&val(b"hello"));
         let i1 = store.append(&val(b"world"));
 
-        assert_eq!(&*store.get(i0), b"hello");
-        assert_eq!(&*store.get(i1), b"world");
+        assert_eq!(&*unsafe { store.get(i0) }, b"hello");
+        assert_eq!(&*unsafe { store.get(i1) }, b"world");
     }
 
     #[test]
     fn empty_value() {
         let store = ValueStore::new();
         let i = store.append(&val(b""));
-        assert!(store.get(i).is_empty());
+        assert!(unsafe { store.get(i) }.is_empty());
     }
 
     #[test]
@@ -268,7 +271,10 @@ mod tests {
 
         // Last entry is in segment 1
         let last_idx = SEGMENT_SIZE as u32;
-        assert_eq!(&*store.get(last_idx), format!("v{SEGMENT_SIZE}").as_bytes());
+        assert_eq!(
+            &*unsafe { store.get(last_idx) },
+            format!("v{SEGMENT_SIZE}").as_bytes()
+        );
     }
 
     #[test]
@@ -301,7 +307,7 @@ mod tests {
 
         // Verify all values are readable and correct.
         for (idx, expected) in &all {
-            assert_eq!(&*store.get(*idx), expected.as_bytes());
+            assert_eq!(&*unsafe { store.get(*idx) }, expected.as_bytes());
         }
 
         assert_eq!(all.len(), n_threads * n_per_thread);
