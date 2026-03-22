@@ -89,7 +89,7 @@ pub type SharedComparator = Arc<dyn UserComparator>;
 ///
 /// Uses a shared static instance to avoid repeated allocations.
 #[must_use]
-pub(crate) fn default_comparator() -> SharedComparator {
+pub fn default_comparator() -> SharedComparator {
     // LazyLock creates the Arc once; subsequent calls just clone the Arc (ref-count bump).
     static DEFAULT: std::sync::LazyLock<SharedComparator> =
         std::sync::LazyLock::new(|| Arc::new(DefaultUserComparator));

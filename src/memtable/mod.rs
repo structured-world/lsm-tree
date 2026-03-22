@@ -23,7 +23,7 @@ pub use crate::tree::inner::MemtableId;
 /// This wrapper is used as the key type in the memtable's `SkipMap` to support
 /// pluggable key comparison. The `SharedComparator` is cloned (Arc bump) per entry.
 #[derive(Clone)]
-pub(crate) struct MemtableKey {
+pub struct MemtableKey {
     pub(crate) inner: InternalKey,
     pub(crate) comparator: SharedComparator,
 }
@@ -164,7 +164,7 @@ impl Memtable {
         })
     }
 
-    /// Wraps an `InternalKey` with this memtable's comparator for SkipMap lookups.
+    /// Wraps an `InternalKey` with this memtable's comparator for `SkipMap` lookups.
     pub(crate) fn wrap_key(&self, key: InternalKey) -> MemtableKey {
         MemtableKey::new(key, self.comparator.clone())
     }

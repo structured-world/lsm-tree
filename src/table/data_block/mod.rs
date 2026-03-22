@@ -484,7 +484,6 @@ impl DataBlock {
     }
 
     #[must_use]
-    #[expect(clippy::iter_without_into_iter)]
     pub fn iter(&self, comparator: crate::comparator::SharedComparator) -> Iter<'_> {
         Iter::new(
             &self.inner.data,

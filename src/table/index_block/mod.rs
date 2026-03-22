@@ -94,7 +94,6 @@ impl IndexBlock {
     }
 
     #[must_use]
-    #[expect(clippy::iter_without_into_iter)]
     pub fn iter(&self, comparator: crate::comparator::SharedComparator) -> Iter<'_> {
         Iter::new(
             Decoder::<KeyedBlockHandle, IndexBlockParsedItem>::new(&self.inner),
