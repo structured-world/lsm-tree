@@ -93,7 +93,7 @@ impl ValueStore {
         // skiplist CAS), so readers see the value only after it's fully
         // written.
         unsafe {
-            let seg_ptr = self.segments[seg_idx].load(Ordering::Relaxed);
+            let seg_ptr = self.segments[seg_idx].load(Ordering::Acquire);
             debug_assert!(!seg_ptr.is_null());
             ptr::write(seg_ptr.add(slot), value.clone());
         }
@@ -114,11 +114,10 @@ impl ValueStore {
         let slot = (idx & SEGMENT_MASK) as usize;
 
         // SAFETY: the caller guarantees happens-before via the skiplist CAS.
-        // The value at `idx` was fully written during `append()`.  Segment
-        // pointer is loaded with Relaxed because it's write-once and the
-        // skiplist CAS chain provides transitional happens-before.
+        // The value at `idx` was fully written during `append()`.  Acquire
+        // pairs with the AcqRel CAS in ensure_segment.
         unsafe {
-            let seg_ptr = self.segments[seg_idx].load(Ordering::Relaxed);
+            let seg_ptr = self.segments[seg_idx].load(Ordering::Acquire);
             debug_assert!(!seg_ptr.is_null());
             (*seg_ptr.add(slot)).clone()
         }

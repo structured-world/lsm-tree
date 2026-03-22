@@ -84,13 +84,18 @@ impl Arena {
 
             if let Some(new_end) = aligned.checked_add(size) {
                 if new_end <= BLOCK_SIZE {
+                    // Ensure the block exists BEFORE publishing the offset via
+                    // CAS — otherwise another thread could read the cursor,
+                    // compute the same block_idx, and call decode() before the
+                    // block pointer is set.
+                    self.ensure_block(block_idx as usize);
+
                     let new_cursor = (block_idx << BLOCK_SHIFT) | new_end;
                     if self
                         .cursor
                         .compare_exchange_weak(cur, new_cursor, Ordering::AcqRel, Ordering::Relaxed)
                         .is_ok()
                     {
-                        self.ensure_block(block_idx as usize);
                         return Some((block_idx << BLOCK_SHIFT) | aligned);
                     }
                 } else {
@@ -169,14 +174,8 @@ impl Arena {
 
     /// Decodes an encoded offset into `(block_base_ptr, within_block_offset)`.
     ///
-    /// Uses `Relaxed` ordering for the block pointer load because:
-    /// - Block pointers are write-once (set in `ensure_block`, never changed).
-    /// - The caller must establish happens-before via the skiplist CAS chain
-    ///   before reading node data; this transitively makes the block pointer
-    ///   visible.
-    /// - There is a data dependency: the `offset` value (which determines
-    ///   `block_idx`) comes from an `Acquire` load on the skiplist, preventing
-    ///   speculative reordering.
+    /// Block pointers are write-once (set in `ensure_block`, never changed).
+    /// `Acquire` ordering pairs with the `AcqRel` CAS in `ensure_block`.
     #[expect(
         clippy::indexing_slicing,
         reason = "block_idx < MAX_BLOCKS by construction (alloc enforces this)"
@@ -184,7 +183,7 @@ impl Arena {
     unsafe fn decode(&self, offset: u32) -> (*mut u8, usize) {
         let block_idx = (offset >> BLOCK_SHIFT) as usize;
         let off = (offset & BLOCK_MASK) as usize;
-        let ptr = self.blocks[block_idx].load(Ordering::Relaxed);
+        let ptr = self.blocks[block_idx].load(Ordering::Acquire);
         debug_assert!(!ptr.is_null(), "accessing unallocated arena block");
         (ptr, off)
     }
