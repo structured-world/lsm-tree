@@ -127,12 +127,10 @@ impl Fs for StdFs {
                 let file_type = entry.file_type()?;
                 let file_name_os = entry.file_name();
                 // OsString has no Display impl — Debug is the only way to show the raw bytes.
-                #[expect(clippy::unnecessary_debug_formatting)]
                 let file_name = file_name_os.into_string().map_err(|os| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("non-UTF-8 filename in directory {}: {os:?}", path.display()),
-                    )
+                    #[expect(clippy::unnecessary_debug_formatting)]
+                    let msg = format!("non-UTF-8 filename in directory {}: {os:?}", path.display());
+                    io::Error::new(io::ErrorKind::InvalidData, msg)
                 })?;
                 Ok(FsDirEntry {
                     path: entry.path(),
@@ -596,6 +594,7 @@ mod tests {
         Ok(())
     }
 
+    // Linux only: macOS (HFS+/APFS) rejects non-UTF-8 filenames at the FS layer.
     #[test]
     #[cfg(target_os = "linux")]
     fn read_dir_rejects_non_utf8_filename() {
