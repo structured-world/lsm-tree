@@ -139,6 +139,12 @@ impl Level {
     }
 
     /// Like [`aggregate_key_range`], but uses a custom comparator for key ordering.
+    ///
+    /// Per-run aggregation via [`Run::aggregate_key_range`] is comparator-correct
+    /// because runs are sorted in comparator order (ensured by `push_cmp`), so
+    /// `first().min()` and `last().max()` yield the true extremes under the
+    /// configured comparator. The cross-run aggregation then uses `aggregate_cmp`
+    /// to find the global min/max.
     pub fn aggregate_key_range_cmp(&self, cmp: &dyn crate::comparator::UserComparator) -> KeyRange {
         if self.run_count() == 1 {
             #[expect(
