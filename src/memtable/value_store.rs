@@ -46,11 +46,8 @@ pub struct ValueStore {
     next_idx: AtomicU32,
 }
 
-// SAFETY: AtomicPtr and AtomicU32 are Send+Sync.  Segment data is written
-// once per slot (during append) and read immutably thereafter.  The atomic
-// index counter ensures no two appends write the same slot.
-unsafe impl Send for ValueStore {}
-unsafe impl Sync for ValueStore {}
+// Send+Sync derived automatically: all fields (Box<[AtomicPtr<_>]>, AtomicU32)
+// are Send+Sync.
 
 impl ValueStore {
     /// Creates a new empty store.
@@ -195,10 +192,18 @@ impl Drop for ValueStore {
     )]
     fn drop(&mut self) {
         let total = self.next_idx.load(Ordering::Relaxed);
+        if total == 0 {
+            return;
+        }
 
-        for seg_idx in 0..MAX_SEGMENTS {
-            // SAFETY: indexing is bounded by MAX_SEGMENTS.
-            #[expect(clippy::indexing_slicing, reason = "seg_idx < MAX_SEGMENTS")]
+        // Only iterate segments that could contain initialised entries.
+        let max_seg_idx = ((total - 1) >> SEGMENT_SHIFT) as usize + 1;
+
+        for seg_idx in 0..max_seg_idx {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "seg_idx < max_seg_idx <= MAX_SEGMENTS"
+            )]
             let seg_ptr = self.segments[seg_idx].load(Ordering::Relaxed);
 
             if seg_ptr.is_null() {
