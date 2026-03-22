@@ -359,4 +359,28 @@ mod tests {
         all_offsets.dedup();
         assert_eq!(all_offsets.len(), 8000);
     }
+
+    #[test]
+    fn alloc_invalid_alignment_returns_none() {
+        let arena = Arena::new();
+        assert!(arena.alloc(100, 3).is_none()); // 3 is not a power of two
+        assert!(arena.alloc(0, 4).is_none()); // zero size
+    }
+
+    #[test]
+    fn default_impl() {
+        let arena = Arena::default();
+        let off = arena.alloc(8, 4).expect("should work");
+        assert!(off > 0);
+    }
+
+    #[test]
+    fn drop_with_multiple_blocks() {
+        let arena = Arena::new();
+        // Allocate across 2 blocks to exercise Drop on both.
+        let big = BLOCK_SIZE - 8;
+        let _ = arena.alloc(big, 1).expect("block 0");
+        let _ = arena.alloc(64, 4).expect("block 1");
+        // Drop runs here — deallocates both blocks.
+    }
 }

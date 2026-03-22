@@ -308,30 +308,24 @@ impl SkipMap {
         )]
         let node = self.arena.alloc(n_size, 4).expect("arena exhausted (node)");
 
-        // Write immutable metadata.
+        // Write immutable metadata using direct byte offsets matching the
+        // node layout comment above.  The arena guarantees 24+ bytes at `node`.
+        //
         // SAFETY: node was just allocated with size >= OFF_TOWER (24 bytes);
         // exclusive access before publish.
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "meta is exactly OFF_TOWER (24) bytes by construction"
+        )]
         unsafe {
             let meta = self.arena.get_bytes_mut(node, OFF_TOWER);
-
-            let (key_off_bytes, rest) = meta.split_at_mut(4);
-            key_off_bytes.copy_from_slice(&key_offset.to_ne_bytes());
-            let (val_idx_bytes, rest) = rest.split_at_mut(4);
-            val_idx_bytes.copy_from_slice(&value_idx.to_ne_bytes());
-            let (key_len_bytes, rest) = rest.split_at_mut(2);
-            key_len_bytes.copy_from_slice(&(key_bytes.len() as u16).to_ne_bytes());
-            // value_type and height are single bytes
-            if let Some(vt_byte) = rest.first_mut() {
-                *vt_byte = u8::from(key.value_type);
-            }
-            if let Some(h_byte) = rest.get_mut(1) {
-                *h_byte = height as u8;
-            }
-            // rest[2..6] is reserved padding, skip it
-            // seqno at rest[6..14] (= original offset 16..24)
-            if let Some(seqno_bytes) = rest.get_mut(6..14) {
-                seqno_bytes.copy_from_slice(&key.seqno.to_ne_bytes());
-            }
+            meta[0..4].copy_from_slice(&key_offset.to_ne_bytes());
+            meta[4..8].copy_from_slice(&value_idx.to_ne_bytes());
+            meta[8..10].copy_from_slice(&(key_bytes.len() as u16).to_ne_bytes());
+            meta[10] = u8::from(key.value_type);
+            meta[11] = height as u8;
+            // meta[12..16] reserved padding
+            meta[16..24].copy_from_slice(&key.seqno.to_ne_bytes());
             // Tower entries are already zero (= UNSET) from arena zero-init.
         }
 
@@ -1177,5 +1171,72 @@ mod tests {
             .expect("should find key");
         assert_eq!(entry3.key().seqno, 3);
         assert_eq!(&*entry3.value(), b"v3");
+    }
+
+    #[test]
+    fn empty_iter_next_back() {
+        let map = SkipMap::new();
+        let mut iter = map.iter();
+        assert!(iter.next().is_none());
+        assert!(iter.next_back().is_none());
+    }
+
+    #[test]
+    fn empty_range_next_back() {
+        let map = SkipMap::new();
+        let lo = make_key(b"a", SeqNo::MAX);
+        let hi = make_key(b"z", 0);
+        let mut range = map.range(lo..=hi);
+        assert!(range.next().is_none());
+        assert!(range.next_back().is_none());
+    }
+
+    #[test]
+    fn range_excluded_end_next_back() {
+        let map = SkipMap::new();
+        for i in 0u8..5 {
+            map.insert(&make_key(&[b'a' + i], 0), &make_value(&[i]));
+        }
+
+        // Excluded end "d" → range is [a, d) = a, b, c
+        let lo = make_key(b"a", SeqNo::MAX);
+        let hi = make_key(b"d", SeqNo::MAX);
+        let rev: Vec<u8> = map
+            .range(lo..hi)
+            .rev()
+            .map(|e| e.key().user_key[0])
+            .collect();
+        assert_eq!(rev, vec![b'c', b'b', b'a']);
+    }
+
+    #[test]
+    fn seek_le_all_greater_returns_none() {
+        let map = SkipMap::new();
+        map.insert(&make_key(b"m", 0), &make_value(b"v"));
+
+        // All keys > "a", so seek_le("a") returns UNSET → next_back = None
+        let hi = make_key(b"a", 0);
+        let mut range = map.range(..=hi);
+        assert!(range.next_back().is_none());
+    }
+
+    #[test]
+    fn next_back_on_first_element() {
+        let map = SkipMap::new();
+        map.insert(&make_key(b"only", 0), &make_value(b"v"));
+
+        let mut iter = map.iter();
+        // next_back on single-element list
+        let entry = iter.next_back().expect("one entry");
+        assert_eq!(&*entry.key().user_key, b"only");
+        assert!(iter.next().is_none());
+        assert!(iter.next_back().is_none());
+    }
+
+    #[test]
+    fn default_impl() {
+        let map = SkipMap::default();
+        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
     }
 }
