@@ -164,10 +164,11 @@ impl Block {
     /// When `encryption` is `None`, the decrypt step is skipped.
     ///
     /// Encryption state is determined by the caller (via [`Config`]),
-    /// not recorded in the on-disk block header. Opening an encrypted
-    /// table without the correct provider will reliably fail during
-    /// block validation (e.g., checksum, length, or decompression),
-    /// rather than causing silent corruption.
+    /// not recorded in the on-disk block header. With an authenticated
+    /// encryption provider (such as AES-256-GCM), using the wrong key
+    /// or provider will typically surface as a read/validation error
+    /// (checksum, length, or decompression failure) rather than
+    /// silently producing valid-looking plaintext.
     pub fn from_reader<R: std::io::Read>(
         reader: &mut R,
         compression: CompressionType,
