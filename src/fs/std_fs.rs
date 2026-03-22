@@ -123,8 +123,12 @@ impl Fs for StdFs {
             .map(|res| {
                 let entry = res?;
                 let file_type = entry.file_type()?;
-                let file_name = entry.file_name().into_string().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 filename")
+                let file_name_os = entry.file_name();
+                let file_name = file_name_os.into_string().map_err(|os| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("non-UTF-8 filename in directory {path:?}: {os:?}"),
+                    )
                 })?;
                 Ok(FsDirEntry {
                     path: entry.path(),
