@@ -107,6 +107,7 @@ impl Iterator for Scanner {
 
             frame_is_v4 = buf == BLOB_HEADER_MAGIC_V4;
             if !frame_is_v4 && buf != BLOB_HEADER_MAGIC_V3 {
+                self.is_terminated = true;
                 return Some(Err(crate::Error::InvalidHeader("Blob")));
             }
         }
@@ -394,6 +395,10 @@ mod tests {
             matches!(result, Err(crate::Error::InvalidHeader("Blob"))),
             "expected InvalidHeader for bad magic, got: {result:?}",
         );
+
+        // Scanner must be terminated — subsequent next() returns None,
+        // not garbage parsed from an invalid stream position.
+        assert!(scanner.next().is_none());
 
         Ok(())
     }
