@@ -62,10 +62,11 @@ impl<T: Ranged> std::ops::Deref for Run<T> {
     }
 }
 
-/// Trims a slice to the contiguous sub-range where `pred` holds.
+/// Returns the span between the first and last element matching `pred`.
 ///
-/// Used by `get_contained` / `get_contained_cmp` to narrow an overlap
-/// window down to fully-contained tables.
+/// Note: non-matching elements *between* matches are included. This is
+/// correct for `get_contained` / `get_contained_cmp` where the overlap
+/// window guarantees contiguity of matching tables.
 fn trim_slice<T, F>(s: &[T], pred: F) -> &[T]
 where
     F: Fn(&T) -> bool,
