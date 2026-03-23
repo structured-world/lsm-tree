@@ -1327,5 +1327,61 @@ mod tests {
             assert!(result.is_err());
             Ok(())
         }
+
+        #[test]
+        fn block_from_file_encrypted_undersized_handle_rejected() {
+            use std::io::Write;
+
+            let enc = test_provider();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("block");
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(b"tiny").unwrap();
+            file.sync_all().unwrap();
+            drop(file);
+
+            let file = std::fs::File::open(&path).unwrap();
+            // Handle size smaller than Header::serialized_len()
+            let handle = crate::table::BlockHandle::new(BlockOffset(0), 2);
+            let result = Block::from_file(&file, handle, CompressionType::None, Some(&enc));
+
+            assert!(
+                matches!(result, Err(crate::Error::InvalidHeader(_))),
+                "expected InvalidHeader for undersized handle, got: {:?}",
+                result.err(),
+            );
+        }
+
+        #[test]
+        fn block_from_file_encrypted_uncompressed_large_payload() -> crate::Result<()> {
+            use std::io::Write;
+
+            let enc = test_provider();
+            let data = vec![0xBB_u8; 32 * 1024]; // 32 KiB
+            let mut buf = vec![];
+            let header = Block::write_into(
+                &mut buf,
+                &data,
+                BlockType::Data,
+                CompressionType::None,
+                Some(&enc),
+            )?;
+
+            let dir = tempfile::tempdir()?;
+            let path = dir.path().join("block");
+            let mut file = std::fs::File::create(&path)?;
+            file.write_all(&buf)?;
+            file.sync_all()?;
+            drop(file);
+
+            let file = std::fs::File::open(&path)?;
+            let handle = crate::table::BlockHandle::new(
+                BlockOffset(0),
+                header.data_length + Header::serialized_len() as u32,
+            );
+            let block = Block::from_file(&file, handle, CompressionType::None, Some(&enc))?;
+            assert_eq!(&*block.data, &data[..]);
+            Ok(())
+        }
     }
 }
