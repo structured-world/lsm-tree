@@ -831,7 +831,7 @@ impl CompactionStrategy for Strategy {
         // Soft invariant: L1+ levels are usually single-run but may have
         // multiple runs transiently after multi-level compaction (#108).
         // Log rather than assert — this is a performance concern (suboptimal
-        // pick), not a correctness issue.
+        // pick), not a correctness issue. See #122 Part 3 for multi-run picker.
         if !level.is_disjoint() {
             log::debug!(
                 "L{} has {} runs (expected 1)",
