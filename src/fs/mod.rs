@@ -233,7 +233,7 @@ pub trait Fs: Send + Sync + 'static {
     ///
     /// Returns a `Vec` rather than a streaming iterator because
     /// `read_dir` is a cold-path operation (recovery, compaction file
-    /// listing) where directory sizes are bounded by LSM level count.
+    /// listing) where directory sizes are expected to remain small.
     /// Callers that need a specific order must sort the result.
     ///
     /// # Errors
