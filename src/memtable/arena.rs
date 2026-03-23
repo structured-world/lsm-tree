@@ -239,19 +239,12 @@ impl Arena {
             let layout = Self::block_layout();
 
             // SAFETY: layout is non-zero (BLOCK_SIZE > 0).
-            // Use alloc + write_bytes instead of alloc_zeroed — some allocator
-            // implementations (musl memalign) may not honour the zeroing
-            // guarantee when alignment > natural alignment.
-            let raw = unsafe { std::alloc::alloc(layout) };
+            // alloc_zeroed guarantees zeroed memory (tower pointers = UNSET).
+            // Visibility: the CAS below (AcqRel) makes the zeroed contents
+            // visible to any thread that Acquire-loads the block pointer.
+            let raw = unsafe { std::alloc::alloc_zeroed(layout) };
             if raw.is_null() {
                 std::alloc::handle_alloc_error(layout);
-            }
-            // Zero the block so that tower next-pointers default to UNSET (0).
-            // Visibility: write_bytes happens-before the CAS below (program
-            // order), and readers Acquire the block pointer from the CAS,
-            // transitively making the zeroed contents visible.
-            unsafe {
-                std::ptr::write_bytes(raw, 0, BLOCK_SIZE as usize);
             }
 
             // CAS null → raw.  If another thread won, free our block.
