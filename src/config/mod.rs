@@ -411,11 +411,12 @@ impl Config {
     fn validate_zstd_dictionary(&self) -> crate::Result<()> {
         let dict_id = self.zstd_dictionary.as_ref().map(|d| d.id());
 
-        for ct in self
-            .data_block_compression_policy
-            .iter()
-            .chain(self.index_block_compression_policy.iter())
-        {
+        // NOTE: Only data block policies are validated. Index blocks never
+        // carry a dictionary — Writer::use_index_block_compression() downgrades
+        // ZstdDict to plain Zstd. Validating index policies here would reject
+        // configs that use ZstdDict solely for index blocks even though the
+        // writer handles them correctly.
+        for ct in self.data_block_compression_policy.iter() {
             if let CompressionType::ZstdDict {
                 dict_id: required, ..
             } = ct
