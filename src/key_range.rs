@@ -105,6 +105,53 @@ impl KeyRange {
             && cmp.compare(start1, end2) != std::cmp::Ordering::Greater
     }
 
+    /// Like [`Self::overlaps_with_bounds`], but uses a custom comparator for key ordering.
+    #[must_use]
+    pub fn overlaps_with_bounds_cmp(
+        &self,
+        bounds: &(Bound<&[u8]>, Bound<&[u8]>),
+        cmp: &dyn crate::comparator::UserComparator,
+    ) -> bool {
+        use std::cmp::Ordering;
+
+        let (lo, hi) = bounds;
+        let (my_lo, my_hi) = self.as_tuple();
+
+        if *lo == Bound::Unbounded && *hi == Bound::Unbounded {
+            return true;
+        }
+
+        if *hi == Bound::Unbounded {
+            return match lo {
+                Bound::Included(key) => cmp.compare(key, my_hi) != Ordering::Greater,
+                Bound::Excluded(key) => cmp.compare(key, my_hi) == Ordering::Less,
+                Bound::Unbounded => unreachable!(),
+            };
+        }
+
+        if *lo == Bound::Unbounded {
+            return match hi {
+                Bound::Included(key) => cmp.compare(key, my_lo) != Ordering::Less,
+                Bound::Excluded(key) => cmp.compare(key, my_lo) == Ordering::Greater,
+                Bound::Unbounded => unreachable!(),
+            };
+        }
+
+        let lo_included = match lo {
+            Bound::Included(key) => cmp.compare(key, my_hi) != Ordering::Greater,
+            Bound::Excluded(key) => cmp.compare(key, my_hi) == Ordering::Less,
+            Bound::Unbounded => unreachable!(),
+        };
+
+        let hi_included = match hi {
+            Bound::Included(key) => cmp.compare(key, my_lo) != Ordering::Less,
+            Bound::Excluded(key) => cmp.compare(key, my_lo) == Ordering::Greater,
+            Bound::Unbounded => unreachable!(),
+        };
+
+        lo_included && hi_included
+    }
+
     /// Returns `true` if the ranges overlap partially or fully.
     #[must_use]
     pub fn overlaps_with_bounds(&self, bounds: &(Bound<&[u8]>, Bound<&[u8]>)) -> bool {
