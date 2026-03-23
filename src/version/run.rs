@@ -373,6 +373,10 @@ mod tests {
     struct ReverseCmp;
 
     impl UserComparator for ReverseCmp {
+        fn name(&self) -> &'static str {
+            "reverse"
+        }
+
         fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
             b.cmp(a)
         }

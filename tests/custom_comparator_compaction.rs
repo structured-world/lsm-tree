@@ -22,6 +22,10 @@ use std::sync::Arc;
 struct ReverseComparator;
 
 impl UserComparator for ReverseComparator {
+    fn name(&self) -> &'static str {
+        "reverse"
+    }
+
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         b.cmp(a)
     }
@@ -36,6 +40,10 @@ impl UserComparator for ReverseComparator {
 struct U64BigEndianComparator;
 
 impl UserComparator for U64BigEndianComparator {
+    fn name(&self) -> &'static str {
+        "u64-big-endian"
+    }
+
     fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         if a.len() == 8 && b.len() == 8 {
             let a_u64 = u64::from_be_bytes(a.try_into().unwrap());
