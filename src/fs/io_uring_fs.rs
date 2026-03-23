@@ -328,7 +328,9 @@ impl Seek for IoUringFile {
             } else {
                 cursor.checked_sub(n.unsigned_abs())
             }
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek position overflow"))?,
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "seek position out of range")
+            })?,
             SeekFrom::End(n) => {
                 let len = self.file.metadata()?.len();
                 if n >= 0 {
@@ -337,7 +339,7 @@ impl Seek for IoUringFile {
                     len.checked_sub(n.unsigned_abs())
                 }
                 .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "seek position overflow")
+                    io::Error::new(io::ErrorKind::InvalidInput, "seek position out of range")
                 })?
             }
         };
