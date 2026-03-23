@@ -828,14 +828,17 @@ impl CompactionStrategy for Strategy {
         // subset of tables rather than the full set. Compaction still makes
         // forward progress and the transient multi-run state heals within one
         // or two additional passes.
-        debug_assert!(
-            level.run_count() <= 2,
-            "L1+ level should have at most 2 runs"
-        );
-        debug_assert!(
-            next_level.run_count() <= 2,
-            "L1+ next level should have at most 2 runs"
-        );
+        // Soft invariant: L1+ levels are usually single-run but may have
+        // multiple runs transiently after multi-level compaction (#108).
+        // Log rather than assert — this is a performance concern (suboptimal
+        // pick), not a correctness issue.
+        if !level.is_disjoint() {
+            log::debug!(
+                "L{} has {} runs (expected 1)",
+                level_idx_with_highest_score,
+                level.run_count()
+            );
+        }
 
         #[expect(
             clippy::expect_used,
