@@ -599,11 +599,11 @@ mod tests {
     // Linux only: macOS (HFS+/APFS) rejects non-UTF-8 filenames at the FS layer.
     #[test]
     #[cfg(target_os = "linux")]
-    fn read_dir_rejects_non_utf8_filename() {
+    fn read_dir_rejects_non_utf8_filename() -> io::Result<()> {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir()?;
         // Create a file with invalid UTF-8 bytes in its name.
         let bad_name = OsStr::from_bytes(&[0xff, 0xfe]);
         let bad_path = dir.path().join(bad_name);
@@ -611,21 +611,26 @@ mod tests {
             // Filesystem rejected the non-UTF-8 filename (e.g. overlay,
             // container mounts, restrictive mount options) — test
             // precondition cannot be met, skip gracefully.
-            return;
+            return Ok(());
         }
 
         let fs = StdFs;
-        let err = fs.read_dir(dir.path()).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        let msg = err.to_string();
-        assert!(
-            msg.contains("non-UTF-8 filename"),
-            "unexpected error: {msg}"
-        );
-        assert!(
-            msg.contains(&dir.path().display().to_string()),
-            "error should include directory path: {msg}",
-        );
+        match fs.read_dir(dir.path()) {
+            Err(err) => {
+                assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("non-UTF-8 filename"),
+                    "unexpected error: {msg}"
+                );
+                assert!(
+                    msg.contains(&dir.path().display().to_string()),
+                    "error should include directory path: {msg}",
+                );
+            }
+            Ok(_) => panic!("read_dir should fail on non-UTF-8 filename"),
+        }
+        Ok(())
     }
 
     /// Compile-time assertion: `Fs` is object-safe without specifying
