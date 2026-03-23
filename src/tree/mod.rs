@@ -1517,9 +1517,17 @@ impl Tree {
 
         let mut orphaned_tables = vec![];
 
-        for (idx, dirent) in std::fs::read_dir(&table_base_folder)?.enumerate() {
-            let dirent = dirent?;
-            let file_name = dirent.file_name();
+        for (idx, dirent) in config
+            .fs
+            .read_dir(&table_base_folder)?
+            .into_iter()
+            .enumerate()
+        {
+            let crate::fs::FsDirEntry {
+                path: table_file_path,
+                file_name,
+                is_dir,
+            } = dirent;
 
             // https://en.wikipedia.org/wiki/.DS_Store
             if file_name == ".DS_Store" {
@@ -1527,17 +1535,12 @@ impl Tree {
             }
 
             // https://en.wikipedia.org/wiki/AppleSingle_and_AppleDouble_formats
-            if file_name.to_string_lossy().starts_with("._") {
+            if file_name.starts_with("._") {
                 continue;
             }
 
-            let table_file_name = file_name.to_str().ok_or_else(|| {
-                log::error!("invalid table file name {}", file_name.display());
-                crate::Error::Unrecoverable
-            })?;
-
-            let table_file_path = dirent.path();
-            assert!(!table_file_path.is_dir());
+            let table_file_name = &file_name;
+            assert!(!is_dir);
 
             let table_id = table_file_name.parse::<TableId>().map_err(|e| {
                 log::error!("invalid table file name {table_file_name:?}: {e:?}");
