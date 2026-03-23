@@ -61,10 +61,14 @@ fn pick_minimal_compaction(
 
     next_level
         .iter()
-        .flat_map(|run| run.growing_windows())
-        .take_while(|window| {
-            let next_level_size = window.iter().map(Table::file_size).sum::<u64>();
-            next_level_size <= (50 * table_base_size)
+        .flat_map(|run| {
+            // Cap per-run windows at 50x table_base_size. take_while is safe
+            // here because growing_windows within a single run are monotonically
+            // increasing in size — once one exceeds the cap, all subsequent will too.
+            run.growing_windows().take_while(|window| {
+                let size = window.iter().map(Table::file_size).sum::<u64>();
+                size <= (50 * table_base_size)
+            })
         })
         .filter_map(|window| {
             if hidden_set.is_blocked(window.iter().map(Table::id)) {
@@ -815,16 +819,8 @@ impl CompactionStrategy for Strategy {
             return Choice::DoNothing;
         };
 
-        // Levels are typically single-run (disjoint), but multi-level compaction
-        // (#108) can leave temporary multi-run levels when per-table L2 overlap
-        // selection excludes gap-filling tables. This is self-healing — the next
-        // compaction pass merges the runs back via optimize_runs. See #122.
-        //
-        // pick_minimal_compaction operates on first_run() only, which is
-        // suboptimal but not incorrect when a second run exists — it selects a
-        // subset of tables rather than the full set. Compaction still makes
-        // forward progress and the transient multi-run state heals within one
-        // or two additional passes.
+        // pick_minimal_compaction scans all runs in both levels, handling
+        // transient multi-run states from multi-level compaction (#108, #122).
         let Some((table_ids, can_trivial_move)) = pick_minimal_compaction(
             level,
             next_level,
