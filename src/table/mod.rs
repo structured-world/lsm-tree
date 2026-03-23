@@ -899,7 +899,9 @@ impl Table {
     /// `key_hash` must be the xxh3 hash of `key` (pre-computed by the caller
     /// to avoid redundant hashing — same pattern as [`Table::get`]).
     pub(crate) fn bloom_may_contain_key(&self, key: &[u8], key_hash: u64) -> crate::Result<bool> {
-        // Full (non-partitioned) filter — delegate to hash-only path
+        // Full (non-partitioned) filter — delegate to hash-only path.
+        // A table has either pinned_filter_block (full) or pinned_filter_index
+        // (partitioned), never both — checked at construction time.
         if self.pinned_filter_block.is_some() {
             return self.bloom_may_contain_hash(key_hash);
         }

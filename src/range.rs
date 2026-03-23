@@ -169,6 +169,12 @@ fn bloom_passes(state: &IterState, table: &crate::table::Table) -> bool {
         }
     }
 
+    // bloom_key without key_hash is meaningless — catch misuse early
+    debug_assert!(
+        state.bloom_key.is_none() || state.key_hash.is_some(),
+        "bloom_key requires key_hash to be set"
+    );
+
     if let Some(key_hash) = state.key_hash {
         let result = if let Some(bloom_key) = &state.bloom_key {
             // UserKey (Slice) implements Deref<Target=[u8]>, coerces to &[u8]
