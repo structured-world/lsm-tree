@@ -561,6 +561,72 @@ mod tests {
     }
 
     #[test]
+    fn run_range_contained_cmp_reverse() {
+        use crate::comparator::UserComparator;
+        use crate::TableId;
+
+        struct ReverseCmp;
+        impl UserComparator for ReverseCmp {
+            fn name(&self) -> &'static str {
+                "reverse"
+            }
+            fn compare(&self, a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+                b.cmp(a)
+            }
+        }
+
+        // Reverse order: z..p, o..k, j..e, d..a
+        let items = vec![
+            s(0, "p", "z"),
+            s(1, "k", "o"),
+            s(2, "e", "j"),
+            s(3, "a", "d"),
+        ];
+        let run = Run(items);
+        let cmp = ReverseCmp;
+
+        // Full range contains all
+        assert_eq!(
+            &[0, 1, 2, 3],
+            &*run
+                .get_contained_cmp(&KeyRange::new((b"z".into(), b"a".into())), &cmp)
+                .iter()
+                .map(|x| x.id)
+                .collect::<Vec<_>>(),
+        );
+
+        // Partial: z..k contains tables 0 and 1
+        assert_eq!(
+            &[0, 1],
+            &*run
+                .get_contained_cmp(&KeyRange::new((b"z".into(), b"k".into())), &cmp)
+                .iter()
+                .map(|x| x.id)
+                .collect::<Vec<_>>(),
+        );
+
+        // Exact match: single table
+        assert_eq!(
+            &[2 as TableId],
+            &*run
+                .get_contained_cmp(&KeyRange::new((b"j".into(), b"e".into())), &cmp)
+                .iter()
+                .map(|x| x.id)
+                .collect::<Vec<_>>(),
+        );
+
+        // No table fully contained
+        assert_eq!(
+            &[] as &[TableId],
+            &*run
+                .get_contained_cmp(&KeyRange::new((b"z".into(), b"z".into())), &cmp)
+                .iter()
+                .map(|x| x.id)
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
     fn run_range_overlaps() {
         let items = vec![
             s(0, "a", "d"),
