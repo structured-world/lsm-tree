@@ -1,8 +1,8 @@
 // Integration test: zstd dictionary compression roundtrip
 //
 // Verifies that data written with zstd dictionary compression can be read back
-// correctly through the full Tree API (write → flush → read), and that
-// dictionary-compressed blocks achieve better compression than plain zstd.
+// correctly through the full Tree API (write → flush → read) and that the
+// various read paths continue to work correctly when a zstd dictionary is used.
 
 #[cfg(feature = "zstd")]
 mod zstd_dict {

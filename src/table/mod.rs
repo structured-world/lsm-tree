@@ -381,6 +381,8 @@ impl Table {
             self.metadata.data_block_compression,
             self.global_seqno(),
             self.encryption.clone(),
+            #[cfg(feature = "zstd")]
+            self.zstd_dictionary.clone(),
             self.comparator.clone(),
         )
     }

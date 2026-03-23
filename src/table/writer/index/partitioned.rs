@@ -67,7 +67,7 @@ impl PartitionedIndexWriter {
             self.compression,
             self.encryption.as_deref(),
             #[cfg(feature = "zstd")]
-            None,
+            None, // index blocks don't use dictionary compression (dict trained on data, not index structures)
         )?;
 
         #[expect(
@@ -132,7 +132,7 @@ impl PartitionedIndexWriter {
             self.compression,
             self.encryption.as_deref(),
             #[cfg(feature = "zstd")]
-            None,
+            None, // index blocks don't use dictionary compression (dict trained on data, not index structures)
         )?;
 
         #[expect(

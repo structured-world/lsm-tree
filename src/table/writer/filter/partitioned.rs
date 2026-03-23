@@ -88,7 +88,7 @@ impl PartitionedFilterWriter {
             CompressionType::None,
             self.encryption.as_deref(),
             #[cfg(feature = "zstd")]
-            None,
+            None, // filter blocks don't use dictionary compression
         )?;
 
         #[expect(
@@ -137,7 +137,7 @@ impl PartitionedFilterWriter {
             self.compression,
             self.encryption.as_deref(),
             #[cfg(feature = "zstd")]
-            None,
+            None, // filter blocks don't use dictionary compression
         )?;
 
         #[expect(
