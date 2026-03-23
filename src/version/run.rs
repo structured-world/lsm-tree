@@ -62,6 +62,24 @@ impl<T: Ranged> std::ops::Deref for Run<T> {
     }
 }
 
+/// Trims a slice to the contiguous sub-range where `pred` holds.
+///
+/// Used by `get_contained` / `get_contained_cmp` to narrow an overlap
+/// window down to fully-contained tables.
+fn trim_slice<T, F>(s: &[T], pred: F) -> &[T]
+where
+    F: Fn(&T) -> bool,
+{
+    let start = s.iter().position(&pred).unwrap_or(s.len());
+    let end = s.iter().rposition(&pred).map_or(start, |i| i + 1);
+
+    #[expect(
+        clippy::expect_used,
+        reason = "start..end are derived from position/rposition on the same slice"
+    )]
+    s.get(start..end).expect("should be in range")
+}
+
 impl<T: Ranged> Run<T> {
     pub fn new(items: Vec<T>) -> Option<Self> {
         if items.is_empty() {
@@ -195,23 +213,6 @@ impl<T: Ranged> Run<T> {
     /// Returns the sub slice of tables of tables in the run that have
     /// a key range fully contained in the input key range.
     pub fn get_contained<'a>(&'a self, key_range: &KeyRange) -> &'a [T] {
-        fn trim_slice<T, F>(s: &[T], pred: F) -> &[T]
-        where
-            F: Fn(&T) -> bool,
-        {
-            // find first index where pred holds
-            let start = s.iter().position(&pred).unwrap_or(s.len());
-
-            // find last index where pred holds
-            let end = s.iter().rposition(&pred).map_or(start, |i| i + 1);
-
-            #[expect(
-                clippy::expect_used,
-                reason = "start..end are derived from position/rposition on the same slice"
-            )]
-            s.get(start..end).expect("should be in range")
-        }
-
         let range = key_range.min()..=key_range.max();
 
         let Some((lo, hi)) = self.range_overlap_indexes::<crate::Slice, _>(&range) else {
@@ -229,20 +230,6 @@ impl<T: Ranged> Run<T> {
         key_range: &KeyRange,
         cmp: &dyn UserComparator,
     ) -> &'a [T] {
-        fn trim_slice<T, F>(s: &[T], pred: F) -> &[T]
-        where
-            F: Fn(&T) -> bool,
-        {
-            let start = s.iter().position(&pred).unwrap_or(s.len());
-            let end = s.iter().rposition(&pred).map_or(start, |i| i + 1);
-
-            #[expect(
-                clippy::expect_used,
-                reason = "start..end are derived from position/rposition on the same slice"
-            )]
-            s.get(start..end).expect("should be in range")
-        }
-
         let range = key_range.min()..=key_range.max();
 
         let Some((lo, hi)) = self.range_overlap_indexes_cmp::<crate::Slice, _>(&range, cmp) else {
