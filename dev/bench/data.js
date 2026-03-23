@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774255217479,
+  "lastUpdate": 1774261146460,
   "repoUrl": "https://github.com/structured-world/lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -1092,6 +1092,84 @@ window.BENCHMARK_DATA = {
             "value": 517239.433865819,
             "unit": "ops/sec",
             "extra": "P50: 1.7us | P99: 5.8us | P99.9: 10.6us\nthreads: 1 | elapsed: 0.39s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "74143c6a79ab5bc490b35169dd566d064657e60d",
+          "message": "feat(compaction): compute L2 overlaps per-range in multi-level path (#108)\n\n## Summary\n\n- Query L2 overlaps per individual input table key range instead of one\ncoarse aggregate range during multi-level compaction\n- On sparse keyspaces where L1 tables are disjoint (e.g. `[a,d]` and\n`[x,z]`), the old aggregate range `[a,z]` pulled in gap-filling L2\ntables that had zero actual overlap with input data\n- Add regression test verifying multi-level compaction data integrity\nand `CompactionResult` assertions\n\n## Technical Details\n\nThe multi-level compaction path (L0+L1→L2) previously computed a single\nmerged `KeyRange` from all L0 and L1 inputs, then queried L2 for any\ntable overlapping that combined span. On sparse keyspaces this\nover-selects L2 tables occupying gaps between disjoint input ranges,\ncausing unnecessary I/O and write amplification.\n\nThe fix iterates each L0 and L1 table individually, queries L2 for\noverlaps against that table's key range, and deduplicates via the\nexisting `HashSet<TableId>`.\n\n## Test Plan\n\n- [x] All leveled compaction tests pass (including new\n`multi_level_sparse_keyspace_data_integrity`)\n- [x] Test asserts `CompactionResult.action == Merged` and `dest_level\n>= 2`\n- [x] Existing multi-level tests unchanged and passing\n\n**Known coverage gap:** The per-range L2 overlap inner loop requires L2\nto be non-empty, but the leveled strategy's force-trivial-move scoring\n(99.99) cascades all intermediate levels to Lmax with small test data,\nmaking it impossible to populate both L1 and L2 simultaneously in unit\ntests.\n\nCloses #72",
+          "timestamp": "2026-03-23T12:17:50+02:00",
+          "tree_id": "56918f3c36b88909897a86888e05b4765090d59f",
+          "url": "https://github.com/structured-world/lsm-tree/commit/74143c6a79ab5bc490b35169dd566d064657e60d"
+        },
+        "date": 1774261144786,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1958268.802256709,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 2.4us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 967658.3469708246,
+            "unit": "ops/sec",
+            "extra": "P50: 0.8us | P99: 2.7us | P99.9: 10.0us\nthreads: 1 | elapsed: 0.21s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 478792.04406102933,
+            "unit": "ops/sec",
+            "extra": "P50: 1.9us | P99: 5.8us | P99.9: 17.2us\nthreads: 1 | elapsed: 0.42s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2405412.794573466,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 4.3us | P99.9: 8.8us\nthreads: 1 | elapsed: 0.08s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 339426.45743598416,
+            "unit": "ops/sec",
+            "extra": "P50: 2.6us | P99: 6.6us | P99.9: 14.2us\nthreads: 1 | elapsed: 0.59s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 193367.67458796798,
+            "unit": "ops/sec",
+            "extra": "P50: 4.8us | P99: 7.0us | P99.9: 16.9us\nthreads: 1 | elapsed: 1.03s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 931932.5374595292,
+            "unit": "ops/sec",
+            "extra": "P50: 0.8us | P99: 3.1us | P99.9: 9.8us\nthreads: 1 | elapsed: 0.21s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 717197.8680533142,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.1us | P99.9: 4.1us\nthreads: 1 | elapsed: 0.28s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 454123.3025554974,
+            "unit": "ops/sec",
+            "extra": "P50: 1.9us | P99: 7.9us | P99.9: 15.9us\nthreads: 1 | elapsed: 0.44s | num: 200000"
           }
         ]
       }
