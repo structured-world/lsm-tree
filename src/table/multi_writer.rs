@@ -4,23 +4,18 @@
 
 use super::{filter::BloomConstructionPolicy, writer::Writer};
 use crate::{
-    blob_tree::handle::BlobIndirection,
-    encryption::EncryptionProvider,
-    fs::{Fs, StdFs},
-    prefix::PrefixExtractor,
-    range_tombstone::RangeTombstone,
-    table::writer::LinkedFile,
-    value::InternalValue,
-    vlog::BlobFileId,
-    Checksum, CompressionType, HashMap, SequenceNumberCounter, TableId, UserKey,
+    blob_tree::handle::BlobIndirection, encryption::EncryptionProvider, fs::Fs,
+    prefix::PrefixExtractor, range_tombstone::RangeTombstone, table::writer::LinkedFile,
+    value::InternalValue, vlog::BlobFileId, Checksum, CompressionType, HashMap,
+    SequenceNumberCounter, TableId, UserKey,
 };
 use std::{path::PathBuf, sync::Arc};
 
 /// Like `Writer` but will rotate to a new table, once a table grows larger than `target_size`
 ///
 /// This results in a sorted "run" of tables
-pub struct MultiWriter<FS: Fs = StdFs> {
-    fs: Arc<FS>,
+pub struct MultiWriter {
+    fs: Arc<dyn Fs>,
 
     pub(crate) base_path: PathBuf,
 
@@ -44,7 +39,7 @@ pub struct MultiWriter<FS: Fs = StdFs> {
 
     table_id_generator: SequenceNumberCounter,
 
-    pub writer: Writer<FS>,
+    pub writer: Writer,
 
     pub data_block_compression: CompressionType,
     pub index_block_compression: CompressionType,
@@ -73,14 +68,14 @@ pub struct MultiWriter<FS: Fs = StdFs> {
     encryption: Option<Arc<dyn EncryptionProvider>>,
 }
 
-impl<FS: Fs> MultiWriter<FS> {
+impl MultiWriter {
     /// Sets up a new `MultiWriter` at the given tables folder
     pub fn new(
         base_path: PathBuf,
         table_id_generator: SequenceNumberCounter,
         target_size: u64,
         initial_level: u8,
-        fs: Arc<FS>,
+        fs: Arc<dyn Fs>,
     ) -> crate::Result<Self> {
         let current_table_id = table_id_generator.next();
 
@@ -144,7 +139,7 @@ impl<FS: Fs> MultiWriter<FS> {
     /// - **clip=true** (compaction): intersect each RT with the table's KV key range.
     /// - **clip=false** (flush): write all overlapping RTs unmodified so they cover
     ///   keys in older SSTs outside this memtable's key range.
-    fn write_rts_to_writer(tombstones: &[RangeTombstone], clip: bool, writer: &mut Writer<FS>) {
+    fn write_rts_to_writer(tombstones: &[RangeTombstone], clip: bool, writer: &mut Writer) {
         if let (Some(first_key), Some(last_key)) =
             (writer.meta.first_key.clone(), writer.meta.last_key.clone())
         {

@@ -5,7 +5,7 @@
 use super::meta::Metadata;
 use crate::{
     checksum::ChecksummedWriter,
-    fs::{Fs, FsFile, FsOpenOptions, StdFs},
+    fs::{Fs, FsFile, FsOpenOptions},
     time::unix_timestamp,
     vlog::BlobFileId,
     Checksum, CompressionType, KeyRange, SeqNo, TreeId, UserKey,
@@ -99,13 +99,13 @@ pub(super) fn validate_header_crc(
 }
 
 /// Blob file writer
-pub struct Writer<FS: Fs = StdFs> {
+pub struct Writer {
     pub(crate) tree_id: TreeId,
     pub path: PathBuf,
     pub(crate) blob_file_id: BlobFileId,
 
     #[expect(clippy::struct_field_names)]
-    writer: sfa::Writer<ChecksummedWriter<BufWriter<FS::File>>>,
+    writer: sfa::Writer<ChecksummedWriter<BufWriter<Box<dyn FsFile>>>>,
 
     offset: u64,
 
@@ -119,7 +119,7 @@ pub struct Writer<FS: Fs = StdFs> {
     pub(crate) compression: CompressionType,
 }
 
-impl<FS: Fs> Writer<FS> {
+impl Writer {
     /// Initializes a new blob file writer.
     ///
     /// Uses `create_new` (not `create+truncate`) because blob file IDs are
@@ -134,7 +134,7 @@ impl<FS: Fs> Writer<FS> {
         path: P,
         blob_file_id: BlobFileId,
         tree_id: TreeId,
-        fs: &FS,
+        fs: &dyn Fs,
     ) -> crate::Result<Self> {
         let path = path.as_ref();
 
@@ -345,7 +345,7 @@ impl<FS: Fs> Writer<FS> {
         metadata.encode_into(&mut self.writer)?;
 
         let mut checksum = self.writer.into_inner()?;
-        FsFile::sync_all(checksum.inner_mut().get_mut())?;
+        FsFile::sync_all(&**checksum.inner_mut().get_mut())?;
         let checksum = checksum.checksum();
 
         Ok((metadata, checksum))

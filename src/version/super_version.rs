@@ -131,7 +131,7 @@ impl SuperVersions {
         f: F,
         seqno: &SharedSequenceNumberGenerator,
         visible_seqno: &SharedSequenceNumberGenerator,
-        fs: &impl Fs,
+        fs: &dyn Fs,
     ) -> crate::Result<()> {
         self.upgrade_version_with_seqno(tree_path, f, seqno.next(), visible_seqno, fs)
     }
@@ -148,7 +148,7 @@ impl SuperVersions {
         f: F,
         seqno: SeqNo,
         visible_seqno: &SharedSequenceNumberGenerator,
-        fs: &impl Fs,
+        fs: &dyn Fs,
     ) -> crate::Result<()> {
         let mut next_version = f(&self.latest_version())?;
         next_version.seqno = seqno;

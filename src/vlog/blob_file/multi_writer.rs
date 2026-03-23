@@ -6,7 +6,7 @@ use super::writer::Writer;
 use crate::fs::FsFile;
 use crate::{
     file_accessor::FileAccessor,
-    fs::{Fs, StdFs},
+    fs::Fs,
     vlog::{
         blob_file::{Inner as BlobFileInner, Metadata},
         ValueHandle,
@@ -19,13 +19,13 @@ use std::{
 };
 
 /// Blob file writer, may write multiple blob files
-pub struct MultiWriter<FS: Fs = StdFs> {
-    fs: Arc<FS>,
+pub struct MultiWriter {
+    fs: Arc<dyn Fs>,
 
     folder: PathBuf,
     target_size: u64,
 
-    active_writer: Writer<FS>,
+    active_writer: Writer,
 
     results: Vec<BlobFile>,
 
@@ -38,7 +38,7 @@ pub struct MultiWriter<FS: Fs = StdFs> {
     descriptor_table: Option<Arc<DescriptorTable>>,
 }
 
-impl<FS: Fs> MultiWriter<FS> {
+impl MultiWriter {
     /// Initializes a new blob file writer.
     ///
     /// # Errors
@@ -50,7 +50,7 @@ impl<FS: Fs> MultiWriter<FS> {
         folder: P,
         tree_id: TreeId,
         descriptor_table: Option<Arc<DescriptorTable>>,
-        fs: Arc<FS>,
+        fs: Arc<dyn Fs>,
     ) -> crate::Result<Self> {
         let folder = folder.as_ref();
 
@@ -116,7 +116,7 @@ impl<FS: Fs> MultiWriter<FS> {
             old_writer,
             self.passthrough_compression,
             self.descriptor_table.clone(),
-            &self.fs,
+            &*self.fs,
         )?;
         self.results.extend(blob_file);
 
@@ -124,10 +124,10 @@ impl<FS: Fs> MultiWriter<FS> {
     }
 
     fn consume_writer(
-        writer: Writer<FS>,
+        writer: Writer,
         passthrough_compression: CompressionType,
         descriptor_table: Option<Arc<DescriptorTable>>,
-        fs: &FS,
+        fs: &dyn Fs,
     ) -> crate::Result<Option<BlobFile>> {
         if writer.item_count > 0 {
             let blob_file_id = writer.blob_file_id;
@@ -258,7 +258,7 @@ impl<FS: Fs> MultiWriter<FS> {
             self.active_writer,
             self.passthrough_compression,
             self.descriptor_table.clone(),
-            &self.fs,
+            &*self.fs,
         )?;
         self.results.extend(blob_file);
         Ok(self.results)

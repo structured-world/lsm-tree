@@ -12,7 +12,7 @@ pub fn persist_version(
     folder: &Path,
     version: &Version,
     comparator_name: &str,
-    fs: &impl Fs,
+    fs: &dyn Fs,
 ) -> crate::Result<()> {
     if comparator_name.len() > crate::comparator::MAX_COMPARATOR_NAME_BYTES {
         return Err(crate::Error::from(std::io::Error::new(

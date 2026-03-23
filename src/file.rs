@@ -45,7 +45,7 @@ pub fn read_exact(file: &dyn FsFile, offset: u64, size: usize) -> std::io::Resul
 }
 
 /// Atomically rewrites a file.
-pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &impl Fs) -> std::io::Result<()> {
+pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &dyn Fs) -> std::io::Result<()> {
     #[expect(
         clippy::expect_used,
         reason = "every file should have a parent directory"
@@ -69,7 +69,7 @@ pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &impl Fs) -> std::io::Res
         use crate::fs::FsOpenOptions;
 
         let file = fs.open(path, &FsOpenOptions::new().read(true))?;
-        FsFile::sync_all(&file)?;
+        FsFile::sync_all(&*file)?;
 
         #[expect(
             clippy::expect_used,
@@ -83,12 +83,12 @@ pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &impl Fs) -> std::io::Res
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn fsync_directory(path: &Path, fs: &impl Fs) -> std::io::Result<()> {
+pub fn fsync_directory(path: &Path, fs: &dyn Fs) -> std::io::Result<()> {
     fs.sync_directory(path)
 }
 
 #[cfg(target_os = "windows")]
-pub fn fsync_directory(_path: &Path, _fs: &impl Fs) -> std::io::Result<()> {
+pub fn fsync_directory(_path: &Path, _fs: &dyn Fs) -> std::io::Result<()> {
     // Cannot fsync directory on Windows
     Ok(())
 }

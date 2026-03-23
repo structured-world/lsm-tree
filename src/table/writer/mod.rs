@@ -14,7 +14,7 @@ use crate::{
     checksum::{ChecksumType, ChecksummedWriter},
     coding::Encode,
     encryption::EncryptionProvider,
-    fs::{Fs, FsFile, FsOpenOptions, StdFs},
+    fs::{Fs, FsFile, FsOpenOptions},
     prefix::PrefixExtractor,
     range_tombstone::RangeTombstone,
     table::{
@@ -42,11 +42,11 @@ pub struct LinkedFile {
 /// Serializes and compresses values into blocks and writes them to disk as a table.
 ///
 /// `BlockIndexWriter` / `FilterWriter` are generic over a writer `W: Write + Seek`.
-/// With `W = BufWriter<FS::File>`, the `FS: Fs` bound ensures `FS::File: Write + Seek`,
-/// so `BufWriter<FS::File>` satisfies the required trait bounds.
-pub struct Writer<FS: Fs = StdFs> {
+/// `Fs::open()` returns `Box<dyn FsFile>` which implements `Write + Seek`,
+/// so `BufWriter<Box<dyn FsFile>>` satisfies the required trait bounds.
+pub struct Writer {
     /// Filesystem backend
-    fs: Arc<FS>,
+    fs: Arc<dyn Fs>,
 
     /// Table file path
     pub(crate) path: PathBuf,
@@ -73,15 +73,15 @@ pub struct Writer<FS: Fs = StdFs> {
 
     /// File writer
     #[expect(clippy::struct_field_names)]
-    file_writer: sfa::Writer<ChecksummedWriter<BufWriter<FS::File>>>,
+    file_writer: sfa::Writer<ChecksummedWriter<BufWriter<Box<dyn FsFile>>>>,
 
     /// Writer of index blocks
     #[expect(clippy::struct_field_names)]
-    index_writer: Box<dyn BlockIndexWriter<BufWriter<FS::File>>>,
+    index_writer: Box<dyn BlockIndexWriter<BufWriter<Box<dyn FsFile>>>>,
 
     /// Writer of filter
     #[expect(clippy::struct_field_names)]
-    filter_writer: Box<dyn FilterWriter<BufWriter<FS::File>>>,
+    filter_writer: Box<dyn FilterWriter<BufWriter<Box<dyn FsFile>>>>,
 
     /// Buffer of KVs
     chunk: Vec<InternalValue>,
@@ -113,12 +113,12 @@ pub struct Writer<FS: Fs = StdFs> {
     encryption: Option<Arc<dyn EncryptionProvider>>,
 }
 
-impl<FS: Fs> Writer<FS> {
+impl Writer {
     pub fn new(
         path: PathBuf,
         table_id: TableId,
         initial_level: u8,
-        fs: Arc<FS>,
+        fs: Arc<dyn Fs>,
     ) -> crate::Result<Self> {
         // Normalize path once so open(), remove_file(), and fsync_directory()
         // all see the same absolute path.
@@ -705,7 +705,7 @@ impl<FS: Fs> Writer<FS> {
         // Write fixed-size trailer
         // and flush & fsync the table file
         let mut checksum = self.file_writer.into_inner()?;
-        FsFile::sync_all(checksum.inner_mut().get_mut())?;
+        FsFile::sync_all(&**checksum.inner_mut().get_mut())?;
         let checksum = checksum.checksum();
 
         // IMPORTANT: fsync folder on Unix
