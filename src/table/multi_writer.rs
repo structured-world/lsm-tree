@@ -177,18 +177,22 @@ impl MultiWriter {
                             // Widen last_key so point reads for keys in the
                             // gap will consult this table for RT suppression.
                             //
-                            // Guard: clipped.end is exclusive but last_key is
-                            // inclusive.  When clipped.end == clip_upper (the
-                            // next table's first key), setting last_key to that
-                            // value would make adjacent tables' key_ranges
-                            // overlap, breaking Run::get_for_key_cmp.  Only
-                            // widen when strictly less than clip_upper.
+                            // Only widen during rotation (clip_upper is Some)
+                            // where we know the exact boundary.  For the final
+                            // table (clip_upper is None) widening with the
+                            // derived exclusive bound could overlap a non-
+                            // compacted adjacent table at the same level.
+                            //
+                            // Even during rotation, clipped.end must be
+                            // strictly less than clip_upper (the next table's
+                            // first key) — equality would make key_ranges
+                            // overlap, breaking Run::get_for_key_cmp.
                             //
                             // Only last_key needs widening: intersect_opt
                             // already clamps clipped.start >= first_key.
                             if let Some(existing) = &mut writer.meta.last_key {
                                 let safe = clip_upper
-                                    .map_or(true, |upper| clipped.end.as_ref() < upper.as_ref());
+                                    .is_some_and(|upper| clipped.end.as_ref() < upper.as_ref());
                                 if safe && clipped.end.as_ref() > existing.as_ref() {
                                     *existing = clipped.end.clone();
                                 }
