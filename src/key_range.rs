@@ -207,17 +207,21 @@ impl KeyRange {
         cmp: &dyn crate::comparator::UserComparator,
     ) -> Vec<Self> {
         let mut out: Vec<Self> = Vec::new();
-        // Track previous min key to assert sorted-input precondition
+
+        #[cfg(debug_assertions)]
         let mut prev_min: Option<UserKey> = None;
 
         for r in ranges {
-            debug_assert!(
-                prev_min
-                    .as_ref()
-                    .is_none_or(|pm| cmp.compare(pm, r.min()) != std::cmp::Ordering::Greater),
-                "merge_sorted_cmp: input ranges must be sorted by min key in comparator order",
-            );
-            prev_min = Some(r.min().clone());
+            #[cfg(debug_assertions)]
+            {
+                debug_assert!(
+                    prev_min
+                        .as_ref()
+                        .is_none_or(|pm| cmp.compare(pm, r.min()) != std::cmp::Ordering::Greater),
+                    "merge_sorted_cmp: input ranges must be sorted by min key in comparator order",
+                );
+                prev_min = Some(r.min().clone());
+            }
 
             if let Some(last) = out.last_mut() {
                 // Ranges overlap or are adjacent when last.max >= r.min
