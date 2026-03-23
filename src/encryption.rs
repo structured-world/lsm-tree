@@ -128,13 +128,15 @@ impl Aes256GcmProvider {
 /// errors. This function will panic if OS entropy is unavailable.
 #[cfg(feature = "encryption")]
 fn new_chacha_rng() -> rand_chacha::ChaCha20Rng {
-    use rand_core::SeedableRng;
+    // Use rand_core re-exported by aes_gcm to avoid version-skew with a
+    // direct rand_core dependency.
+    use aes_gcm::aead::rand_core::{OsRng, SeedableRng};
 
     #[expect(
         clippy::expect_used,
         reason = "intentionally panics if OsRng is unavailable"
     )]
-    rand_chacha::ChaCha20Rng::from_rng(rand_core::OsRng)
+    rand_chacha::ChaCha20Rng::from_rng(OsRng)
         .expect("OS RNG should be available for initial CSPRNG seed")
 }
 
@@ -167,8 +169,10 @@ impl ForkAwareRng {
             *rng_ref = new_chacha_rng();
         }
 
-        // Deref-coercion: &mut RefMut<ChaCha20Rng> → &mut ChaCha20Rng.
-        // Explicit `&mut *rng_ref` is denied by clippy::explicit_auto_deref.
+        // The RefMut guard is held while f() runs. This is safe because
+        // f() only generates a 12-byte nonce (no reentrant RNG access).
+        // Deref-coercion: &mut RefMut<ChaCha20Rng> → &mut ChaCha20Rng
+        // (explicit &mut *rng_ref is denied by clippy::explicit_auto_deref).
         f(&mut rng_ref)
     }
 }
@@ -417,7 +421,7 @@ mod tests {
         /// probabilistic RNG output to avoid flaky CI.
         #[test]
         fn fork_aware_rng_reseeds_on_pid_change() {
-            use rand_core::RngCore;
+            use aes_gcm::aead::rand_core::RngCore;
 
             let rng = ForkAwareRng::new();
 
@@ -425,7 +429,8 @@ mod tests {
             let _ = rng.with_rng(|r| r.next_u64());
 
             // Simulate fork by setting a fake PID that differs from the real one.
-            let fake_pid = std::process::id().wrapping_add(1);
+            let current_pid = std::process::id();
+            let fake_pid = current_pid ^ 1;
             rng.pid.set(fake_pid);
             assert_eq!(rng.pid.get(), fake_pid, "PID should be set to fake value");
 
