@@ -43,11 +43,11 @@ pub struct RunReader {
 impl RunReader {
     /// Creates a new `RunReader` using default lexicographic key ordering.
     ///
-    /// For trees with a custom [`UserComparator`], use [`new_cmp`] instead.
+    /// For trees with a custom [`crate::comparator::UserComparator`], use [`new_cmp`] instead.
     #[must_use]
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "public API — used by external callers")
+        expect(dead_code, reason = "crate-internal API — used by other modules")
     )]
     pub fn new<R: RangeBounds<UserKey> + Clone + Send + 'static>(
         run: Arc<Run<Table>>,
