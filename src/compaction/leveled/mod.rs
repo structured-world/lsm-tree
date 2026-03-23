@@ -757,7 +757,7 @@ impl CompactionStrategy for Strategy {
                         // Per-table queries are O(input_tables * log L2_tables).
                         // Merging input ranges into disjoint intervals first
                         // would reduce queries but adds complexity; not worth it
-                        // given typical input sizes (~10–30 tables) in choose().
+                        // given typical input sizes (~10–30 tables). See #120.
                         for run in l2.iter() {
                             for l1_run in target_level.iter() {
                                 for t in l1_run.iter() {
