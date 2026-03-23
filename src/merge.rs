@@ -95,7 +95,7 @@ impl<I: Iterator<Item = IterItem>> Iterator for Merger<I> {
                 Err(e) => {
                     // Pop the stale entry so the next call makes progress
                     // on a different source instead of retrying this one.
-                    self.heap.pop_min();
+                    let _ = self.heap.pop_min();
                     Some(Err(e))
                 }
             }
@@ -126,7 +126,7 @@ impl<I: DoubleEndedIterator<Item = IterItem>> DoubleEndedIterator for Merger<I> 
                     Some(Ok(old.value))
                 }
                 Err(e) => {
-                    self.heap.pop_max();
+                    let _ = self.heap.pop_max();
                     Some(Err(e))
                 }
             }
