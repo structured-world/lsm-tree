@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774306283713,
+  "lastUpdate": 1774308374529,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -2184,6 +2184,84 @@ window.BENCHMARK_DATA = {
             "value": 530406.7891220357,
             "unit": "ops/sec",
             "extra": "P50: 1.6us | P99: 7.7us | P99.9: 13.0us\nthreads: 1 | elapsed: 0.38s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ef6f4b34806f515e6b51408dc86b886a26423728",
+          "message": "feat(compression): zstd dictionary compression support (#131)\n\n## Summary\n- Add `CompressionType::ZstdDict { level, dict_id }` variant for zstd\ndictionary-based block compression\n- Add `ZstdDictionary` struct (raw bytes + xxh3-based dict_id\nfingerprint)\n- Thread dictionary through Config → flush/compaction/ingestion/recovery\n→ Block write/read\n- Add `Error::ZstdDictMismatch { expected: u32, got: Option<u32> }` for\ndict_id validation\n\n## Technical Details\n- On-disk format: tag 4 (1B tag + 1B level + 4B dict_id = 6 bytes),\nbackward compatible — old readers get `InvalidTag`\n- Dictionary parameter uses `#[cfg(feature = \"zstd\")]` gating to avoid\nany overhead when the feature is disabled\n- Compression uses `zstd::bulk::Compressor::with_dictionary()`,\ndecompression uses `zstd::bulk::Decompressor::with_dictionary()`\n- **Config::open() validation (fail-fast):**\n- All `ZstdDict` entries in data block compression policies must match\nthe provided dictionary's `dict_id`\n- `KvSeparationOptions::compression` set to `ZstdDict` is rejected\n(`ErrorKind::Unsupported`)\n- `Table::recover()` validates the persisted `data_block_compression`\ndict_id against the provided dictionary\n- `Writer::use_index_block_compression()` silently downgrades `ZstdDict`\nto plain `Zstd` — dictionaries are trained on data block content, not\nindex/filter structures\n- Blob files return `ErrorKind::Unsupported` for `ZstdDict` at both\nconfig and runtime levels\n\n## Known Limitations\n- Blob file (KV-separated large values) dictionary compression not yet\nsupported\n- No built-in dictionary training API — users provide pre-trained\ndictionaries\n- Compressor/decompressor contexts created per-call (pre-built context\ncaching is future optimization)\n\n## Test Plan\n- [x] Unit tests: serialization roundtrip, level validation, dict_id\ncomputation, mismatch detection\n- [x] Block-level roundtrip: from_reader, from_file, large data,\nencrypted+dict (both branches)\n- [x] Block error paths: missing dict, wrong dict, write-side missing\ndict\n- [x] Integration: full tree write→flush→read, range scan with value\nverification, per-level policy (ZstdDict at L0)\n- [x] Validation: config open with mismatch, config open with missing\ndict, reopen with wrong dict fails at recovery\n- [x] Blob writer: ZstdDict returns ErrorKind::Unsupported\n- [x] Full test suite passes with `--all-features` (800+ tests, 0\nfailures)\n- [x] Compiles clean with `--no-default-features`, `--features lz4`,\n`--features zstd`, `--all-features`\n\nCloses #129",
+          "timestamp": "2026-03-24T01:24:55+02:00",
+          "tree_id": "a76137c1b5b572db78b160a1453f67916c7f872d",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/ef6f4b34806f515e6b51408dc86b886a26423728"
+        },
+        "date": 1774308372811,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1955001.2666453207,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 1.8us | P99.9: 3.8us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1047847.9490055575,
+            "unit": "ops/sec",
+            "extra": "P50: 0.8us | P99: 1.8us | P99.9: 5.2us\nthreads: 1 | elapsed: 0.19s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 590435.1687276249,
+            "unit": "ops/sec",
+            "extra": "P50: 1.5us | P99: 4.5us | P99.9: 9.9us\nthreads: 1 | elapsed: 0.34s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 3025614.107760847,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 3.3us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.07s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 395848.281471594,
+            "unit": "ops/sec",
+            "extra": "P50: 2.2us | P99: 5.3us | P99.9: 9.7us\nthreads: 1 | elapsed: 0.51s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 220566.70709150782,
+            "unit": "ops/sec",
+            "extra": "P50: 4.2us | P99: 5.1us | P99.9: 11.0us\nthreads: 1 | elapsed: 0.91s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1110788.9514599391,
+            "unit": "ops/sec",
+            "extra": "P50: 0.8us | P99: 2.3us | P99.9: 5.5us\nthreads: 1 | elapsed: 0.18s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 785891.379319728,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 1.6us | P99.9: 4.2us\nthreads: 1 | elapsed: 0.25s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 508756.2845423736,
+            "unit": "ops/sec",
+            "extra": "P50: 1.7us | P99: 5.7us | P99.9: 10.2us\nthreads: 1 | elapsed: 0.39s | num: 200000"
           }
         ]
       }
