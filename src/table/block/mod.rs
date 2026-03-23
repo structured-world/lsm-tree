@@ -396,7 +396,10 @@ impl Block {
             if n != block_size {
                 return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
-                    "block read_at: short read",
+                    format!(
+                        "block read_at: expected {block_size} bytes, got {n} at offset {}",
+                        *handle.offset(),
+                    ),
                 )));
             }
 
