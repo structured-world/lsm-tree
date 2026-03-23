@@ -75,8 +75,9 @@ impl Arena {
 
     /// Allocates `size` bytes with the given alignment.
     ///
-    /// Returns the encoded offset, or `None` if the arena is exhausted
-    /// (> 4 GiB total).  `align` **must** be a power of two.
+    /// Returns the encoded offset, or `None` if `size` is zero,
+    /// `size >= BLOCK_SIZE`, `align` is not a power of two, or the
+    /// arena is exhausted (> 4 GiB total).
     pub fn alloc(&self, size: u32, align: u32) -> Option<u32> {
         if !align.is_power_of_two() || size == 0 || size >= BLOCK_SIZE {
             return None;
