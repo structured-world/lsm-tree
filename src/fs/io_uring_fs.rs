@@ -430,6 +430,10 @@ impl RingThread {
     /// 2. Batch additional ops via `try_recv()`.
     /// 3. Submit to kernel and wait for at least one completion.
     /// 4. Dispatch CQE results to callers.
+    // Coverage: error paths (EINTR, fatal ring failure, SQ overflow, channel
+    // disconnect with pending ops) require kernel fault injection to exercise.
+    // The happy path IS covered by all IoUringFs tests.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[expect(
         clippy::needless_pass_by_value,
         reason = "rx is moved into the spawned thread — must be owned"
@@ -506,6 +510,7 @@ impl RingThread {
     }
 
     /// Builds an SQE from `op` and pushes it onto the submission queue.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn enqueue(
         ring: &mut IoUring,
         pending: &mut HashMap<u64, mpsc::SyncSender<i32>>,
@@ -653,6 +658,9 @@ impl RingThread {
 }
 
 impl Drop for RingThread {
+    // Coverage: poison recovery branches require panic injection to reach.
+    // The normal (non-poison) path is exercised by every test that drops IoUringFs.
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn drop(&mut self) {
         // Drop the sender to close the channel — this unblocks the event
         // loop's recv() and lets it drain remaining in-flight ops.
