@@ -216,7 +216,7 @@ fn u64_comparator_major_compaction() -> lsm_tree::Result<()> {
         tree.table_count() >= 2,
         "need multiple SSTs before compaction"
     );
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
     assert_eq!(
         1,
         tree.table_count(),
@@ -256,7 +256,7 @@ fn u64_comparator_compaction_with_tombstones() -> lsm_tree::Result<()> {
     tree.remove(40u64.to_be_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
 
     let items: Vec<u64> = tree
         .iter(SeqNo::MAX, None)
@@ -381,7 +381,7 @@ fn reverse_comparator_major_compaction() -> lsm_tree::Result<()> {
         tree.table_count() >= 2,
         "need multiple SSTs before compaction"
     );
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
     assert_eq!(
         1,
         tree.table_count(),
@@ -421,7 +421,7 @@ fn reverse_comparator_compaction_with_updates() -> lsm_tree::Result<()> {
     tree.insert("d", "val_d", seqno.next());
     tree.flush_active_memtable(0)?;
 
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
 
     // Reverse order of surviving keys: d, c, b
     let items: Vec<(String, String)> = tree
@@ -464,7 +464,7 @@ fn reverse_comparator_range_scan_after_compaction() -> lsm_tree::Result<()> {
         tree.insert(&[c], format!("v_{}", c as char), seqno.next());
     }
     tree.flush_active_memtable(0)?;
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
 
     // Reverse order: f, e, d, c, b, a — range "e"..="b" should yield e, d, c, b
     let items: Vec<String> = tree
@@ -563,7 +563,7 @@ fn u64_comparator_merge_after_compaction() -> lsm_tree::Result<()> {
     }
     tree.flush_active_memtable(0)?;
 
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
 
     // Verify merged values: base(10) + key_value
     assert_eq!(
@@ -621,7 +621,7 @@ fn u64_comparator_merge_with_tombstone_and_compaction() -> lsm_tree::Result<()> 
         get_counter(&tree, &100u64.to_be_bytes(), SeqNo::MAX)
     );
 
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
 
     // After compaction: same result
     assert_eq!(
@@ -654,7 +654,7 @@ fn u64_comparator_merge_multiple_keys_compaction() -> lsm_tree::Result<()> {
     tree.insert(20u64.to_be_bytes(), 200_i64.to_le_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
 
     // Verify all keys in numeric order with correctly merged values
     let items: Vec<(u64, i64)> = tree
@@ -801,7 +801,7 @@ fn reverse_comparator_merge_after_compaction() -> lsm_tree::Result<()> {
     tree.flush_active_memtable(0)?;
 
     // Compact: merge operands should be resolved during compaction
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
 
     // Point reads after compaction
     assert_eq!(Some(15), get_counter(&tree, b"a", SeqNo::MAX));
@@ -851,7 +851,7 @@ fn reverse_comparator_merge_range_scan_after_compaction() -> lsm_tree::Result<()
     tree.merge("d", 8_i64.to_le_bytes(), seqno.next());
     tree.flush_active_memtable(0)?;
 
-    tree.major_compact(SeqNo::MAX, 1_000)?;
+    tree.major_compact(u64::MAX, SeqNo::MAX)?;
 
     // Reverse order: e, d, c, b, a — range "d"..="b" yields d, c, b
     let items: Vec<(String, i64)> = tree
