@@ -174,16 +174,14 @@ impl MultiWriter {
                 if let Some(max_exclusive) = max_exclusive {
                     for rt in tombstones {
                         if let Some(clipped) = rt.intersect_opt(first_key.as_ref(), max_exclusive) {
-                            // Widen key_range to cover the clipped RT so point
+                            // Widen last_key to cover the clipped RT so point
                             // reads for keys in the gap will consult this table.
-                            // Safe because the RT is clipped to [first_key, clip_upper)
-                            // and clip_upper is the next table's first key — so the
-                            // widened range does not overlap the next table.
-                            if let Some(existing) = &mut writer.meta.first_key {
-                                if clipped.start.as_ref() < existing.as_ref() {
-                                    *existing = clipped.start.clone();
-                                }
-                            }
+                            // Safe: the RT is clipped to [first_key, clip_upper)
+                            // and clip_upper is the next table's first key — so
+                            // the widened range does not overlap the next table.
+                            //
+                            // Only last_key needs widening: intersect_opt already
+                            // clamps clipped.start >= first_key.
                             if let Some(existing) = &mut writer.meta.last_key {
                                 if clipped.end.as_ref() > existing.as_ref() {
                                     *existing = clipped.end.clone();
