@@ -212,8 +212,9 @@ pub struct IoUringFile {
     /// Tracked cursor position for [`Read`]/[`Write`]/[`Seek`] impls.
     /// Only accessed via `get_mut()` (those traits take `&mut self`) or
     /// not at all ([`FsFile::read_at`] uses an explicit offset).
-    /// `AtomicU64` is used instead of plain `u64` so that `IoUringFile`
-    /// is `Sync` — required by the [`FsFile`] trait bound.
+    /// `AtomicU64` could be replaced with plain `u64` (which is already
+    /// `Sync`), but is kept for consistency with the interior-mutability
+    /// pattern and to allow potential future shared cursor access.
     cursor: AtomicU64,
 
     /// Shared reference to the ring thread.
