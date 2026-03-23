@@ -1,22 +1,20 @@
-/// Regression test for <https://github.com/structured-world/lsm-tree/issues/115>.
+/// Scenario guard for <https://github.com/structured-world/lsm-tree/issues/115>.
 ///
-/// The proptest oracle detected that a point read can return a stale value
-/// after flushing the same key with different values across two flush cycles.
+/// The proptest oracle detected that a point read returned a stale value after
+/// flushing the same key with different values across two flush cycles.
 ///
-/// Root cause: arena cursor corruption when an allocation fills a block
-/// exactly to `BLOCK_SIZE` (fixed in #130 / 5e1eb1b4). The bitwise OR in
-/// `(block_idx << BLOCK_SHIFT) | new_end` wraps the cursor back to offset 0
-/// of the current block, causing subsequent allocations to overwrite existing
-/// skiplist node data. This corrupts memtable entries visible to the flush
-/// writer, which then persists stale values to the L0 SST.
+/// Root cause: arena cursor corruption when an allocation fills a block exactly
+/// to `BLOCK_SIZE` (fixed in #130 / 5e1eb1b4). The low-level boundary condition
+/// is covered by the unit test `arena::tests::exact_block_fill_does_not_corrupt`
+/// in `src/memtable/arena.rs`, which directly triggers the cursor wrap.
 ///
-/// The bug only manifested on i686 targets (4 MiB arena blocks, ~10 block
-/// boundaries per million entries) during CI cross-compilation tests. On
-/// x86_64 (64 MiB blocks) a single memtable rarely fills even one block,
-/// making the exact-boundary condition extremely unlikely.
+/// This test does NOT exercise the arena boundary — the operation sequence is
+/// too small to fill even a single arena block on any target. Instead it
+/// documents the user-visible symptom (stale point read after two flushes) as
+/// an end-to-end scenario guard. If the arena regression test passes but this
+/// test fails, it signals a different stale-read bug in the flush/L0 pipeline.
 ///
-/// This test exercises the minimal operation sequence from the proptest
-/// shrunk case as a guard against future regressions:
+/// Operation sequence from the proptest shrunk case:
 ///
 /// ```text
 /// ops = [
@@ -33,7 +31,7 @@ mod common;
 use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
 
 #[test]
-fn stale_point_read_after_two_flushes() -> lsm_tree::Result<()> {
+fn point_read_after_two_flushes_returns_latest_value() -> lsm_tree::Result<()> {
     let tmpdir = lsm_tree::get_tmp_folder();
     let seqno = SequenceNumberCounter::default();
     let visible_seqno = SequenceNumberCounter::default();
