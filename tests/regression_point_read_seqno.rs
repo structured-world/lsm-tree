@@ -2,7 +2,7 @@ mod common;
 use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
 
 #[test]
-fn exact_replay() -> lsm_tree::Result<()> {
+fn with_post_compact_flush() -> lsm_tree::Result<()> {
     let tmpdir = lsm_tree::get_tmp_folder();
     let tree = Config::new(
         &tmpdir,
@@ -10,34 +10,33 @@ fn exact_replay() -> lsm_tree::Result<()> {
         SequenceNumberCounter::default(),
     )
     .open()?;
-
-    let key = vec![0u8];
+    let k = vec![0u8];
     let v0 = vec![0u8; 8];
     let v1 = vec![1u8; 8];
 
-    // Exact proptest sequence:
-    tree.major_compact(common::COMPACTION_TARGET, 1)?; // Compact
-    tree.flush_active_memtable(0)?; // Flush
-    tree.insert(&key, &v0, 1); // Insert(0,0)
-    tree.flush_active_memtable(0)?; // Flush
-    tree.insert(&key, &v0, 2); // Insert(0,0)
-    tree.major_compact(common::COMPACTION_TARGET, 3)?; // Compact
-    tree.major_compact(common::COMPACTION_TARGET, 3)?; // Compact
-    tree.major_compact(common::COMPACTION_TARGET, 3)?; // Compact
-    tree.flush_active_memtable(0)?; // Flush
-    tree.insert(&key, &v0, 3); // Insert(0,0)
-    tree.flush_active_memtable(0)?; // Flush
-    tree.insert(&key, &v0, 4); // Insert(0,0)
-    tree.flush_active_memtable(0)?; // Flush
-    tree.insert(&key, &v0, 5); // Insert(0,0)
-    tree.flush_active_memtable(0)?; // Flush
-    tree.major_compact(common::COMPACTION_TARGET, 6)?; // Compact
-    tree.insert(&key, &v0, 6); // Insert(0,0)
-    tree.flush_active_memtable(0)?; // Flush
-    tree.insert(&key, &v0, 7); // Insert(0,0)
-    tree.insert(&key, &v1, 8); // Insert(0,1)
+    tree.major_compact(common::COMPACTION_TARGET, 1)?;
+    tree.flush_active_memtable(0)?;
+    tree.insert(&k, &v0, 1);
+    tree.flush_active_memtable(0)?;
+    tree.insert(&k, &v0, 2);
+    tree.major_compact(common::COMPACTION_TARGET, 3)?;
+    tree.major_compact(common::COMPACTION_TARGET, 3)?;
+    tree.major_compact(common::COMPACTION_TARGET, 3)?;
+    tree.flush_active_memtable(0)?;
+    tree.insert(&k, &v0, 3);
+    tree.flush_active_memtable(0)?;
+    tree.insert(&k, &v0, 4);
+    tree.flush_active_memtable(0)?;
+    tree.insert(&k, &v0, 5);
+    tree.flush_active_memtable(0)?;
+    tree.major_compact(common::COMPACTION_TARGET, 6)?;
+    // This insert+flush creates an L0 table after second compact
+    tree.insert(&k, &v0, 6);
+    tree.flush_active_memtable(0)?;
+    // Two memtable inserts
+    tree.insert(&k, &v0, 7);
+    tree.insert(&k, &v1, 8);
 
-    let actual = tree.get(&key, 9)?;
-    assert_eq!(actual.as_ref().map(|v| v.to_vec()), Some(v1));
+    assert_eq!(tree.get(&k, 9)?.as_ref().map(|v| v.to_vec()), Some(v1));
     Ok(())
 }
