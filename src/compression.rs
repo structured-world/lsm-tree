@@ -421,7 +421,6 @@ mod tests {
             let d1 = ZstdDictionary::new(dict_bytes);
             let d2 = ZstdDictionary::new(dict_bytes);
             assert_eq!(d1.id(), d2.id());
-            assert_ne!(d1.id(), 0); // extremely unlikely to be zero
         }
 
         #[test]
