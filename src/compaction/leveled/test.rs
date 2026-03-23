@@ -726,7 +726,19 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
         seqno += 1;
     }
 
-    tree.compact(multi.clone(), seqno)?;
+    let result = tree.compact(multi.clone(), seqno)?;
+
+    // Verify the compaction produced a merge targeting L2+
+    assert_eq!(
+        result.action,
+        crate::compaction::CompactionAction::Merged,
+        "compaction should produce a Merged action",
+    );
+    assert!(
+        result.dest_level.is_some_and(|lvl| lvl >= 2),
+        "compaction should target L2+, got {:?}",
+        result.dest_level,
+    );
 
     // Verify data propagated beyond L1 into deeper levels.
     let version = tree.current_version();
