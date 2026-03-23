@@ -149,23 +149,40 @@ mod zstd_dict {
         let dict = make_test_dictionary();
         let wrong_dict = ZstdDictionary::new(b"completely different dictionary content");
 
-        // dict_id in compression type matches the wrong dictionary
+        // dict_id in compression type matches wrong_dict, but we provide dict
         let compression = CompressionType::zstd_dict(3, wrong_dict.id())?;
 
-        let tree = make_config(dir.path())
+        // Config validation catches the mismatch at open() time
+        let result = make_config(dir.path())
             .data_block_compression_policy(CompressionPolicy::all(compression))
-            // Provide a dictionary whose ID does NOT match the one in CompressionType
             .zstd_dictionary(Some(Arc::new(dict)))
-            .open()?;
+            .open();
 
-        tree.insert(b"key", b"value", 0);
-
-        // Flushing should fail with ZstdDictMismatch because the dict_id
-        // in the compression type doesn't match the provided dictionary
-        let result = tree.flush_active_memtable(0);
         assert!(
             matches!(result, Err(lsm_tree::Error::ZstdDictMismatch { .. })),
-            "expected ZstdDictMismatch, got: {result:?}",
+            "expected ZstdDictMismatch",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn zstd_dict_missing_returns_error() -> lsm_tree::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+
+        // ZstdDict compression configured but no dictionary provided
+        let result = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(compression))
+            .open();
+
+        assert!(
+            matches!(
+                result,
+                Err(lsm_tree::Error::ZstdDictMismatch { got: None, .. })
+            ),
+            "expected ZstdDictMismatch with got=None",
         );
 
         Ok(())

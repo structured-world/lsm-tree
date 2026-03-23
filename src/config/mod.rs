@@ -390,12 +390,55 @@ impl Config {
     /// # Errors
     ///
     /// Will return `Err` if an IO error occurs.
+    /// Returns [`Error::ZstdDictMismatch`](crate::Error::ZstdDictMismatch) if
+    /// the compression policy references a `dict_id` that doesn't match the
+    /// configured dictionary.
     pub fn open(self) -> crate::Result<AnyTree> {
+        #[cfg(feature = "zstd")]
+        self.validate_zstd_dictionary()?;
+
         Ok(if self.kv_separation_opts.is_some() {
             AnyTree::Blob(BlobTree::open(self)?)
         } else {
             AnyTree::Standard(Tree::open(self)?)
         })
+    }
+
+    /// Validates that every `ZstdDict` entry in compression policies references
+    /// a `dict_id` that matches the configured dictionary. Catches mismatches
+    /// at open time rather than at first block write/read.
+    #[cfg(feature = "zstd")]
+    fn validate_zstd_dictionary(&self) -> crate::Result<()> {
+        let dict_id = self.zstd_dictionary.as_ref().map(|d| d.id());
+
+        for ct in self
+            .data_block_compression_policy
+            .iter()
+            .chain(self.index_block_compression_policy.iter())
+        {
+            if let CompressionType::ZstdDict {
+                dict_id: required, ..
+            } = ct
+            {
+                match dict_id {
+                    None => {
+                        return Err(crate::Error::ZstdDictMismatch {
+                            expected: *required,
+                            got: None,
+                        });
+                    }
+                    Some(actual) if actual != *required => {
+                        return Err(crate::Error::ZstdDictMismatch {
+                            expected: *required,
+                            got: Some(actual),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Like [`Config::new`], but accepts pre-built shared generators.

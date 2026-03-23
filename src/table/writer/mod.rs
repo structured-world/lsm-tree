@@ -265,6 +265,15 @@ impl Writer {
 
     #[must_use]
     pub fn use_index_block_compression(mut self, compression: CompressionType) -> Self {
+        // ZstdDict is not useful for index/filter blocks (dictionaries are trained
+        // on data block content). Downgrade to plain Zstd to avoid ZstdDictMismatch
+        // errors on read — index readers never carry a dictionary.
+        #[cfg(feature = "zstd")]
+        let compression = match compression {
+            CompressionType::ZstdDict { level, .. } => CompressionType::Zstd(level),
+            other => other,
+        };
+
         self.index_block_compression = compression;
         self.index_writer = self.index_writer.use_compression(compression);
         self.filter_writer = self.filter_writer.use_tli_compression(compression);
