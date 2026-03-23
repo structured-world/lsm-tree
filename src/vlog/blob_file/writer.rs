@@ -448,7 +448,7 @@ mod tests {
             level: 3,
             dict_id: dict.id(),
         };
-        let mut writer = Writer::new(&path, 0, 0)?.use_compression(compression);
+        let mut writer = Writer::new(&path, 0, 0, &StdFs)?.use_compression(compression);
 
         let result = writer.write(b"key", 0, b"value");
         assert!(
