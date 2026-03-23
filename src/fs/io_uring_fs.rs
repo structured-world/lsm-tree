@@ -205,7 +205,7 @@ impl Fs for IoUringFs {
 /// Wraps a [`std::fs::File`] for fd ownership and cold-path operations
 /// (metadata, truncate, lock), while routing reads, writes, and fsyncs
 /// through the shared `io_uring` ring.
-pub(crate) struct IoUringFile {
+pub struct IoUringFile {
     /// Underlying [`std::fs::File`] — owns the fd, used for metadata, `set_len`, lock.
     file: File,
 
@@ -256,13 +256,15 @@ impl FsFile for IoUringFile {
         let mut total_read: usize = 0;
 
         while total_read < buf.len() {
-            let remaining = &mut buf[total_read..];
+            let remaining = buf.get_mut(total_read..).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "read_at offset out of bounds")
+            })?;
             let current_offset = offset + total_read as u64;
 
             let n = loop {
                 match self.ring.submit_read(fd, remaining, current_offset) {
                     Ok(n) => break n,
-                    Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
                     Err(e) => return Err(e),
                 }
             };
