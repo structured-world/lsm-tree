@@ -483,18 +483,15 @@ impl RingThread {
                     Ok(_) => break,
                     Err(ref e) if e.raw_os_error() == Some(4 /* EINTR */) => {}
                     Err(e) => {
-                        // Fatal ring error — drain all pending callers with
-                        // the error. This is safe because: (a) a non-EINTR
-                        // submit_and_wait failure means the ring fd is bad
-                        // or the kernel rejected the submission, so no SQEs
-                        // are in-flight referencing caller buffers; (b) the
-                        // IoUring is dropped on return, cancelling any ops.
-                        let errno = e.raw_os_error().unwrap_or(5 /* EIO */);
-                        for (_, tx) in pending.drain() {
-                            let _ = tx.send(-errno);
-                        }
-                        log::error!("io_uring submit_and_wait failed: {e}");
-                        return;
+                        // Fatal ring error. Previously submitted SQEs may
+                        // still be in-flight referencing caller buffers.
+                        // Draining `pending` would unblock callers and let
+                        // them drop those buffers — UB if the kernel still
+                        // touches them. Abort to avoid unsoundness.
+                        log::error!(
+                            "io_uring submit_and_wait failed: {e}; aborting process to avoid UB"
+                        );
+                        std::process::abort();
                     }
                 }
             }
@@ -587,8 +584,11 @@ impl RingThread {
     /// Submits a pread to the ring and blocks until completion.
     fn submit_read(&self, fd: i32, buf: &mut [u8], offset: u64) -> io::Result<u32> {
         // io_uring SQE length field is u32. In practice LSM block reads
-        // are 4-64 KB, so the cap is never reached.
-        let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        // are 4-64 KB, so the cap is never reached. Reject oversized
+        // buffers explicitly rather than silently truncating.
+        let len = u32::try_from(buf.len()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "read buffer exceeds u32::MAX")
+        })?;
         let (tx, rx) = mpsc::sync_channel(1);
         let op = Op {
             kind: OpKind::Read {
@@ -605,8 +605,11 @@ impl RingThread {
     /// Submits a pwrite to the ring and blocks until completion.
     fn submit_write(&self, fd: i32, buf: &[u8], offset: u64) -> io::Result<u32> {
         // io_uring SQE length field is u32. In practice LSM block writes
-        // are 4-64 KB, so the cap is never reached.
-        let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        // are 4-64 KB, so the cap is never reached. Reject oversized
+        // buffers explicitly rather than silently truncating.
+        let len = u32::try_from(buf.len()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "write buffer exceeds u32::MAX")
+        })?;
         let (tx, rx) = mpsc::sync_channel(1);
         let op = Op {
             kind: OpKind::Write {
