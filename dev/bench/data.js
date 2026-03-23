@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774289276377,
+  "lastUpdate": 1774290320021,
   "repoUrl": "https://github.com/structured-world/lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -1716,6 +1716,84 @@ window.BENCHMARK_DATA = {
             "value": 524839.9354317768,
             "unit": "ops/sec",
             "extra": "P50: 1.6us | P99: 7.8us | P99.9: 12.7us\nthreads: 1 | elapsed: 0.38s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5e1eb1b4c488fd8755e4d785534626e2ec0cdf1b",
+          "message": "fix(memtable): cursor wrap on exact block fill corrupts arena (#130)\n\n## Summary\n\n- Fix arena cursor corruption when an allocation fills a block exactly\nto `BLOCK_SIZE`\n- The bitwise OR in `(block_idx << BLOCK_SHIFT) | new_end` wraps the\ncursor back to offset 0 of the current block instead of advancing to the\nnext one, causing subsequent allocations to overwrite existing node data\n- Only manifests on i686 (4 MiB blocks, ~10 block boundaries for 1M\nentries); on x86_64 (64 MiB blocks) a single memtable rarely fills even\none block\n\n## Technical Details\n\n**Root cause:** `new_end == BLOCK_SIZE` means `new_end = 1 <<\nBLOCK_SHIFT`. The OR with `block_idx << BLOCK_SHIFT` doesn't carry — the\ncursor stays in the same block. Corrupted arena nodes produce invalid\n`ValueType` discriminants, panicking at `node_value_type()`.\n\n**Fix:** Change `new_end <= BLOCK_SIZE` to strict `<` so the exact-fill\ncase falls through to the next-block path. Any remaining bytes in the\ncurrent block (at most `BLOCK_SIZE - offset`, including the\nwould-have-fit allocation) are abandoned — acceptable waste for typical\nnode sizes.\n\nAdditionally, reject `size >= BLOCK_SIZE` upfront to prevent an infinite\nloop of block advances (since `new_end` can never be `< BLOCK_SIZE` when\n`size >= BLOCK_SIZE`).\n\n## Test Plan\n\n- [x] Regression unit test `exact_block_fill_does_not_corrupt` targeting\nblock_idx >= 1 (where the OR collision actually triggers)\n- [x] All 477 lib tests pass\n- [x] `a_lot_of_ranges` integration test passes in both debug and\nrelease\n- [x] Full test suite green\n\nCloses #119",
+          "timestamp": "2026-03-23T20:24:19+02:00",
+          "tree_id": "3ba58180284305181564a5a9de3a67947ed07758",
+          "url": "https://github.com/structured-world/lsm-tree/commit/5e1eb1b4c488fd8755e4d785534626e2ec0cdf1b"
+        },
+        "date": 1774290318893,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 2057881.4554918106,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1277073.2749844939,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.5us | P99.9: 5.7us\nthreads: 1 | elapsed: 0.16s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 597842.3945699482,
+            "unit": "ops/sec",
+            "extra": "P50: 1.4us | P99: 5.4us | P99.9: 11.6us\nthreads: 1 | elapsed: 0.33s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2391055.95869556,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 4.3us | P99.9: 8.7us\nthreads: 1 | elapsed: 0.08s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 399459.6261971463,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 6.3us | P99.9: 12.4us\nthreads: 1 | elapsed: 0.50s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 195268.59164514157,
+            "unit": "ops/sec",
+            "extra": "P50: 4.8us | P99: 6.7us | P99.9: 15.4us\nthreads: 1 | elapsed: 1.02s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1220796.9573735609,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.7us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.16s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 678697.9727780216,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 0.5us | P99.9: 4.2us\nthreads: 1 | elapsed: 0.29s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 526994.6306730458,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 7.8us | P99.9: 13.4us\nthreads: 1 | elapsed: 0.38s | num: 200000"
           }
         ]
       }
