@@ -120,6 +120,10 @@ impl<FS: Fs> Writer<FS> {
         initial_level: u8,
         fs: Arc<FS>,
     ) -> crate::Result<Self> {
+        // Normalize path once so open(), remove_file(), and fsync_directory()
+        // all see the same absolute path.
+        let path = std::path::absolute(path)?;
+
         let file = fs.open(&path, &FsOpenOptions::new().write(true).create_new(true))?;
         let writer = BufWriter::with_capacity(u16::MAX.into(), file);
         let writer = ChecksummedWriter::new(writer);
@@ -146,7 +150,7 @@ impl<FS: Fs> Writer<FS> {
             data_block_compression: CompressionType::None,
             index_block_compression: CompressionType::None,
 
-            path: std::path::absolute(path)?,
+            path,
 
             index_writer: Box::new(FullIndexWriter::new()),
             filter_writer: Box::new(FullFilterWriter::new(BloomConstructionPolicy::default())),
