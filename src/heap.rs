@@ -28,11 +28,24 @@ use std::cmp::Ordering;
 /// Comparator is stored once in the heap, not per entry — eliminating
 /// the per-item `Arc` clone that the old `HeapItem` required.
 pub struct HeapEntry {
-    pub index: usize,
-    pub value: InternalValue,
+    index: usize,
+    value: InternalValue,
 }
 
 impl HeapEntry {
+    pub fn new(index: usize, value: InternalValue) -> Self {
+        Self { index, value }
+    }
+
+    #[inline]
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn into_value(self) -> InternalValue {
+        self.value
+    }
+
     /// Compares two heap entries using the given comparator.
     ///
     /// Ties (same user key + same seqno) are broken by source index,
@@ -182,17 +195,11 @@ mod tests {
     use test_log::test;
 
     fn entry(key: &str, seqno: u64) -> HeapEntry {
-        HeapEntry {
-            index: 0,
-            value: InternalValue::from_components(key, b"", seqno, Value),
-        }
+        HeapEntry::new(0, InternalValue::from_components(key, b"", seqno, Value))
     }
 
     fn entry_src(key: &str, seqno: u64, src: usize) -> HeapEntry {
-        HeapEntry {
-            index: src,
-            value: InternalValue::from_components(key, b"", seqno, Value),
-        }
+        HeapEntry::new(src, InternalValue::from_components(key, b"", seqno, Value))
     }
 
     #[test]

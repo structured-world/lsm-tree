@@ -16,6 +16,12 @@ pub type BoxedIterator<'a> = Box<dyn DoubleEndedIterator<Item = IterItem> + Send
 /// to avoid the double O(log n) cost of `pop` + `push` in the hot
 /// path.  The comparator is stored once in the heap, not per entry —
 /// eliminating per-item `Arc` ref-count traffic.
+///
+/// When two entries have the same user key and sequence number, the
+/// entry from the iterator with the **lower index** (earlier position
+/// in the `iterators` vec) sorts first.  Callers that need "newer
+/// wins" semantics (e.g. compaction) must pass sources in
+/// newest-first order.
 pub struct Merger<I> {
     iterators: Vec<I>,
     heap: MergeHeap,
@@ -41,10 +47,7 @@ impl<I: Iterator<Item = IterItem>> Merger<I> {
         for (idx, it) in self.iterators.iter_mut().enumerate() {
             if let Some(item) = it.next() {
                 let item = item?;
-                self.heap.push(HeapEntry {
-                    index: idx,
-                    value: item,
-                });
+                self.heap.push(HeapEntry::new(idx, item));
             }
         }
         self.initialized_lo = true;
@@ -57,10 +60,7 @@ impl<I: DoubleEndedIterator<Item = IterItem>> Merger<I> {
         for (idx, it) in self.iterators.iter_mut().enumerate() {
             if let Some(item) = it.next_back() {
                 let item = item?;
-                self.heap.push(HeapEntry {
-                    index: idx,
-                    value: item,
-                });
+                self.heap.push(HeapEntry::new(idx, item));
             }
         }
         self.initialized_hi = true;
@@ -78,7 +78,7 @@ impl<I: Iterator<Item = IterItem>> Iterator for Merger<I> {
 
         // Read the source index of the current minimum (borrow ends
         // at the semicolon, so we can mutably borrow iterators next).
-        let top_index = self.heap.peek_min()?.index;
+        let top_index = self.heap.peek_min()?.index();
 
         #[expect(clippy::indexing_slicing, reason = "we trust the HeapEntry index")]
         if let Some(next_result) = self.iterators[top_index].next() {
@@ -86,11 +86,8 @@ impl<I: Iterator<Item = IterItem>> Iterator for Merger<I> {
                 Ok(next_value) => {
                     // Replace the min in-place and slide into position.
                     // Common case (same source still wins): 1 comparison.
-                    let old = self.heap.replace_min(HeapEntry {
-                        index: top_index,
-                        value: next_value,
-                    });
-                    Some(Ok(old.value))
+                    let old = self.heap.replace_min(HeapEntry::new(top_index, next_value));
+                    Some(Ok(old.into_value()))
                 }
                 Err(e) => {
                     // Pop the stale entry so the next call makes progress
@@ -102,7 +99,7 @@ impl<I: Iterator<Item = IterItem>> Iterator for Merger<I> {
         } else {
             // Source iterator exhausted — just remove.
             let old = self.heap.pop_min()?;
-            Some(Ok(old.value))
+            Some(Ok(old.into_value()))
         }
     }
 }
@@ -113,17 +110,14 @@ impl<I: DoubleEndedIterator<Item = IterItem>> DoubleEndedIterator for Merger<I> 
             fail_iter!(self.initialize_hi());
         }
 
-        let top_index = self.heap.peek_max()?.index;
+        let top_index = self.heap.peek_max()?.index();
 
         #[expect(clippy::indexing_slicing, reason = "we trust the HeapEntry index")]
         if let Some(next_result) = self.iterators[top_index].next_back() {
             match next_result {
                 Ok(next_value) => {
-                    let old = self.heap.replace_max(HeapEntry {
-                        index: top_index,
-                        value: next_value,
-                    });
-                    Some(Ok(old.value))
+                    let old = self.heap.replace_max(HeapEntry::new(top_index, next_value));
+                    Some(Ok(old.into_value()))
                 }
                 Err(e) => {
                     let _ = self.heap.pop_max();
@@ -132,7 +126,7 @@ impl<I: DoubleEndedIterator<Item = IterItem>> DoubleEndedIterator for Merger<I> 
             }
         } else {
             let old = self.heap.pop_max()?;
-            Some(Ok(old.value))
+            Some(Ok(old.into_value()))
         }
     }
 }
