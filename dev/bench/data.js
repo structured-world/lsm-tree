@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774286010471,
+  "lastUpdate": 1774289276377,
   "repoUrl": "https://github.com/structured-world/lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -1638,6 +1638,84 @@ window.BENCHMARK_DATA = {
             "value": 457674.2121957102,
             "unit": "ops/sec",
             "extra": "P50: 1.9us | P99: 8.3us | P99.9: 14.4us\nthreads: 1 | elapsed: 0.44s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c2fe71e91cd440529e8bd119034fd2d4ae78364b",
+          "message": "refactor(fs): thread Fs through table::Writer and BlobFile creation (#107)\n\n## Summary\n\n- Generalize `BlockIndexWriter`/`FilterWriter` traits to use generic `W`\ninstead of hardcoded `std::fs::File` in `finish()` methods\n- Make `table::Writer`, `table::MultiWriter`, `vlog::blob_file::Writer`,\n`vlog::blob_file::MultiWriter` use `Arc<dyn Fs>` / `Box<dyn FsFile>` for\npluggable filesystem backends\n- Thread `Fs` through `rewrite_atomic()`, `fsync_directory()`,\n`persist_version()`, and `upgrade_version()`\n- Replace `std::fs::create_dir_all` / `Path::try_exists` with\n`Fs::create_dir_all` / `Fs::exists` in tree creation and recovery\n- Update all call sites (flush, compaction, ingestion, recovery) to pass\n`config.fs` through\n\nThis eliminates the last direct `std::fs` dependency from the write\npath, enabling:\n- **io_uring**: batch SQE submissions for sequential writes during\ncompaction\n- **Per-level Fs**: new tables written to the appropriate device for\ntheir target level\n\n## Test plan\n\n- [x] `cargo test --lib --all-features` — 519 passed, 0 failed\n- [x] Clean build with zero warnings\n\nCloses #91",
+          "timestamp": "2026-03-23T20:06:58+02:00",
+          "tree_id": "e224e66c71828767b0ac608abce7a9eb681e3c0b",
+          "url": "https://github.com/structured-world/lsm-tree/commit/c2fe71e91cd440529e8bd119034fd2d4ae78364b"
+        },
+        "date": 1774289275454,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1949928.6784336932,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1278350.776142045,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 1.3us | P99.9: 5.8us\nthreads: 1 | elapsed: 0.16s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 633419.296460744,
+            "unit": "ops/sec",
+            "extra": "P50: 1.4us | P99: 5.4us | P99.9: 11.7us\nthreads: 1 | elapsed: 0.32s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2417463.0081925765,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 4.0us | P99.9: 7.5us\nthreads: 1 | elapsed: 0.08s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 414434.76622302615,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 6.3us | P99.9: 12.2us\nthreads: 1 | elapsed: 0.48s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 197854.03536378327,
+            "unit": "ops/sec",
+            "extra": "P50: 4.7us | P99: 5.8us | P99.9: 15.1us\nthreads: 1 | elapsed: 1.01s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1224482.6014583479,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.7us | P99.9: 5.8us\nthreads: 1 | elapsed: 0.16s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 703103.1919911118,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 0.5us | P99.9: 2.8us\nthreads: 1 | elapsed: 0.28s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 524839.9354317768,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 7.8us | P99.9: 12.7us\nthreads: 1 | elapsed: 0.38s | num: 200000"
           }
         ]
       }
