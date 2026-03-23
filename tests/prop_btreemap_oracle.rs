@@ -49,13 +49,12 @@ impl Oracle {
         let start = (key.to_vec(), Reverse(read_seqno - 1));
         let end_inclusive = (key.to_vec(), Reverse(0));
 
-        for ((k, _), val) in self.data.range(start..=end_inclusive) {
-            if k != key {
-                break;
-            }
-            return val.clone();
-        }
-        None
+        self.data
+            .range(start..=end_inclusive)
+            .take_while(|((k, _), _)| k == key)
+            .map(|(_, val)| val.clone())
+            .next()
+            .flatten()
     }
 
     /// Full scan: return all visible (key, value) pairs at read_seqno, sorted by key.
