@@ -26,7 +26,8 @@ pub struct Merger<I> {
 impl<I: Iterator<Item = IterItem>> Merger<I> {
     #[must_use]
     pub fn new(iterators: Vec<I>, comparator: SharedComparator) -> Self {
-        let heap = MergeHeap::with_capacity(iterators.len(), comparator);
+        // 2× capacity: mixed forward+reverse can buffer up to 2 entries per source.
+        let heap = MergeHeap::with_capacity(2 * iterators.len(), comparator);
 
         Self {
             iterators,
@@ -144,7 +145,7 @@ mod tests {
     use test_log::test;
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertions")]
     fn merge_simple() -> crate::Result<()> {
         #[rustfmt::skip]
         let a = vec![
@@ -175,7 +176,7 @@ mod tests {
 
     #[test]
     #[ignore = "maybe not needed"]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertions")]
     fn merge_dup() -> crate::Result<()> {
         #[rustfmt::skip]
         let a = vec![
@@ -201,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertions")]
     fn merge_interleaved() -> crate::Result<()> {
         let a = vec![
             Ok(InternalValue::from_components("a", b"", 0, Value)),
@@ -230,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertions")]
     fn merge_many_sources() -> crate::Result<()> {
         let sources: Vec<Vec<IterItem>> = (0..8)
             .map(|i| {
@@ -260,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used, reason = "test assertions")]
     fn merge_seqno_ordering() -> crate::Result<()> {
         // Same key, different seqnos — higher seqno must come first.
         let a = vec![Ok(InternalValue::from_components("k", b"v1", 3, Value))];

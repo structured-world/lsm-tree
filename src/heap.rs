@@ -35,9 +35,10 @@ pub struct HeapEntry {
 impl HeapEntry {
     /// Compares two heap entries using the given comparator.
     ///
-    /// Ties (same user key + same seqno) are broken by source index so
-    /// that entries from earlier (= newer) iterators sort first.  This
-    /// preserves MVCC correctness when levels have overlapping seqnos.
+    /// Ties (same user key + same seqno) are broken by source index,
+    /// with lower indices sorting first.  This ensures deterministic
+    /// merge order; callers that need "newer wins" semantics must pass
+    /// sources in newest-first precedence order.
     #[inline]
     fn cmp_with(&self, other: &Self, cmp: &dyn crate::comparator::UserComparator) -> Ordering {
         self.value
@@ -173,6 +174,7 @@ impl MergeHeap {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "test assertions use unwrap for brevity")]
 mod tests {
     use super::*;
     use crate::comparator;
