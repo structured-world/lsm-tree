@@ -635,6 +635,10 @@ impl RingThread {
     /// Returns the non-negative CQE result as `u32`. Negative results
     /// (kernel errors) are converted to [`io::Error`].
     fn send_and_wait(&self, op: Op, rx: &mpsc::Receiver<i32>) -> io::Result<u32> {
+        // Mutex guards Option<Sender> for clean shutdown (Drop sets to None).
+        // Lock is held only for send() duration (~ns) — negligible vs I/O
+        // latency (~µs). A lock-free channel would eliminate this but adds
+        // an external dependency for no measurable gain.
         self.tx
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
