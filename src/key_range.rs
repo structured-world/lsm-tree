@@ -201,6 +201,7 @@ impl KeyRange {
     ///
     /// Used by multi-level compaction to reduce redundant L2 overlap queries
     /// when L0 tables overlap (#122 Part 2).
+    #[must_use]
     pub fn merge_sorted_cmp(
         ranges: impl IntoIterator<Item = Self>,
         cmp: &dyn crate::comparator::UserComparator,
