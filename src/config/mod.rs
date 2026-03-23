@@ -416,22 +416,21 @@ impl Config {
         // ZstdDict to plain Zstd. Validating index policies here would reject
         // configs that use ZstdDict solely for index blocks even though the
         // writer handles them correctly.
-        // NOTE: iter() yields &CompressionType; Rust auto-derefs in if-let patterns.
         for ct in self.data_block_compression_policy.iter() {
-            if let CompressionType::ZstdDict {
+            if let &CompressionType::ZstdDict {
                 dict_id: required, ..
             } = ct
             {
                 match dict_id {
                     None => {
                         return Err(crate::Error::ZstdDictMismatch {
-                            expected: *required,
+                            expected: required,
                             got: None,
                         });
                     }
-                    Some(actual) if actual != *required => {
+                    Some(actual) if actual != required => {
                         return Err(crate::Error::ZstdDictMismatch {
-                            expected: *required,
+                            expected: required,
                             got: Some(actual),
                         });
                     }
