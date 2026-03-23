@@ -107,10 +107,8 @@ impl Manifest {
                     });
                 }
 
-                let bytes: Vec<u8> = section
-                    .buf_reader(path)?
-                    .bytes()
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut bytes = Vec::new();
+                section.buf_reader(path)?.read_to_end(&mut bytes)?;
 
                 String::from_utf8(bytes).map_err(|e| crate::Error::Utf8(e.utf8_error()))?
             }
