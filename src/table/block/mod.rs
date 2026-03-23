@@ -391,6 +391,10 @@ impl Block {
                 return Err(crate::Error::InvalidHeader("Block"));
             }
 
+            // Zero-init is redundant (read_at overwrites all bytes) but avoids
+            // unsafe. The cost is negligible vs I/O + decryption. Unsafe
+            // uninitialized allocation (like Slice::builder_unzeroed) could be
+            // used here if profiling shows this as a bottleneck.
             let mut buf = vec![0u8; block_size];
             let n = file.read_at(&mut buf, *handle.offset())?;
             if n != block_size {
@@ -1265,7 +1269,11 @@ mod tests {
                 header.data_length + Header::serialized_len() as u32,
             );
             let result = Block::from_file(&file, handle, CompressionType::None, Some(&enc_read));
-            assert!(result.is_err());
+            assert!(
+                matches!(result, Err(crate::Error::Decrypt(_))),
+                "expected Decrypt error for wrong key, got: {:?}",
+                result.err(),
+            );
             Ok(())
         }
 
@@ -1286,7 +1294,11 @@ mod tests {
 
             let mut reader = &writer[..];
             let result = Block::from_reader(&mut reader, CompressionType::None, Some(&enc_read));
-            assert!(result.is_err());
+            assert!(
+                matches!(result, Err(crate::Error::Decrypt(_))),
+                "expected Decrypt error for wrong key, got: {:?}",
+                result.err(),
+            );
             Ok(())
         }
 
@@ -1327,7 +1339,11 @@ mod tests {
                 header.data_length + Header::serialized_len() as u32,
             );
             let result = Block::from_file(&file, handle, CompressionType::None, Some(&enc));
-            assert!(result.is_err());
+            assert!(
+                matches!(result, Err(crate::Error::ChecksumMismatch { .. })),
+                "expected ChecksumMismatch for tampered data, got: {:?}",
+                result.err(),
+            );
             Ok(())
         }
 
