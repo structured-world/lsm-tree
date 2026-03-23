@@ -502,7 +502,7 @@ impl Block {
                 });
             }
 
-            #[expect(clippy::indexing_slicing)]
+            #[expect(clippy::indexing_slicing, reason = "header was decoded from buf")]
             let checksum =
                 Checksum::from_raw(crate::hash::hash128(&buf[Header::serialized_len()..]));
 
@@ -533,7 +533,7 @@ impl Block {
 
                 #[cfg(feature = "lz4")]
                 CompressionType::Lz4 => {
-                    #[expect(clippy::indexing_slicing)]
+                    #[expect(clippy::indexing_slicing, reason = "header was decoded from buf")]
                     let compressed_data = &buf[Header::serialized_len()..];
 
                     let mut decompressed = vec![0u8; parsed_header.uncompressed_length as usize];
@@ -551,7 +551,7 @@ impl Block {
 
                 #[cfg(feature = "zstd")]
                 CompressionType::Zstd(_) => {
-                    #[expect(clippy::indexing_slicing)]
+                    #[expect(clippy::indexing_slicing, reason = "header was decoded from buf")]
                     let compressed_data = &buf[Header::serialized_len()..];
 
                     let decompressed = zstd::bulk::decompress(
@@ -1066,8 +1066,7 @@ mod tests {
     // from_reader, and from_file that are untouched by the non-encrypted tests.
     //
     // NOTE: The tempfile + write + reopen + handle pattern is duplicated across
-    // from_file tests (both encrypted and non-encrypted). Extracting a helper
-    // would touch the entire test module — left for a separate cleanup PR.
+    // from_file tests (both encrypted and non-encrypted). Tracked in #127.
 
     #[cfg(feature = "encryption")]
     mod encrypted {
