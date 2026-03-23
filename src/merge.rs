@@ -81,14 +81,23 @@ impl<I: Iterator<Item = IterItem>> Iterator for Merger<I> {
 
         #[expect(clippy::indexing_slicing, reason = "we trust the HeapEntry index")]
         if let Some(next_result) = self.iterators[top_index].next() {
-            let next_value = fail_iter!(next_result);
-            // Replace the min in-place and slide into position.
-            // Common case (same source still wins): 1 comparison.
-            let old = self.heap.replace_min(HeapEntry {
-                index: top_index,
-                value: next_value,
-            });
-            Some(Ok(old.value))
+            match next_result {
+                Ok(next_value) => {
+                    // Replace the min in-place and slide into position.
+                    // Common case (same source still wins): 1 comparison.
+                    let old = self.heap.replace_min(HeapEntry {
+                        index: top_index,
+                        value: next_value,
+                    });
+                    Some(Ok(old.value))
+                }
+                Err(e) => {
+                    // Pop the stale entry so the next call makes progress
+                    // on a different source instead of retrying this one.
+                    self.heap.pop_min();
+                    Some(Err(e))
+                }
+            }
         } else {
             // Source iterator exhausted — just remove.
             let old = self.heap.pop_min()?;
@@ -107,12 +116,19 @@ impl<I: DoubleEndedIterator<Item = IterItem>> DoubleEndedIterator for Merger<I> 
 
         #[expect(clippy::indexing_slicing, reason = "we trust the HeapEntry index")]
         if let Some(next_result) = self.iterators[top_index].next_back() {
-            let next_value = fail_iter!(next_result);
-            let old = self.heap.replace_max(HeapEntry {
-                index: top_index,
-                value: next_value,
-            });
-            Some(Ok(old.value))
+            match next_result {
+                Ok(next_value) => {
+                    let old = self.heap.replace_max(HeapEntry {
+                        index: top_index,
+                        value: next_value,
+                    });
+                    Some(Ok(old.value))
+                }
+                Err(e) => {
+                    self.heap.pop_max();
+                    Some(Err(e))
+                }
+            }
         } else {
             let old = self.heap.pop_max()?;
             Some(Ok(old.value))

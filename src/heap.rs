@@ -118,7 +118,7 @@ impl MergeHeap {
     ///
     /// # Panics
     ///
-    /// Panics (debug) if the heap is empty.
+    /// Panics if the heap is empty.
     #[expect(
         clippy::indexing_slicing,
         reason = "bounds checked by debug_assert and loop guard"
@@ -149,7 +149,7 @@ impl MergeHeap {
     ///
     /// # Panics
     ///
-    /// Panics (debug) if the heap is empty.
+    /// Panics if the heap is empty.
     #[expect(
         clippy::indexing_slicing,
         reason = "bounds checked by debug_assert and loop guard"
