@@ -137,45 +137,48 @@ fn ops_strategy() -> impl Strategy<Value = Vec<Op>> {
 
 fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
     let tmpdir = lsm_tree::get_tmp_folder();
-    let tree = Config::new(
-        &tmpdir,
-        SequenceNumberCounter::default(),
-        SequenceNumberCounter::default(),
-    )
-    .open()
-    .map_err(|e| TestCaseError::fail(format!("failed to open tree: {e}")))?;
+    let seqno_counter = SequenceNumberCounter::default();
+    let visible_seqno = SequenceNumberCounter::default();
+    let tree = Config::new(&tmpdir, seqno_counter.clone(), visible_seqno.clone())
+        .open()
+        .map_err(|e| TestCaseError::fail(format!("failed to open tree: {e}")))?;
 
     let mut oracle = Oracle::new();
-    let mut seqno: u64 = 1;
 
     // Apply all ops.
+    // Data seqnos come from the shared counter (as required by the API).
+    // Internal operations (flush, compact) also advance this counter via
+    // upgrade_version, keeping SV seqnos and data seqnos interleaved.
     for op in &ops {
         match op {
             Op::Insert { key_idx, value } => {
                 let key = key_from_idx(*key_idx);
+                let seqno = seqno_counter.next();
                 oracle.insert(key.clone(), value.clone(), seqno);
                 tree.insert(key, value.clone(), seqno);
-                seqno += 1;
+                visible_seqno.fetch_max(seqno + 1);
             }
             Op::Remove { key_idx } => {
                 let key = key_from_idx(*key_idx);
+                let seqno = seqno_counter.next();
                 oracle.remove(key.clone(), seqno);
                 tree.remove(key, seqno);
-                seqno += 1;
+                visible_seqno.fetch_max(seqno + 1);
             }
             Op::Flush => {
                 tree.flush_active_memtable(0)
                     .map_err(|e| TestCaseError::fail(format!("flush failed: {e}")))?;
             }
             Op::Compact => {
-                tree.major_compact(common::COMPACTION_TARGET, seqno)
+                let gc_watermark = seqno_counter.get();
+                tree.major_compact(common::COMPACTION_TARGET, gc_watermark)
                     .map_err(|e| TestCaseError::fail(format!("compact failed: {e}")))?;
             }
         }
     }
 
     // Verify point reads.
-    let read_seqno = seqno;
+    let read_seqno = seqno_counter.get();
     for idx in 0..KEY_SPACE {
         let key = key_from_idx(idx);
         let expected = oracle.get(&key, read_seqno);
