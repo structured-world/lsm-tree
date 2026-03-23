@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774271461961,
+  "lastUpdate": 1774275040766,
   "repoUrl": "https://github.com/structured-world/lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -1404,6 +1404,84 @@ window.BENCHMARK_DATA = {
             "value": 505507.3918222775,
             "unit": "ops/sec",
             "extra": "P50: 1.7us | P99: 10.0us | P99.9: 16.2us\nthreads: 1 | elapsed: 0.40s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c1f55111f136221cec2430031be24c55bc7b6f8a",
+          "message": "refactor(fs): thread Fs through FileAccessor and DescriptorTable (#112)\n\n## Summary\n\n- Replace hardcoded `Arc<std::fs::File>` with `Arc<dyn FsFile>` in\n`DescriptorTable` and `FileAccessor` (Option B — dynamic dispatch)\n- Thread `&dyn FsFile` through `Block::from_file`,\n`ParsedMeta::load_with_handle`, and blob `Reader`\n- Strengthen `FsFile::read_at` contract to fill-or-EOF with EINTR retry\nin `StdFs`\n\n## Technical Details\n\nThe FD cache (`DescriptorTable`) and its access wrapper (`FileAccessor`)\nwere hardcoded to `std::fs::File`. This blocked pluggable filesystem\nbackends introduced by the `Fs` trait in #80.\n\n**Approach:** Option B from the issue — `Arc<dyn FsFile>` for\nsimplicity. Vtable overhead (~5ns) is negligible vs I/O latency. Call\nsites use type-annotated bindings (`let fd: Arc<dyn FsFile> =\nArc::new(...)`) for unsizing coercion at the file-open boundary. Future\ncall-site refactoring will replace `std::fs::File::open` with\n`Fs::open`, eliminating the coercions.\n\n**`FsFile::read_at` contract:** Strengthened to fill-or-EOF semantics —\nimplementations must either fill the buffer completely or return a short\nread only at EOF. `StdFs::read_at` now includes a retry loop that\nhandles EINTR and OS-level short reads, matching the documented\ncontract. `file::read_exact` relies on this single-call guarantee.\n\n## Test Plan\n\n- [x] `cargo check` — zero errors, zero warnings\n- [x] `cargo clippy --lib` — clean\n- [x] `cargo test --lib` — all tests pass\n- [x] `cargo test` — all integration + doc tests pass\n- [x] `codecov/patch` — passing\n- [x] All CI checks green (lint, test matrix, cross-compilation)\n\nCloses #90",
+          "timestamp": "2026-03-23T16:09:28+02:00",
+          "tree_id": "d218ca68edde10a1a977c258cf906c0263be90cd",
+          "url": "https://github.com/structured-world/lsm-tree/commit/c1f55111f136221cec2430031be24c55bc7b6f8a"
+        },
+        "date": 1774275039501,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1993465.4600911306,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 1.8us | P99.9: 3.7us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 964781.9145455514,
+            "unit": "ops/sec",
+            "extra": "P50: 0.9us | P99: 2.1us | P99.9: 7.6us\nthreads: 1 | elapsed: 0.21s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 552449.1996926714,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 4.6us | P99.9: 10.1us\nthreads: 1 | elapsed: 0.36s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 3035687.9728046074,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 3.2us | P99.9: 5.8us\nthreads: 1 | elapsed: 0.07s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 372414.6336047507,
+            "unit": "ops/sec",
+            "extra": "P50: 2.3us | P99: 5.4us | P99.9: 11.1us\nthreads: 1 | elapsed: 0.54s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 220381.37949769635,
+            "unit": "ops/sec",
+            "extra": "P50: 4.2us | P99: 5.3us | P99.9: 11.9us\nthreads: 1 | elapsed: 0.91s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 968575.0428092008,
+            "unit": "ops/sec",
+            "extra": "P50: 0.9us | P99: 2.6us | P99.9: 7.7us\nthreads: 1 | elapsed: 0.21s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 767656.2531102074,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 0.7us | P99.9: 4.1us\nthreads: 1 | elapsed: 0.26s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 452584.4841493192,
+            "unit": "ops/sec",
+            "extra": "P50: 2.0us | P99: 6.1us | P99.9: 11.0us\nthreads: 1 | elapsed: 0.44s | num: 200000"
           }
         ]
       }
