@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774290320021,
+  "lastUpdate": 1774290861764,
   "repoUrl": "https://github.com/structured-world/lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -1794,6 +1794,84 @@ window.BENCHMARK_DATA = {
             "value": 526994.6306730458,
             "unit": "ops/sec",
             "extra": "P50: 1.6us | P99: 7.8us | P99.9: 13.4us\nthreads: 1 | elapsed: 0.38s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3b54ecbb951165dca34a97bb3a5610dd13e71fb7",
+          "message": "fix(test): enlarge bloom filter false-positive-rate sample to 100K (#135)\n\n## Summary\n- Decouple filter construction size (1K items) from FPR measurement\nsample (100K probes) in `filter_bloom_standard_bpk` test\n- Eliminates flaky CI failures caused by high statistical variance with\nsmall sample\n\n## Technical Details\nWith only 1K probe keys, measured FPR fluctuates enough (~10% ± 3%) to\noccasionally exceed the 13% assertion threshold. Increasing to 100K\nprobes reduces variance to ±0.3%, making the test stable while keeping\nthe same filter size and assertion.\n\n## Test Plan\n- [x] `cargo test --lib -- filter_bloom_standard_bpk` passes\nconsistently\n\nCloses #121",
+          "timestamp": "2026-03-23T20:33:17+02:00",
+          "tree_id": "2570281494d50009f6fe01b3cfcd28f28fa90e75",
+          "url": "https://github.com/structured-world/lsm-tree/commit/3b54ecbb951165dca34a97bb3a5610dd13e71fb7"
+        },
+        "date": 1774290860323,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 2041266.3216082861,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.2us | P99.9: 5.2us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1205121.0074657367,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 1.6us | P99.9: 5.7us\nthreads: 1 | elapsed: 0.17s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 614429.2119898967,
+            "unit": "ops/sec",
+            "extra": "P50: 1.4us | P99: 5.5us | P99.9: 11.5us\nthreads: 1 | elapsed: 0.33s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2332242.959217968,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 4.1us | P99.9: 8.8us\nthreads: 1 | elapsed: 0.09s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 402284.5910887458,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 6.4us | P99.9: 12.4us\nthreads: 1 | elapsed: 0.50s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 189545.94536994142,
+            "unit": "ops/sec",
+            "extra": "P50: 4.9us | P99: 6.8us | P99.9: 15.2us\nthreads: 1 | elapsed: 1.06s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1146265.159478525,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.8us | P99.9: 9.2us\nthreads: 1 | elapsed: 0.17s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 703282.6858680844,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.1us | P99.9: 4.4us\nthreads: 1 | elapsed: 0.28s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 525608.465712753,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 7.7us | P99.9: 15.8us\nthreads: 1 | elapsed: 0.38s | num: 200000"
           }
         ]
       }
