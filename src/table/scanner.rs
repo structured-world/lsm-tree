@@ -61,7 +61,13 @@ impl Scanner {
         compression: CompressionType,
         encryption: Option<&dyn EncryptionProvider>,
     ) -> crate::Result<DataBlock> {
-        let block = Block::from_reader(reader, compression, encryption);
+        let block = Block::from_reader(
+            reader,
+            compression,
+            encryption,
+            #[cfg(feature = "zstd")]
+            None,
+        );
 
         match block {
             Ok(block) => {

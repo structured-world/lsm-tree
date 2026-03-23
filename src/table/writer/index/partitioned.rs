@@ -66,6 +66,8 @@ impl PartitionedIndexWriter {
             crate::table::block::BlockType::Index,
             self.compression,
             self.encryption.as_deref(),
+            #[cfg(feature = "zstd")]
+            None,
         )?;
 
         #[expect(
@@ -129,6 +131,8 @@ impl PartitionedIndexWriter {
             crate::table::block::BlockType::Index,
             self.compression,
             self.encryption.as_deref(),
+            #[cfg(feature = "zstd")]
+            None,
         )?;
 
         #[expect(

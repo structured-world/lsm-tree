@@ -216,6 +216,13 @@ impl Writer {
                 check_size_cap(compressed.len())?;
                 std::borrow::Cow::Owned(compressed)
             }
+
+            #[cfg(feature = "zstd")]
+            CompressionType::ZstdDict { .. } => {
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "zstd dictionary compression is not supported for blob files",
+                )));
+            }
         };
 
         // Ensure the compressed value length fits in u32 before we write it

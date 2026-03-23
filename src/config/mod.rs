@@ -280,6 +280,16 @@ pub struct Config<F: Fs = StdFs> {
     /// using this provider after compression and before checksumming.
     pub(crate) encryption: Option<Arc<dyn EncryptionProvider>>,
 
+    /// Pre-trained zstd dictionary for dictionary compression.
+    ///
+    /// When set together with a [`CompressionType::ZstdDict`] compression
+    /// policy, data blocks are compressed using this dictionary. The
+    /// dictionary must remain the same for the lifetime of the tree —
+    /// opening a tree with a different dictionary will produce
+    /// [`Error::ZstdDictMismatch`](crate::Error::ZstdDictMismatch) errors.
+    #[cfg(feature = "zstd")]
+    pub(crate) zstd_dictionary: Option<Arc<crate::compression::ZstdDictionary>>,
+
     /// The global sequence number generator.
     ///
     /// Should be shared between multiple trees of a database.
@@ -350,6 +360,9 @@ impl Default for Config {
             expect_point_read_hits: false,
 
             kv_separation_opts: None,
+
+            #[cfg(feature = "zstd")]
+            zstd_dictionary: None,
 
             comparator: comparator::default_comparator(),
             encryption: None,
@@ -635,6 +648,36 @@ impl<F: Fs> Config<F> {
     #[must_use]
     pub fn with_encryption(mut self, encryption: Option<Arc<dyn EncryptionProvider>>) -> Self {
         self.encryption = encryption;
+        self
+    }
+
+    /// Sets the pre-trained zstd dictionary for dictionary compression.
+    ///
+    /// When set, data blocks using [`CompressionType::ZstdDict`] will be
+    /// compressed and decompressed with this dictionary. The dictionary
+    /// should be trained on representative data samples for best results.
+    ///
+    /// Create a dictionary with [`ZstdDictionary::new`](crate::ZstdDictionary::new),
+    /// then use [`CompressionType::zstd_dict`] to create a matching
+    /// compression type:
+    ///
+    /// ```ignore
+    /// use lsm_tree::{CompressionType, ZstdDictionary};
+    ///
+    /// let dict = ZstdDictionary::new(&training_data);
+    /// let compression = CompressionType::zstd_dict(3, dict.id()).unwrap();
+    ///
+    /// config
+    ///     .zstd_dictionary(Some(Arc::new(dict)))
+    ///     .data_block_compression_policy(CompressionPolicy::all(compression));
+    /// ```
+    #[cfg(feature = "zstd")]
+    #[must_use]
+    pub fn zstd_dictionary(
+        mut self,
+        dictionary: Option<Arc<crate::compression::ZstdDictionary>>,
+    ) -> Self {
+        self.zstd_dictionary = dictionary;
         self
     }
 }

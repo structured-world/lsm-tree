@@ -202,6 +202,7 @@ impl Table {
         handle: &BlockHandle,
         block_type: BlockType,
         compression: CompressionType,
+        #[cfg(feature = "zstd")] zstd_dict: Option<&crate::compression::ZstdDictionary>,
     ) -> crate::Result<Block> {
         load_block(
             self.global_id(),
@@ -212,6 +213,8 @@ impl Table {
             block_type,
             compression,
             self.encryption.as_deref(),
+            #[cfg(feature = "zstd")]
+            zstd_dict,
             #[cfg(feature = "metrics")]
             &self.metrics,
         )
@@ -222,6 +225,8 @@ impl Table {
             handle,
             BlockType::Data,
             self.metadata.data_block_compression,
+            #[cfg(feature = "zstd")]
+            self.zstd_dictionary.as_deref(),
         )
         .map(DataBlock::new)
     }
@@ -260,6 +265,8 @@ impl Table {
                     &filter_block_handle.into_inner(),
                     BlockType::Filter,
                     CompressionType::None, // NOTE: We never write a filter block with compression
+                    #[cfg(feature = "zstd")]
+                    None,
                 )?;
                 let block = FilterBlock::new(block);
 
@@ -274,6 +281,8 @@ impl Table {
                 filter_block_handle,
                 BlockType::Filter,
                 CompressionType::None, // NOTE: We never write a filter block with compression
+                #[cfg(feature = "zstd")]
+                None,
             )?;
             let block = FilterBlock::new(block);
 
@@ -409,6 +418,8 @@ impl Table {
             self.cache.clone(),
             self.metadata.data_block_compression,
             self.encryption.clone(),
+            #[cfg(feature = "zstd")]
+            self.zstd_dictionary.clone(),
             self.comparator.clone(),
             #[cfg(feature = "metrics")]
             self.metrics.clone(),
@@ -437,7 +448,14 @@ impl Table {
     ) -> crate::Result<IndexBlock> {
         log::trace!("Reading TLI block, with tli_ptr={:?}", regions.tli);
 
-        let block = Block::from_file(file, regions.tli, compression, encryption)?;
+        let block = Block::from_file(
+            file,
+            regions.tli,
+            compression,
+            encryption,
+            #[cfg(feature = "zstd")]
+            None,
+        )?;
 
         if block.header.block_type != BlockType::Index {
             return Err(crate::Error::InvalidTag((
@@ -465,6 +483,7 @@ impl Table {
         pin_filter: bool,
         pin_index: bool,
         encryption: Option<Arc<dyn crate::encryption::EncryptionProvider>>,
+        #[cfg(feature = "zstd")] zstd_dictionary: Option<Arc<crate::compression::ZstdDictionary>>,
         comparator: SharedComparator,
         #[cfg(feature = "metrics")] metrics: Arc<Metrics>,
     ) -> crate::Result<Self> {
@@ -559,6 +578,8 @@ impl Table {
                 filter_tli_handle,
                 metadata.index_block_compression,
                 encryption.as_deref(),
+                #[cfg(feature = "zstd")]
+                None,
             )?;
             Some(IndexBlock::new(block))
         } else {
@@ -579,6 +600,8 @@ impl Table {
                         filter_handle,
                         crate::CompressionType::None, // NOTE: We never write a filter block with compression
                         encryption.as_deref(),
+                        #[cfg(feature = "zstd")]
+                        None,
                     )
                     .and_then(|block| {
                         if block.header.block_type == BlockType::Filter {
@@ -606,6 +629,8 @@ impl Table {
                 rt_handle,
                 crate::CompressionType::None,
                 encryption.as_deref(),
+                #[cfg(feature = "zstd")]
+                None,
             )?;
 
             if block.header.block_type != BlockType::RangeTombstone {
@@ -666,6 +691,9 @@ impl Table {
             cached_blob_bytes: std::sync::OnceLock::new(),
             range_tombstones,
             encryption,
+
+            #[cfg(feature = "zstd")]
+            zstd_dictionary,
         })))
     }
 
@@ -862,6 +890,8 @@ impl Table {
                 filter_block_handle,
                 BlockType::Filter,
                 CompressionType::None, // NOTE: Filter blocks are never compressed (crate invariant)
+                #[cfg(feature = "zstd")]
+                None,
             )?;
             let block = FilterBlock::new(block);
             return block.maybe_contains_hash(hash);
@@ -931,6 +961,8 @@ impl Table {
                     &filter_block_handle.into_inner(),
                     BlockType::Filter,
                     CompressionType::None,
+                    #[cfg(feature = "zstd")]
+                    None,
                 )?;
                 let block = FilterBlock::new(block);
                 return block.maybe_contains_hash(key_hash);

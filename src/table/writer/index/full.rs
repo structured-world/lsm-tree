@@ -78,6 +78,8 @@ impl<W: std::io::Write + std::io::Seek> BlockIndexWriter<W> for FullIndexWriter 
             crate::table::block::BlockType::Index,
             self.compression,
             self.encryption.as_deref(),
+            #[cfg(feature = "zstd")]
+            None,
         )?;
 
         #[expect(

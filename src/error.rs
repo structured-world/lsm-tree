@@ -88,6 +88,15 @@ pub enum Error {
         supplied: &'static str,
     },
 
+    /// Zstd dictionary required but not provided, or dict_id mismatch
+    ZstdDictMismatch {
+        /// Dictionary ID stored in the block/table metadata
+        expected: u32,
+
+        /// Dictionary ID provided by the caller (0 if no dictionary supplied)
+        got: u32,
+    },
+
     /// Range tombstone block decode failure.
     RangeTombstoneDecode {
         /// Which field or validation failed (e.g. `start_len`, `start`, `seqno`, `interval`)
