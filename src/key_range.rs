@@ -54,9 +54,9 @@ impl KeyRange {
 
     /// Returns `true` if the key falls within this key range.
     ///
-    /// Uses lexicographic ordering. See [`overlaps_with_key_range_cmp`] for
-    /// custom comparator support; comparable `_cmp` variants for `contains_key`
-    /// and `contains_range` can be added when needed (#116).
+    /// Uses lexicographic ordering. See [`overlaps_with_key_range_cmp`] and
+    /// [`contains_range_cmp`] for custom comparator support; a `contains_key_cmp`
+    /// variant can be added when needed (#116).
     #[must_use]
     pub fn contains_key(&self, key: &[u8]) -> bool {
         let (start, end) = self.as_tuple();

@@ -842,7 +842,9 @@ impl CompactionStrategy for Strategy {
             reason = "first run should exist because score is >0.0"
         )]
         let Some((table_ids, can_trivial_move)) = pick_minimal_compaction(
-            level.first_run().expect("should have exactly one run"),
+            level
+                .first_run()
+                .expect("level should have at least one run"),
             next_level.first_run().map(std::ops::Deref::deref),
             state.hidden_set(),
             overshoot_bytes,
