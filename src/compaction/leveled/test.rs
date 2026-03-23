@@ -726,7 +726,7 @@ fn multi_level_sparse_keyspace_data_integrity() -> crate::Result<()> {
         seqno += 1;
     }
 
-    let result = tree.compact(multi.clone(), seqno)?;
+    tree.compact(multi.clone(), seqno)?;
 
     // Verify data propagated beyond L1 into deeper levels.
     let version = tree.current_version();
