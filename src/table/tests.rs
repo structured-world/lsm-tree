@@ -1884,23 +1884,15 @@ fn bloom_may_contain_key_partitioned_filter() -> crate::Result<()> {
                 "bloom must not reject existing key in partitioned filter"
             );
 
-            // Key beyond all partitions: behavior depends on whether the
-            // partition index is pinned (test_with_table runs multiple configs).
+            // Key beyond all partitions: with a pinned partition index, key-based
+            // seek finds no ceiling and must return Ok(false).
+            // Note: pinned_filter_index is always loaded when filter_tli exists
+            // (unconditional in Table::recover), so this is always the partition-aware path.
             let hash_beyond = BloomBuilder::get_hash(b"zzz_beyond");
-            if table.pinned_filter_index.is_some() {
-                // With pinned partition index, key-based seek finds no ceiling → Ok(false)
-                assert!(
-                    !table.bloom_may_contain_key(b"zzz_beyond", hash_beyond)?,
-                    "key beyond all partitions should be rejected when partition index is available"
-                );
-            } else {
-                // Without partition index, falls back to hash-only → conservative Ok(true)
-                assert_eq!(
-                    table.bloom_may_contain_key(b"zzz_beyond", hash_beyond)?,
-                    table.bloom_may_contain_key_hash(hash_beyond)?,
-                    "bloom_may_contain_key should match hash-only behavior when partition index is unavailable"
-                );
-            }
+            assert!(
+                !table.bloom_may_contain_key(b"zzz_beyond", hash_beyond)?,
+                "key beyond all partitions should be rejected when partition index is available"
+            );
 
             // Hash-only path always returns Ok(true) conservatively for partitioned filters
             assert!(
