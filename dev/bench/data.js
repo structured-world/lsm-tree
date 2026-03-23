@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774275040766,
+  "lastUpdate": 1774280351254,
   "repoUrl": "https://github.com/structured-world/lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -1482,6 +1482,84 @@ window.BENCHMARK_DATA = {
             "value": 452584.4841493192,
             "unit": "ops/sec",
             "extra": "P50: 2.0us | P99: 6.1us | P99.9: 11.0us\nthreads: 1 | elapsed: 0.44s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d7279d395919ec7024dbc70fbdf426fb9faf53ab",
+          "message": "feat(fs): simplify dyn Fs object safety for per-level routing (#109)\n\n## Summary\n\nRemove associated types (`File`, `ReadDir`) from the `Fs` trait so that\n`Arc<dyn Fs>` works without specifying type parameters — enabling\nergonomic per-level filesystem routing.\n\n- `Fs::open()` now returns `Box<dyn FsFile>` (allocation overhead is\nnegligible for syscall-backed implementations like `StdFs`)\n- `Fs::read_dir()` now returns `Vec<FsDirEntry>` (cold-path only:\nrecovery, compaction file listing)\n- Remove `StdReadDir` public type (logic inlined into `StdFs::read_dir`)\n\n**Before:** `Arc<dyn Fs<File = std::fs::File, ReadDir = StdReadDir>>`\n**After:** `Arc<dyn Fs>`\n\n## Changes\n\n- `src/fs/mod.rs` — remove `type File` and `type ReadDir` associated\ntypes, update method signatures and object-safety doc\n- `src/fs/std_fs.rs` — update `StdFs` impl, remove `StdReadDir`, update\ntests\n\n## Testing\n\nAll 429 unit tests + integration tests pass. Object-safety test updated\nto assert simple `Arc<dyn Fs>`.\n\nCloses #92",
+          "timestamp": "2026-03-23T17:37:59+02:00",
+          "tree_id": "848803e4baa780cbd79b4e3ccc4a3aebc246ac67",
+          "url": "https://github.com/structured-world/lsm-tree/commit/d7279d395919ec7024dbc70fbdf426fb9faf53ab"
+        },
+        "date": 1774280349982,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1974496.7873999383,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 1.8us | P99.9: 3.9us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1048053.5925977568,
+            "unit": "ops/sec",
+            "extra": "P50: 0.8us | P99: 1.8us | P99.9: 6.9us\nthreads: 1 | elapsed: 0.19s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 605989.6520176838,
+            "unit": "ops/sec",
+            "extra": "P50: 1.5us | P99: 4.5us | P99.9: 9.9us\nthreads: 1 | elapsed: 0.33s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 3054133.461936785,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 3.1us | P99.9: 5.8us\nthreads: 1 | elapsed: 0.07s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 403838.6234207462,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 5.2us | P99.9: 10.0us\nthreads: 1 | elapsed: 0.50s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 219523.5260964623,
+            "unit": "ops/sec",
+            "extra": "P50: 4.2us | P99: 6.1us | P99.9: 34.8us\nthreads: 1 | elapsed: 0.91s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1103902.1456098924,
+            "unit": "ops/sec",
+            "extra": "P50: 0.8us | P99: 2.4us | P99.9: 5.2us\nthreads: 1 | elapsed: 0.18s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 784591.1446116187,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 1.6us | P99.9: 3.2us\nthreads: 1 | elapsed: 0.25s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 510888.07605290384,
+            "unit": "ops/sec",
+            "extra": "P50: 1.7us | P99: 6.9us | P99.9: 11.2us\nthreads: 1 | elapsed: 0.39s | num: 200000"
           }
         ]
       }
