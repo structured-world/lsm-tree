@@ -41,17 +41,16 @@ pub struct RunReader {
 }
 
 impl RunReader {
+    /// Creates a new `RunReader` using default lexicographic key ordering.
+    ///
+    /// For trees with a custom [`UserComparator`], use [`new_cmp`] instead.
     #[must_use]
-    #[cfg(test)]
+    #[expect(dead_code, reason = "public API — used by external callers and tests")]
     pub fn new<R: RangeBounds<UserKey> + Clone + Send + 'static>(
         run: Arc<Run<Table>>,
         range: R,
     ) -> Option<Self> {
-        assert!(!run.is_empty(), "level reader cannot read empty level");
-
-        let (lo, hi) = run.range_overlap_indexes(&range)?;
-
-        Some(Self::culled(run, range, (Some(lo), Some(hi))))
+        Self::new_cmp(run, range, &crate::comparator::DefaultUserComparator)
     }
 
     /// Like [`new`], but uses a custom comparator for key ordering.
