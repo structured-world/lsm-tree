@@ -88,13 +88,13 @@ pub enum Error {
         supplied: &'static str,
     },
 
-    /// Zstd dictionary required but not provided, or dict_id mismatch
+    /// Zstd dictionary required but not provided, or `dict_id` mismatch
     ZstdDictMismatch {
         /// Dictionary ID stored in the block/table metadata
         expected: u32,
 
-        /// Dictionary ID provided by the caller (0 if no dictionary supplied)
-        got: u32,
+        /// Dictionary ID provided by the caller (`None` if no dictionary supplied)
+        got: Option<u32>,
     },
 
     /// Range tombstone block decode failure.

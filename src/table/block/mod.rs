@@ -146,12 +146,12 @@ impl Block {
             CompressionType::ZstdDict { level, dict_id } => {
                 let dict = zstd_dict.ok_or(crate::Error::ZstdDictMismatch {
                     expected: dict_id,
-                    got: 0,
+                    got: None,
                 })?;
                 if dict.id() != dict_id {
                     return Err(crate::Error::ZstdDictMismatch {
                         expected: dict_id,
-                        got: dict.id(),
+                        got: Some(dict.id()),
                     });
                 }
 
@@ -381,12 +381,12 @@ impl Block {
             CompressionType::ZstdDict { dict_id, .. } => {
                 let dict = zstd_dict.ok_or(crate::Error::ZstdDictMismatch {
                     expected: dict_id,
-                    got: 0,
+                    got: None,
                 })?;
                 if dict.id() != dict_id {
                     return Err(crate::Error::ZstdDictMismatch {
                         expected: dict_id,
-                        got: dict.id(),
+                        got: Some(dict.id()),
                     });
                 }
 

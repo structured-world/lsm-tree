@@ -219,7 +219,8 @@ impl Writer {
 
             #[cfg(feature = "zstd")]
             CompressionType::ZstdDict { .. } => {
-                return Err(crate::Error::Io(std::io::Error::other(
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
                     "zstd dictionary compression is not supported for blob files",
                 )));
             }

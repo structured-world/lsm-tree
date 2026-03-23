@@ -86,15 +86,21 @@ mod zstd_dict {
 
         tree.flush_active_memtable(0)?;
 
-        // Range scan should work correctly with dictionary compression
-        let count = tree
+        // Range scan should work correctly with dictionary compression.
+        // AbstractTree::range returns IterGuardImpl (infallible iteration over
+        // visible snapshot); errors would surface as panics inside the iterator.
+        let items: Vec<_> = tree
             .range(
                 "key-00010".as_bytes()..="key-00020".as_bytes(),
                 lsm_tree::MAX_SEQNO,
                 None,
             )
-            .count();
-        assert_eq!(count, 11, "range scan should return 11 items (inclusive)");
+            .collect();
+        assert_eq!(
+            items.len(),
+            11,
+            "range scan should return 11 items (inclusive)"
+        );
 
         Ok(())
     }
