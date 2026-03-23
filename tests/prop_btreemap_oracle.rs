@@ -177,7 +177,9 @@ fn run_oracle_test(ops: Vec<Op>) -> Result<(), TestCaseError> {
     }
 
     // Verify point reads.
-    let read_seqno = seqno_counter.get();
+    // Use visible_seqno — it tracks the visibility watermark and won't
+    // drift ahead of what the tree considers readable.
+    let read_seqno = visible_seqno.get();
     for idx in 0..KEY_SPACE {
         let key = key_from_idx(idx);
         let expected = oracle.get(&key, read_seqno);

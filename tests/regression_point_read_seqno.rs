@@ -72,7 +72,7 @@ fn with_post_compact_flush() -> lsm_tree::Result<()> {
     tree.insert(&k, &v1, s);
     visible_seqno.fetch_max(s + 1);
 
-    let read_seqno = seqno.get();
+    let read_seqno = visible_seqno.get();
     assert_eq!(
         tree.get(&k, read_seqno)?.as_ref().map(|v| v.to_vec()),
         Some(v1),
