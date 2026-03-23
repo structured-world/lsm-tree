@@ -1433,15 +1433,15 @@ impl Tree {
     /// Creates a new LSM-tree in a directory.
     fn create_new(config: Config) -> crate::Result<Self> {
         use crate::file::{fsync_directory, TABLES_FOLDER};
-        use std::fs::create_dir_all;
+        use crate::fs::Fs;
 
         let path = config.path.clone();
         log::trace!("Creating LSM-tree at {}", path.display());
 
-        create_dir_all(&path)?;
+        (*config.fs).create_dir_all(&path)?;
 
         let table_folder_path = path.join(TABLES_FOLDER);
-        create_dir_all(&table_folder_path)?;
+        (*config.fs).create_dir_all(&table_folder_path)?;
 
         // IMPORTANT: fsync folders on Unix
         fsync_directory(&table_folder_path, &*config.fs)?;
@@ -1462,7 +1462,7 @@ impl Tree {
         config: &Config,
         #[cfg(feature = "metrics")] metrics: &Arc<Metrics>,
     ) -> crate::Result<Version> {
-        use crate::{file::fsync_directory, file::TABLES_FOLDER, TableId};
+        use crate::{file::fsync_directory, file::TABLES_FOLDER, fs::Fs, TableId};
 
         let tree_path = tree_path.as_ref();
 
@@ -1511,7 +1511,7 @@ impl Tree {
         let table_base_folder = tree_path.join(TABLES_FOLDER);
 
         if !table_base_folder.try_exists()? {
-            std::fs::create_dir_all(&table_base_folder)?;
+            (*config.fs).create_dir_all(&table_base_folder)?;
             fsync_directory(&table_base_folder, &*config.fs)?;
         }
 

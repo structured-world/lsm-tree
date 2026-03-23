@@ -52,6 +52,8 @@ pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &impl Fs) -> std::io::Res
     )]
     let folder = path.parent().expect("should have a parent");
 
+    // NOTE: tempfile crate uses std::fs internally; migrating temp-file
+    // creation to Fs would require a custom implementation.
     let mut temp_file = tempfile::NamedTempFile::new_in(folder)?;
     temp_file.write_all(content)?;
     temp_file.flush()?;
