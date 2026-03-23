@@ -98,7 +98,7 @@ impl FsFile for File {
 
                 #[cfg(not(any(unix, windows)))]
                 {
-                    let _ = (buf, offset);
+                    let _ = (remaining, off);
                     return Err(io::Error::new(
                         io::ErrorKind::Unsupported,
                         "read_at is not supported on this platform",
