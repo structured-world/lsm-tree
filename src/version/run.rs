@@ -575,12 +575,14 @@ mod tests {
             }
         }
 
-        // Reverse order: z..p, o..k, j..e, d..a
+        // Reverse comparator: tables store (comparator_min, comparator_max).
+        // In reverse order "z" < "p" < "o" < ... < "a", so key ranges are
+        // (z,p), (o,k), (j,e), (d,a) — matching production SST metadata.
         let items = vec![
-            s(0, "p", "z"),
-            s(1, "k", "o"),
-            s(2, "e", "j"),
-            s(3, "a", "d"),
+            s(0, "z", "p"),
+            s(1, "o", "k"),
+            s(2, "j", "e"),
+            s(3, "d", "a"),
         ];
         let run = Run(items);
         let cmp = ReverseCmp;
