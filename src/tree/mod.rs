@@ -1510,7 +1510,7 @@ impl Tree {
 
         let table_base_folder = tree_path.join(TABLES_FOLDER);
 
-        if !table_base_folder.try_exists()? {
+        if !config.fs.exists(&table_base_folder)? {
             (*config.fs).create_dir_all(&table_base_folder)?;
             fsync_directory(&table_base_folder, &*config.fs)?;
         }
