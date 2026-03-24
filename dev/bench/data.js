@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774314248595,
+  "lastUpdate": 1774317176325,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -2652,6 +2652,84 @@ window.BENCHMARK_DATA = {
             "value": 520530.1272453073,
             "unit": "ops/sec",
             "extra": "P50: 1.6us | P99: 7.8us | P99.9: 12.8us\nthreads: 1 | elapsed: 0.38s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "distinct": true,
+          "id": "18e6cb5a1136e828984fc80dfbb5c58863c2a4c6",
+          "message": "chore: switch to Apache-2.0 license + fix post-rename references\n\n- License: MIT OR Apache-2.0 → Apache-2.0 (patent grant protection)\n- Remove LICENSE-MIT, add copyright appendix to LICENSE-APACHE\n- src/lib.rs: doc logo/favicon URLs → coordinode-lsm-tree repo\n- CONTRIBUTING.md: issues link → coordinode-lsm-tree\n- FUNDING.yml: fjall-rs → structured-world\n- Cargo.toml: update license + include fields",
+          "timestamp": "2026-03-24T03:51:54+02:00",
+          "tree_id": "b2b4dac1ba95ae4c992ebe9ea1a3798590e8e352",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/18e6cb5a1136e828984fc80dfbb5c58863c2a4c6"
+        },
+        "date": 1774317175200,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1831024.7254804138,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 2.8us | P99.9: 6.1us\nthreads: 1 | elapsed: 0.11s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1180392.7695560274,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 1.8us | P99.9: 6.8us\nthreads: 1 | elapsed: 0.17s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 547993.9604270436,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 6.6us | P99.9: 13.4us\nthreads: 1 | elapsed: 0.36s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2172430.5249386174,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 5.1us | P99.9: 9.0us\nthreads: 1 | elapsed: 0.09s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 373457.67651487817,
+            "unit": "ops/sec",
+            "extra": "P50: 2.3us | P99: 7.2us | P99.9: 14.8us\nthreads: 1 | elapsed: 0.54s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 184424.68778583236,
+            "unit": "ops/sec",
+            "extra": "P50: 5.1us | P99: 6.7us | P99.9: 17.1us\nthreads: 1 | elapsed: 1.08s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1100695.5410697053,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 3.3us | P99.9: 7.5us\nthreads: 1 | elapsed: 0.18s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 724749.5630602656,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 2.5us | P99.9: 5.1us\nthreads: 1 | elapsed: 0.28s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 480323.90469596564,
+            "unit": "ops/sec",
+            "extra": "P50: 1.8us | P99: 10.7us | P99.9: 16.9us\nthreads: 1 | elapsed: 0.42s | num: 200000"
           }
         ]
       }
