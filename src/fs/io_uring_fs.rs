@@ -758,17 +758,16 @@ mod tests {
     // Shadows #[test] to enable log capture in test output.
     use test_log::test;
 
-    /// Returns an `IoUringFs` or `None` if not available (e.g. old kernel,
-    /// container without io_uring access). Tests that call this gracefully
-    /// skip when io_uring is unavailable.
+    /// Returns an `IoUringFs`, skipping only if the kernel lacks io_uring.
+    /// Constructor bugs (e.g. broken `RingThread::spawn`) will panic the
+    /// test instead of silently skipping.
     fn try_io_uring() -> Option<IoUringFs> {
-        match IoUringFs::new() {
-            Ok(fs) => Some(fs),
-            Err(e) => {
-                eprintln!("skipping io_uring test: {e}");
-                None
-            }
+        if !is_io_uring_available() {
+            eprintln!("skipping: io_uring not supported by kernel");
+            return None;
         }
+        // Kernel supports io_uring — constructor failures are real bugs.
+        Some(IoUringFs::new().expect("io_uring available but IoUringFs::new() failed"))
     }
 
     #[test]
@@ -969,11 +968,19 @@ mod tests {
 
         let opts = FsOpenOptions::new().write(true).append(true);
         let mut file = fs.open(&path, &opts)?;
+        // Seek to start, then write — append mode must ignore seek and
+        // write at EOF regardless of cursor position.
+        file.seek(SeekFrom::Start(0))?;
         file.write_all(b"!")?;
         drop(file);
 
-        let meta = fs.metadata(&path)?;
-        assert_eq!(meta.len, 3);
+        // Verify append went to EOF (len=3), not to start (which would
+        // overwrite "hi" and keep len=2).
+        let mut file = fs.open(&path, &FsOpenOptions::new().read(true))?;
+        let mut buf = String::new();
+        file.read_to_string(&mut buf)?;
+        assert_eq!(buf, "hi!");
+        assert_eq!(fs.metadata(&path)?.len, 3);
 
         Ok(())
     }
@@ -1172,13 +1179,12 @@ mod tests {
 
     #[test]
     fn with_ring_size() -> io::Result<()> {
-        // Test non-default ring size.
-        let fs = IoUringFs::with_ring_size(64);
-        if fs.is_err() {
-            eprintln!("skipping: io_uring not available");
+        if !is_io_uring_available() {
+            eprintln!("skipping: io_uring not supported by kernel");
             return Ok(());
         }
-        let fs = fs?;
+        let fs = IoUringFs::with_ring_size(64)
+            .expect("io_uring available but with_ring_size(64) failed");
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("ring64.bin");
         let opts = FsOpenOptions::new().write(true).create(true);
