@@ -1,0 +1,63 @@
+name: Flamegraphs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  flamegraph:
+    name: Generate flamegraphs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: flamegraph
+
+      - name: Install inferno
+        run: cargo install inferno
+
+      - name: Run instrumented benchmarks
+        run: |
+          cargo run --release --manifest-path tools/db_bench/Cargo.toml \
+            --features flamegraph -- \
+            --benchmark all --num 100000 --flamegraph --skip-calibration
+
+      - name: Generate flamegraph SVGs
+        run: |
+          cd target/flamegraphs
+          # Split the combined folded-stacks file by workload span.
+          # Each line starts with "bench workload=<name>;..." — extract
+          # per-workload files and strip the root span for cleaner graphs.
+          for workload in $(grep -oP '(?<=workload=)\w+' all.folded | sort -u); do
+            grep "workload=${workload}" all.folded \
+              | sed "s/^bench workload=${workload} //" \
+              > "${workload}.folded"
+            inferno-flamegraph --title "${workload}" "${workload}.folded" \
+              > "${workload}.svg" || true
+          done
+          # Also generate a combined flamegraph with all workloads.
+          inferno-flamegraph --title "all workloads" all.folded > all.svg || true
+          # Clean up intermediate .folded files (keep all.folded for debugging).
+          rm -f *.folded
+
+      - name: Deploy to gh-pages
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/flamegraphs
+          destination_dir: flamegraphs/${{ github.sha }}
+          keep_files: true

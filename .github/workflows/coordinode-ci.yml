@@ -50,7 +50,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Run tests
         # tools/db_bench is a standalone crate, not in workspace — built separately
-        run: cargo nextest run --all-features
+        run: cargo nextest run --profile ci --all-features
         env:
           PROPTEST_CASES: "32"
       - name: Run doc tests
@@ -58,6 +58,11 @@ jobs:
       - name: Check db_bench crate
         working-directory: tools/db_bench
         run: cargo check --all-features
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always() && runner.os == 'Linux'
+        with:
+          files: target/nextest/ci/junit.xml
 
   cross:
     needs: lint
