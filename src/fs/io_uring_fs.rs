@@ -288,14 +288,7 @@ impl FsFile for IoUringFile {
             if n == 0 {
                 break; // EOF
             }
-            // io_uring is Linux-only where usize >= 32 bits.
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "u32 fits in usize on Linux"
-            )]
-            {
-                total_read += n as usize;
-            }
+            total_read += n as usize;
         }
 
         Ok(total_read)
@@ -315,11 +308,6 @@ impl Read for IoUringFile {
         let cursor = self.cursor.get_mut();
         let n = self.ring.submit_read(self.file.as_raw_fd(), buf, *cursor)?;
         *cursor += u64::from(n);
-        // io_uring is Linux-only where usize >= 32 bits.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "u32 fits in usize on Linux"
-        )]
         Ok(n as usize)
     }
 }
@@ -451,13 +439,7 @@ impl RingThread {
         let ring = IoUring::new(sq_entries)?;
         // Bound the submission channel to ring capacity — provides
         // natural backpressure when callers outpace the I/O thread.
-        // io_uring is Linux-only where usize >= 32 bits.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "u32 fits in usize on Linux"
-        )]
-        let channel_cap = sq_entries as usize;
-        let (tx, rx) = mpsc::sync_channel(channel_cap);
+        let (tx, rx) = mpsc::sync_channel(sq_entries as usize);
 
         // If event_loop panics after submitting SQEs, those SQEs still
         // reference caller buffers. catch_unwind + abort is used, and
