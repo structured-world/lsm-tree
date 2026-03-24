@@ -59,6 +59,10 @@ fn scan_vs_query(c: &mut Criterion) {
     let mut group = c.benchmark_group("scan vs query");
 
     for size in [10_000, 100_000] {
+        // Query window must fit within the key space [0, size).
+        let query_end = size as u64;
+        let query_start = query_end - 10;
+
         let path = tempdir().unwrap();
 
         let tree = Config::new(path)
@@ -86,7 +90,7 @@ fn scan_vs_query(c: &mut Criterion) {
                             let buf = &key[..8];
                             let (int_bytes, _rest) = buf.split_at(std::mem::size_of::<u64>());
                             let num = u64::from_be_bytes(int_bytes.try_into().unwrap());
-                            (60000..60010).contains(&num)
+                            (query_start..query_end).contains(&num)
                         }
                         Err(_) => false,
                     })
@@ -98,8 +102,8 @@ fn scan_vs_query(c: &mut Criterion) {
             b.iter(|| {
                 let iter = tree.range(
                     (
-                        Included(60000_u64.to_be_bytes().to_vec()),
-                        Excluded(60010_u64.to_be_bytes().to_vec()),
+                        Included(query_start.to_be_bytes().to_vec()),
+                        Excluded(query_end.to_be_bytes().to_vec()),
                     ),
                     None,
                     None,
@@ -112,8 +116,8 @@ fn scan_vs_query(c: &mut Criterion) {
             b.iter(|| {
                 let iter = tree.range(
                     (
-                        Included(60000_u64.to_be_bytes().to_vec()),
-                        Excluded(60010_u64.to_be_bytes().to_vec()),
+                        Included(query_start.to_be_bytes().to_vec()),
+                        Excluded(query_end.to_be_bytes().to_vec()),
                     ),
                     None,
                     None,
