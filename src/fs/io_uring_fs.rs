@@ -30,11 +30,14 @@ const DEFAULT_SQ_ENTRIES: u32 = 256;
 
 /// Probes whether `io_uring` is supported on the running kernel.
 ///
-/// Creates a minimal ring with 2 entries and immediately drops it.
-/// Returns `false` on any failure (old kernel, seccomp restrictions, etc.).
+/// Creates a minimal 2-entry ring and immediately drops it. This tests
+/// kernel support without hitting `memlock` rlimits that a full-sized
+/// ring might exceed in constrained environments (containers, etc.).
+/// [`IoUringFs::new`] may still fail if the default ring size exceeds
+/// the process's resource limits.
 #[must_use]
 pub fn is_io_uring_available() -> bool {
-    IoUring::new(DEFAULT_SQ_ENTRIES).is_ok()
+    IoUring::new(2).is_ok()
 }
 
 // ---------------------------------------------------------------------------
