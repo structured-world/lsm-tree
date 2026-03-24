@@ -395,9 +395,10 @@ fn all_tables_folders_dedup_same_path_and_fs() {
     assert_eq!(folders.len(), 2);
 }
 
-// Different Fs instances on same path are NOT deduplicated (safety).
+// Same path with different Fs instances IS deduplicated (by path).
+// Scanning the same directory twice would orphan-delete live SSTs.
 #[test]
-fn all_tables_folders_different_fs_same_path_not_deduped() {
+fn all_tables_folders_same_path_different_fs_deduped() {
     let dir = tempfile::tempdir().unwrap();
 
     let config = Config::new(
@@ -409,18 +410,18 @@ fn all_tables_folders_different_fs_same_path_not_deduped() {
         LevelRoute {
             levels: 0..2,
             path: dir.path().join("shared"),
-            fs: Arc::new(StdFs), // different Arc
+            fs: Arc::new(StdFs),
         },
         LevelRoute {
             levels: 2..5,
-            path: dir.path().join("shared"), // same path, different Arc<StdFs>
+            path: dir.path().join("shared"), // same path, different Arc
             fs: Arc::new(StdFs),
         },
     ]);
 
     let folders = config.all_tables_folders();
-    // primary + shared(fs1) + shared(fs2) = 3 (not deduped — different Fs ptrs)
-    assert_eq!(folders.len(), 3);
+    // primary + shared = 2 (duplicate path deduplicated to prevent double scan)
+    assert_eq!(folders.len(), 2);
 }
 
 // Same-device Move stays as Move (no unnecessary rewrite).

@@ -562,10 +562,9 @@ impl<F: Fs> Config<F> {
         if let Some(routes) = &self.level_routes {
             for route in routes {
                 let folder = route.path.join(TABLES_FOLDER);
-                if !folders
-                    .iter()
-                    .any(|(p, fs)| p == &folder && Arc::ptr_eq(fs, &route.fs))
-                {
+                // Dedup by path: scanning the same directory twice would cause
+                // already-recovered tables to be classified as orphans and deleted.
+                if !folders.iter().any(|(p, _)| *p == folder) {
                     folders.push((folder, route.fs.clone()));
                 }
             }

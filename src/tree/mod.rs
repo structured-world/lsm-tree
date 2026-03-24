@@ -1449,13 +1449,17 @@ impl Tree {
         (*config.fs).create_dir_all(&path)?;
 
         // Create tables directories for all configured paths (primary + routes).
-        // Fsync both the tables dir AND its parent to make the directory entry
-        // durable on POSIX (crash between mkdir and parent fsync loses the entry).
+        // create_dir_all may create both <route> and <route>/tables.
+        // Fsync the tables dir, its parent (route dir), AND the route's parent
+        // to make all newly-created directory entries durable on POSIX.
         for (table_folder_path, folder_fs) in config.all_tables_folders() {
             folder_fs.create_dir_all(&table_folder_path)?;
             fsync_directory(&table_folder_path, &*folder_fs)?;
             if let Some(parent) = table_folder_path.parent() {
                 fsync_directory(parent, &*folder_fs)?;
+                if let Some(grandparent) = parent.parent() {
+                    fsync_directory(grandparent, &*folder_fs)?;
+                }
             }
         }
 
@@ -1537,6 +1541,9 @@ impl Tree {
                 fsync_directory(table_base_folder, &**folder_fs)?;
                 if let Some(parent) = table_base_folder.parent() {
                     fsync_directory(parent, &**folder_fs)?;
+                    if let Some(grandparent) = parent.parent() {
+                        fsync_directory(grandparent, &**folder_fs)?;
+                    }
                 }
             }
 
