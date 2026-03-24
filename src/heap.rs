@@ -346,6 +346,46 @@ mod tests {
     }
 
     #[test]
+    fn replace_min_into_tie() {
+        let cmp = comparator::default_comparator();
+        let mut heap = MergeHeap::with_capacity(4, cmp);
+
+        // Source 0 has key "a", source 1 has key "b".
+        heap.push(entry_src("a", 0, 0));
+        heap.push(entry_src("b", 0, 1));
+
+        // Replace source 0's "a" with "b" — now ties with source 1.
+        // Source 0 (lower index) must still sort before source 1.
+        let old = heap.replace_min(entry_src("b", 0, 0));
+        assert_eq!(&*old.value.key.user_key, b"a");
+
+        let first = heap.pop_min().unwrap();
+        let second = heap.pop_min().unwrap();
+        assert_eq!(first.index, 0, "lower source index wins on tie");
+        assert_eq!(second.index, 1);
+    }
+
+    #[test]
+    fn replace_max_into_tie() {
+        let cmp = comparator::default_comparator();
+        let mut heap = MergeHeap::with_capacity(4, cmp);
+
+        // Source 0 has key "a", source 1 has key "b".
+        heap.push(entry_src("a", 0, 0));
+        heap.push(entry_src("b", 0, 1));
+
+        // Replace source 1's "b" with "a" — now ties with source 0.
+        // Source 0 (lower index) must still sort first.
+        let old = heap.replace_max(entry_src("a", 0, 1));
+        assert_eq!(&*old.value.key.user_key, b"b");
+
+        let first = heap.pop_min().unwrap();
+        let second = heap.pop_min().unwrap();
+        assert_eq!(first.index, 0, "lower source index wins on tie");
+        assert_eq!(second.index, 1);
+    }
+
+    #[test]
     fn empty_heap() {
         let cmp = comparator::default_comparator();
         let heap = MergeHeap::with_capacity(0, cmp);

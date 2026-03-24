@@ -272,4 +272,39 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "test assertions")]
+    fn merge_mixed_direction() -> crate::Result<()> {
+        // Two sources with non-overlapping keys: a,c,e and b,d,f.
+        // Interleave next() and next_back() to exercise shared heap state.
+        let a = vec![
+            Ok(InternalValue::from_components("a", b"", 0, Value)),
+            Ok(InternalValue::from_components("c", b"", 0, Value)),
+            Ok(InternalValue::from_components("e", b"", 0, Value)),
+        ];
+        let b = vec![
+            Ok(InternalValue::from_components("b", b"", 0, Value)),
+            Ok(InternalValue::from_components("d", b"", 0, Value)),
+            Ok(InternalValue::from_components("f", b"", 0, Value)),
+        ];
+
+        let mut iter = Merger::new(
+            vec![a.into_iter(), b.into_iter()],
+            comparator::default_comparator(),
+        );
+
+        // Consume from both ends, meeting in the middle.
+        let k = |v: InternalValue| String::from_utf8_lossy(&v.key.user_key).to_string();
+
+        assert_eq!(k(iter.next().unwrap()?), "a");
+        assert_eq!(k(iter.next_back().unwrap()?), "f");
+        assert_eq!(k(iter.next().unwrap()?), "b");
+        assert_eq!(k(iter.next_back().unwrap()?), "e");
+        assert_eq!(k(iter.next().unwrap()?), "c");
+        assert_eq!(k(iter.next_back().unwrap()?), "d");
+        assert!(iter.next().is_none(), "should be exhausted");
+
+        Ok(())
+    }
 }
