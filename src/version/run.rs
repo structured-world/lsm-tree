@@ -695,6 +695,16 @@ mod tests {
     }
 
     #[test]
+    fn push_lexicographic_sorts_by_min_key() {
+        let mut run = Run::new(vec![s(0, "e", "j")]).unwrap();
+
+        // Insert a table whose min key is lexicographically before "e"
+        run.push_lexicographic(s(1, "a", "d"));
+        assert_eq!(1, run[0].id); // "a" sorts first
+        assert_eq!(0, run[1].id); // "e" sorts second
+    }
+
+    #[test]
     fn push_cmp_sorts_by_comparator() {
         let mut run = Run::new(vec![s(0, "a", "d")]).unwrap();
 
