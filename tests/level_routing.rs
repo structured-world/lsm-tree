@@ -711,13 +711,16 @@ fn missing_table_without_routes_returns_unrecoverable() -> lsm_tree::Result<()> 
 
     // Phase 2: delete a table file to simulate corruption
     let tables_dir = dir.path().join("primary").join("tables");
+    let mut deleted = false;
     for entry in std::fs::read_dir(&tables_dir)? {
         let entry = entry?;
         if entry.file_type()?.is_file() {
             std::fs::remove_file(entry.path())?;
-            break; // remove just one
+            deleted = true;
+            break;
         }
     }
+    assert!(deleted, "expected to delete at least one table file");
 
     // Phase 3: reopen without routes — should get Unrecoverable, not RouteMismatch
     {
@@ -753,13 +756,19 @@ fn deleted_sst_with_routes_configured_returns_unrecoverable() -> lsm_tree::Resul
 
     // Phase 2: delete a table file from the hot tier (simulates corruption)
     let hot_tables_dir = dir.path().join("hot").join("tables");
+    let mut deleted = false;
     for entry in std::fs::read_dir(&hot_tables_dir)? {
         let entry = entry?;
         if entry.file_type()?.is_file() {
             std::fs::remove_file(entry.path())?;
+            deleted = true;
             break;
         }
     }
+    assert!(
+        deleted,
+        "expected to delete at least one table file from hot tier"
+    );
 
     // Phase 3: reopen WITH THE SAME routes — L0 is covered by hot route,
     // so the missing table is corruption, NOT a route mismatch
