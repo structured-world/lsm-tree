@@ -84,11 +84,12 @@ Uses [`bytes`](https://github.com/tokio-rs/bytes) as the underlying `Slice` type
 
 ## Benchmarks
 
-Benchmarks run on every push to `main` and on pull requests. Results from `main`
-are published to the [benchmark dashboard](https://structured-world.github.io/coordinode-lsm-tree/dev/bench/).
+CI runs [`db_bench`](tools/db_bench) on every push to `main` and on pull requests.
+Results from `main` are published to the
+[benchmark dashboard](https://structured-world.github.io/coordinode-lsm-tree/dev/bench/).
 PRs that regress performance by >15% trigger an alert; >25% regression fails CI.
 
-To run benchmarks locally:
+To run Criterion microbenchmarks locally:
 
 ```bash
 cargo bench --features lz4
