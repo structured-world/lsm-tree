@@ -464,6 +464,94 @@ fn same_device_move_not_converted() -> lsm_tree::Result<()> {
     Ok(())
 }
 
+// Leveled compaction with cross-device routing: tables at L1 (hot) must be
+// rewritten to L2 (cold) rather than trivially moved. Leveled naturally picks
+// Move when a single table has no overlap at the next level, so we set up
+// exactly that scenario across the hot→cold boundary.
+#[test]
+fn leveled_compaction_across_device_boundary() -> lsm_tree::Result<()> {
+    use lsm_tree::compaction::Leveled;
+
+    let dir = tempfile::tempdir()?;
+    let config = two_tier_config(dir.path());
+    let tree = config.open()?;
+
+    // Flush several segments to build up L0 in the hot tier
+    for i in 0u64..20 {
+        tree.insert(format!("key{i:04}"), "x".repeat(200), i);
+        if i % 4 == 3 {
+            tree.flush_active_memtable(0)?;
+        }
+    }
+
+    // Run leveled compaction repeatedly — this will push data through
+    // L0 → L1 (both hot) → L2 (cold/primary), triggering the cross-device
+    // Move→Merge conversion when Leveled tries to trivially move L1→L2.
+    for _ in 0..15 {
+        tree.compact(Arc::new(Leveled::default()), u64::MAX)?;
+    }
+
+    // Data must be fully readable after cross-device compactions
+    for i in 0u64..20 {
+        let key = format!("key{i:04}");
+        assert!(
+            tree.get(&key, lsm_tree::SeqNo::MAX)?.is_some(),
+            "key {key} missing after leveled cross-device compaction"
+        );
+    }
+
+    Ok(())
+}
+
+// Orphaned table files in a routed tier directory are cleaned up via the Fs
+// trait during recovery (not std::fs).
+#[test]
+fn recovery_cleans_orphaned_tables_in_routed_tier() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    // Phase 1: create a tree and flush data
+    {
+        let config = two_tier_config(dir.path());
+        let tree = config.open()?;
+        tree.insert("x", "val", 0);
+        tree.flush_active_memtable(0)?;
+    }
+
+    // Plant an orphan file in the hot tier tables directory
+    let hot_tables = dir.path().join("hot").join("tables");
+    let orphan_path = hot_tables.join("999999");
+    // Write a minimal file (non-empty so it's a valid "table file" by name)
+    std::fs::write(&orphan_path, b"orphan")?;
+    assert!(orphan_path.exists());
+
+    // Phase 2: reopen — recovery should delete the orphan
+    {
+        let config = two_tier_config(dir.path());
+        let _tree = config.open()?;
+    }
+
+    assert!(
+        !orphan_path.exists(),
+        "orphaned table file should be cleaned up during recovery"
+    );
+
+    Ok(())
+}
+
+// create_new creates tables/ directories for all level routes.
+#[test]
+fn create_new_creates_all_tier_directories() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let config = three_tier_config(dir.path());
+    let _tree = config.open()?;
+
+    assert!(dir.path().join("hot").join("tables").exists());
+    assert!(dir.path().join("warm").join("tables").exists());
+    assert!(dir.path().join("primary").join("tables").exists());
+
+    Ok(())
+}
+
 #[test]
 #[should_panic(expected = "overlapping level routes")]
 fn overlapping_routes_panic() {
