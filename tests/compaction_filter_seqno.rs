@@ -34,7 +34,7 @@ impl Factory for SeqnoCollectorFactory {
 }
 
 #[test]
-fn compaction_filter_seqno_visible() -> lsm_tree::Result<()> {
+fn compaction_filter_seqno_matches_insert_time_value() -> lsm_tree::Result<()> {
     let folder = get_tmp_folder();
 
     let seqno_counter = SequenceNumberCounter::default();
@@ -81,7 +81,7 @@ fn compaction_filter_seqno_visible() -> lsm_tree::Result<()> {
 }
 
 #[test]
-fn compaction_filter_seqno_retention() -> lsm_tree::Result<()> {
+fn compaction_filter_seqno_below_cutoff_removes_item() -> lsm_tree::Result<()> {
     let folder = get_tmp_folder();
 
     let seqno_counter = SequenceNumberCounter::default();
