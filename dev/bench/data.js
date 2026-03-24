@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774324081499,
+  "lastUpdate": 1774326599292,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -3276,6 +3276,84 @@ window.BENCHMARK_DATA = {
             "value": 548624.2188866674,
             "unit": "ops/sec",
             "extra": "P50: 1.5us | P99: 7.7us | P99.9: 13.4us\nthreads: 1 | elapsed: 0.36s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3066d12f597cc4e818f41d15073f626fd4cf21c4",
+          "message": "refactor(version): comparator API cleanup — TransformContext + rename Run::push() (#153)\n\n## Summary\n\n- Introduce `TransformContext` struct bundling the comparator reference\nthreaded through `Version` transformation methods (`with_new_l0_run`,\n`with_merge`, `with_moved`, `with_dropped`)\n- Rename `Run::push()` → `Run::push_lexicographic()` to make the\nbyte-ordering precondition explicit at call sites\n\n## Technical Details\n\n`TransformContext<'a>` currently holds `&'a dyn UserComparator`. All\nfour `Version` mutators now accept `&TransformContext` instead of a bare\n`&dyn UserComparator`, giving a single extension point for future\ncontext parameters without further signature churn.\n\n`Run::push()` was renamed because the old name gave no indication that\nit assumes lexicographic key ordering — `push_cmp` exists for custom\ncomparators, and the naming asymmetry was misleading.\n\n## Test Plan\n\n- [x] `cargo test --workspace` — all tests pass\n- [x] `cargo clippy --workspace` — clean\n- [x] `cargo build` — clean\n\nCloses #113",
+          "timestamp": "2026-03-24T06:28:43+02:00",
+          "tree_id": "ac79a3190f4b86f1b863e6f6cfa2e14fba6bd996",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/3066d12f597cc4e818f41d15073f626fd4cf21c4"
+        },
+        "date": 1774326598345,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1994508.5395830513,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1315595.4752830067,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.3us | P99.9: 4.8us\nthreads: 1 | elapsed: 0.15s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 639319.191550195,
+            "unit": "ops/sec",
+            "extra": "P50: 1.4us | P99: 5.4us | P99.9: 11.2us\nthreads: 1 | elapsed: 0.31s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2448579.9735908406,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 4.2us | P99.9: 8.8us\nthreads: 1 | elapsed: 0.08s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 414655.0746910308,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 6.3us | P99.9: 12.4us\nthreads: 1 | elapsed: 0.48s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 196719.9077982448,
+            "unit": "ops/sec",
+            "extra": "P50: 4.8us | P99: 7.1us | P99.9: 14.8us\nthreads: 1 | elapsed: 1.02s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1208841.3982919895,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.7us | P99.9: 6.0us\nthreads: 1 | elapsed: 0.17s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 691117.3813733816,
+            "unit": "ops/sec",
+            "extra": "P50: 0.4us | P99: 0.6us | P99.9: 4.3us\nthreads: 1 | elapsed: 0.29s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 529140.8067947987,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 8.8us | P99.9: 15.3us\nthreads: 1 | elapsed: 0.38s | num: 200000"
           }
         ]
       }
