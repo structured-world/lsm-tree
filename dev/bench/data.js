@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774383352412,
+  "lastUpdate": 1774389700646,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -3978,6 +3978,84 @@ window.BENCHMARK_DATA = {
             "value": 344268.30829649814,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 513696 ops/sec | factor: 0.670 | P50: 1.8us | P99: 4.3us | P99.9: 12.2us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a07c582aab3efad5bc8c4fad56f838caa3d3c29",
+          "message": "feat(error): RouteMismatch error, blocked_bloom cleanup, bench/clippy fixes (#166)\n\n## Summary\n\n- Add `Error::RouteMismatch { expected, found }` with level-based\ndetection — only returned when ALL missing tables are on levels not\ncovered by any current route (prevents masking genuine SST corruption)\n- Remove unfinished `blocked_bloom` module entirely (upstream\nfjall-rs/lsm-tree#78 still open, never integrated into Segment loader);\npreserve `FilterType::BlockedBloom` enum variant for on-disk format\ncompatibility\n- Fix never-looping `for` loops in `prop_mvcc` and\n`prop_range_tombstone` oracle `get()` methods\n- Update/remove benchmarks for current public API (`Config` 3-arg\nconstructor, `Cache`, `use_cache`, `SeqNo` params,\n`IterGuardImpl`/`Guard` pattern); remove 4 dead bench targets; fix\nTempDir lifetime\n- Convert `#[allow]` → `#[expect]` with reason strings in 14 test\nmodules\n- Fix `map_or` → `is_none_or` and needless borrow warnings in test code\n- Update `level_routes` reopen contract doc to mention `RouteMismatch`\n\n## Test plan\n\n- [x] `cargo test --test level_routing` — 24 passed (4 new: route\nmismatch, unrecoverable without routes, unrecoverable with routes, mixed\ncovered+uncovered)\n- [x] `cargo test --test prop_mvcc` — 1 passed\n- [x] `cargo test --test prop_range_tombstone` — 1 passed\n- [x] `cargo clippy --all-targets --all-features` — 0 errors\n- [x] codecov patch coverage — 100%\n\nCloses #164",
+          "timestamp": "2026-03-25T00:00:31+02:00",
+          "tree_id": "24474276a4910e71a7686a4e9d3f3d6056ae8a45",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/8a07c582aab3efad5bc8c4fad56f838caa3d3c29"
+        },
+        "date": 1774389699660,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1523659.8930085925,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1880643 ops/sec | factor: 0.810 | P50: 0.4us | P99: 2.7us | P99.9: 6.2us\nthreads: 1 | elapsed: 0.11s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          },
+          {
+            "name": "fillrandom",
+            "value": 834252.3138888007,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1029712 ops/sec | factor: 0.810 | P50: 0.7us | P99: 3.4us | P99.9: 9.1us\nthreads: 1 | elapsed: 0.19s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          },
+          {
+            "name": "readrandom",
+            "value": 398693.7800676338,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 492105 ops/sec | factor: 0.810 | P50: 1.8us | P99: 6.8us | P99.9: 13.8us\nthreads: 1 | elapsed: 0.41s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          },
+          {
+            "name": "readseq",
+            "value": 1807817.193045485,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2231376 ops/sec | factor: 0.810 | P50: 0.2us | P99: 5.4us | P99.9: 10.4us\nthreads: 1 | elapsed: 0.09s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          },
+          {
+            "name": "seekrandom",
+            "value": 279663.62204352143,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 345187 ops/sec | factor: 0.810 | P50: 2.5us | P99: 7.5us | P99.9: 14.9us\nthreads: 1 | elapsed: 0.58s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          },
+          {
+            "name": "prefixscan",
+            "value": 159709.33519938338,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 197128 ops/sec | factor: 0.810 | P50: 4.8us | P99: 6.3us | P99.9: 16.4us\nthreads: 1 | elapsed: 1.01s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          },
+          {
+            "name": "overwrite",
+            "value": 844372.496038282,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1042203 ops/sec | factor: 0.810 | P50: 0.7us | P99: 3.4us | P99.9: 8.9us\nthreads: 1 | elapsed: 0.19s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          },
+          {
+            "name": "mergerandom",
+            "value": 588041.4887649999,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 725815 ops/sec | factor: 0.810 | P50: 0.4us | P99: 2.5us | P99.9: 3.8us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 358243.69268951827,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 442178 ops/sec | factor: 0.810 | P50: 2.1us | P99: 5.0us | P99.9: 13.9us\nthreads: 1 | elapsed: 0.45s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
           }
         ]
       }
