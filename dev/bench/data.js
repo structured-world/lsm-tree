@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774364343703,
+  "lastUpdate": 1774366057297,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -3588,6 +3588,84 @@ window.BENCHMARK_DATA = {
             "value": 475673.37166813575,
             "unit": "ops/sec",
             "extra": "P50: 1.8us | P99: 8.1us | P99.9: 16.2us\nthreads: 1 | elapsed: 0.42s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "distinct": true,
+          "id": "121006dc0908b86cde49ad295e7f8462b5830e12",
+          "message": "ci: add release-plz 'release' step for auto-tagging and GitHub Release\n\nPreviously only 'release-pr' ran — created PR but never created\nGitHub Release + tag after merge. Added 'release' step that checks\nif Cargo.toml version > latest tag → creates tag + release →\ntriggers release.yml → cargo publish via OIDC.\n\nFlow: push main → release-pr (creates/updates PR) → release\n(creates tag + GitHub Release if version bumped) → release.yml\n(cargo publish)",
+          "timestamp": "2026-03-24T17:26:24+02:00",
+          "tree_id": "0143b459dd08b4769eda7075a9d236ac14de6fdd",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/121006dc0908b86cde49ad295e7f8462b5830e12"
+        },
+        "date": 1774366056267,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 2031915.520592656,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1150838.4971888268,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.3us | P99.9: 6.7us\nthreads: 1 | elapsed: 0.17s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 487975.99456748035,
+            "unit": "ops/sec",
+            "extra": "P50: 1.9us | P99: 5.9us | P99.9: 12.7us\nthreads: 1 | elapsed: 0.41s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2470583.564437896,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 4.4us | P99.9: 8.8us\nthreads: 1 | elapsed: 0.08s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 349781.25406167086,
+            "unit": "ops/sec",
+            "extra": "P50: 2.5us | P99: 6.7us | P99.9: 13.7us\nthreads: 1 | elapsed: 0.57s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 199042.95965097658,
+            "unit": "ops/sec",
+            "extra": "P50: 4.7us | P99: 7.0us | P99.9: 16.2us\nthreads: 1 | elapsed: 1.00s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1092135.7619112586,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.9us | P99.9: 6.7us\nthreads: 1 | elapsed: 0.18s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 675587.6803803061,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.1us | P99.9: 2.8us\nthreads: 1 | elapsed: 0.30s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 447665.7997887053,
+            "unit": "ops/sec",
+            "extra": "P50: 2.0us | P99: 8.0us | P99.9: 13.7us\nthreads: 1 | elapsed: 0.45s | num: 200000"
           }
         ]
       }
