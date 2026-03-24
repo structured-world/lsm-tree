@@ -237,6 +237,10 @@ fn run_single(
         let db_path = match &cli.db {
             Some(p) if iterations > 1 => {
                 let sub = p.join(format!("iter-{iter}"));
+                // Clean previous data so each iteration starts fresh.
+                if sub.exists() {
+                    std::fs::remove_dir_all(&sub)?;
+                }
                 std::fs::create_dir_all(&sub)?;
                 sub
             }

@@ -54,6 +54,15 @@ impl std::fmt::Display for CalibrationScore {
 /// Run the calibration workload (~5 s) and return the score.
 ///
 /// Uses a temporary file for IO tests — no external dependencies beyond std.
+///
+/// IO tests intentionally run on the system temp filesystem (not `--db` path)
+/// because calibration measures runner-level capability for cross-runner
+/// normalization, not the performance of a specific mount point.
+///
+/// Random reads hit page cache (the file was just written), which matches
+/// how LSM-tree benchmarks behave — block cache and OS page cache are the
+/// hot path.  The goal is a stable, reproducible score per runner, not
+/// absolute storage latency.
 pub fn run_calibration() -> std::io::Result<CalibrationScore> {
     eprintln!("=== calibration ===");
 
