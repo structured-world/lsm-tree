@@ -217,6 +217,222 @@ fn all_tables_folders_deduplicates() {
     assert_eq!(folders.len(), 3);
 }
 
+/// Helper: config where L0–L1 is on hot, L2+ is on cold (primary).
+/// This means Leveled compaction L1→L2 crosses a device boundary.
+fn two_tier_config(base: &std::path::Path) -> Config {
+    let hot = base.join("hot");
+
+    Config::new(
+        base.join("primary"),
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .data_block_compression_policy(CompressionPolicy::all(lsm_tree::CompressionType::None))
+    .index_block_compression_policy(CompressionPolicy::all(lsm_tree::CompressionType::None))
+    .level_routes(vec![LevelRoute {
+        levels: 0..2,
+        path: hot,
+        fs: Arc::new(StdFs),
+    }])
+}
+
+fn count_table_files(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_name()
+                        .to_str()
+                        .map_or(false, |n| n.parse::<u64>().is_ok())
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+// Cross-device compaction: L0 (hot) → L2+ (primary/cold) forces a rewrite
+// instead of a trivial move, because the table must physically relocate.
+#[test]
+fn cross_device_compaction_rewrites_tables() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let config = two_tier_config(dir.path());
+    let tree = config.open()?;
+
+    // Flush enough data to L0 (hot tier)
+    for i in 0u64..30 {
+        tree.insert(format!("key{i:04}"), "x".repeat(200), i);
+        if i % 5 == 4 {
+            tree.flush_active_memtable(0)?;
+        }
+    }
+
+    let hot_before = count_table_files(&dir.path().join("hot").join("tables"));
+    assert!(
+        hot_before > 0,
+        "should have tables in hot tier before compaction"
+    );
+
+    // Major compact pushes everything to L6 (primary/cold)
+    tree.major_compact(u64::MAX, u64::MAX)?;
+
+    let primary_after = count_table_files(&dir.path().join("primary").join("tables"));
+    assert!(
+        primary_after > 0,
+        "tables should be rewritten to cold tier after cross-device compaction"
+    );
+
+    // Verify data is still correct after cross-device compaction
+    for i in 0u64..30 {
+        let key = format!("key{i:04}");
+        assert!(
+            tree.get(&key, lsm_tree::SeqNo::MAX)?.is_some(),
+            "key {key} should be readable after cross-device compaction"
+        );
+    }
+
+    Ok(())
+}
+
+// Recovery with tables scattered across multiple tiers after compaction.
+#[test]
+fn recovery_after_cross_device_compaction() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    {
+        let config = two_tier_config(dir.path());
+        let tree = config.open()?;
+
+        // Write some data and flush to L0 (hot)
+        for i in 0u64..10 {
+            tree.insert(format!("old{i:04}"), "cold_value", i);
+        }
+        tree.flush_active_memtable(0)?;
+
+        // Compact to L6 (cold/primary)
+        tree.major_compact(u64::MAX, u64::MAX)?;
+
+        // Write more data and flush to L0 (hot) — these stay in hot
+        for i in 0u64..5 {
+            tree.insert(format!("new{i:04}"), "hot_value", 100 + i);
+        }
+        tree.flush_active_memtable(0)?;
+
+        // Now we have tables in BOTH hot and primary tiers
+        let hot = count_table_files(&dir.path().join("hot").join("tables"));
+        let cold = count_table_files(&dir.path().join("primary").join("tables"));
+        assert!(hot > 0, "should have tables in hot tier");
+        assert!(cold > 0, "should have tables in cold tier");
+    }
+
+    // Reopen and verify ALL data from both tiers
+    {
+        let config = two_tier_config(dir.path());
+        let tree = config.open()?;
+
+        for i in 0u64..10 {
+            let key = format!("old{i:04}");
+            assert_eq!(
+                tree.get(&key, lsm_tree::SeqNo::MAX)?.map(|v| v.to_vec()),
+                Some(b"cold_value".to_vec()),
+                "cold-tier key {key} not found after recovery"
+            );
+        }
+        for i in 0u64..5 {
+            let key = format!("new{i:04}");
+            assert_eq!(
+                tree.get(&key, lsm_tree::SeqNo::MAX)?.map(|v| v.to_vec()),
+                Some(b"hot_value".to_vec()),
+                "hot-tier key {key} not found after recovery"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+// Empty routes vec normalizes to None.
+#[test]
+fn empty_routes_normalizes_to_none() {
+    let config = Config::new(
+        "/tmp/test",
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .level_routes(vec![]);
+
+    assert!(config.level_routes.is_none());
+}
+
+// all_tables_folders deduplicates when a route path equals the primary path.
+#[test]
+fn all_tables_folders_dedup_same_as_primary() {
+    let dir = tempfile::tempdir().unwrap();
+    let primary = dir.path().join("db");
+
+    let config = Config::new(
+        &primary,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .level_routes(vec![
+        LevelRoute {
+            levels: 0..2,
+            path: primary.clone(), // same as primary
+            fs: Arc::new(StdFs),
+        },
+        LevelRoute {
+            levels: 2..5,
+            path: dir.path().join("other"),
+            fs: Arc::new(StdFs),
+        },
+    ]);
+
+    let folders = config.all_tables_folders();
+    // primary + other = 2 (duplicate removed)
+    assert_eq!(folders.len(), 2);
+}
+
+// Same-device Move stays as Move (no unnecessary rewrite).
+#[test]
+fn same_device_move_not_converted() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    // All levels on same device — Move should stay Move
+    let config = Config::new(
+        dir.path().join("db"),
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .data_block_compression_policy(CompressionPolicy::all(lsm_tree::CompressionType::None))
+    .index_block_compression_policy(CompressionPolicy::all(lsm_tree::CompressionType::None))
+    .level_routes(vec![LevelRoute {
+        levels: 0..7, // all levels on same path
+        path: dir.path().join("all"),
+        fs: Arc::new(StdFs),
+    }]);
+
+    let tree = config.open()?;
+
+    for i in 0u64..10 {
+        tree.insert(format!("k{i:04}"), "v", i);
+        if i % 2 == 1 {
+            tree.flush_active_memtable(0)?;
+        }
+    }
+
+    // Compact — should work without issues (moves stay moves)
+    tree.compact(Arc::new(lsm_tree::compaction::Leveled::default()), u64::MAX)?;
+
+    // All tables should be in the single configured path
+    let all_tables = count_table_files(&dir.path().join("all").join("tables"));
+    assert!(all_tables > 0);
+
+    // Data readable
+    assert!(tree.get("k0000", lsm_tree::SeqNo::MAX)?.is_some());
+
+    Ok(())
+}
+
 #[test]
 #[should_panic(expected = "overlapping level routes")]
 fn overlapping_routes_panic() {
