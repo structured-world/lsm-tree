@@ -549,6 +549,15 @@ impl RingThread {
                 }
             }
         }
+
+        // Normal exit (channel closed) — no in-flight SQEs remain, safe to
+        // drop pending's SyncSenders. Without this, ManuallyDrop would leak.
+        #[expect(unsafe_code, reason = "ManuallyDrop cleanup on normal exit path")]
+        // SAFETY: we only reach here after the loop breaks (channel disconnected),
+        // meaning no more SQEs can be submitted and all completions are harvested.
+        unsafe {
+            std::mem::ManuallyDrop::drop(&mut pending);
+        }
     }
 
     /// Builds an SQE from `op` and pushes it onto the submission queue.
@@ -605,9 +614,11 @@ impl RingThread {
                         Ok(_) => break,
                         Err(ref e) if e.raw_os_error() == Some(4 /* EINTR */) => {}
                         Err(e) => {
-                            let errno = e.raw_os_error().unwrap_or(5 /* EIO */);
-                            let _ = op.result_tx.send(-errno);
-                            return;
+                            // Fatal ring error — same as Phase 2 handler.
+                            log::error!(
+                                "io_uring submit_and_wait failed in SQ retry: {e}; aborting"
+                            );
+                            std::process::abort();
                         }
                     }
                 }
