@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774310323210,
+  "lastUpdate": 1774310654393,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -2340,6 +2340,84 @@ window.BENCHMARK_DATA = {
             "value": 520058.0419098603,
             "unit": "ops/sec",
             "extra": "P50: 1.6us | P99: 8.9us | P99.9: 15.8us\nthreads: 1 | elapsed: 0.38s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "distinct": true,
+          "id": "471fffd7ba80cacd4cd69a413588941b4ebbeee8",
+          "message": "ci: disable cargo-semver-checks in release-plz\n\nFork controls versioning manually — semver-checks was triggering\nv5.0.0 bumps for intentional API extensions (new enum variants,\n#[non_exhaustive]).",
+          "timestamp": "2026-03-24T02:02:36+02:00",
+          "tree_id": "4f78d20bf5f8a95c132f4eaf6a33013daebf3f0b",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/471fffd7ba80cacd4cd69a413588941b4ebbeee8"
+        },
+        "date": 1774310653521,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 2027716.1628058986,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.4us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1299279.7988132793,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.2us | P99.9: 4.9us\nthreads: 1 | elapsed: 0.15s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 624353.0044436295,
+            "unit": "ops/sec",
+            "extra": "P50: 1.4us | P99: 5.4us | P99.9: 11.2us\nthreads: 1 | elapsed: 0.32s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2407070.23927241,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 4.2us | P99.9: 8.1us\nthreads: 1 | elapsed: 0.08s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 416320.2526557688,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 6.2us | P99.9: 12.0us\nthreads: 1 | elapsed: 0.48s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 193751.90353374052,
+            "unit": "ops/sec",
+            "extra": "P50: 4.8us | P99: 6.3us | P99.9: 15.1us\nthreads: 1 | elapsed: 1.03s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1238960.6668705791,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.7us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.16s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 618694.7886051071,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 0.7us | P99.9: 4.2us\nthreads: 1 | elapsed: 0.32s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 526228.9063116263,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 7.8us | P99.9: 13.5us\nthreads: 1 | elapsed: 0.38s | num: 200000"
           }
         ]
       }
