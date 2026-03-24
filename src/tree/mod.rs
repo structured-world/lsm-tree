@@ -1452,9 +1452,9 @@ impl Tree {
         // Fsync both the tables dir AND its parent to make the directory entry
         // durable on POSIX (crash between mkdir and parent fsync loses the entry).
         for (table_folder_path, folder_fs) in config.all_tables_folders() {
+            folder_fs.create_dir_all(&table_folder_path)?;
+            fsync_directory(&table_folder_path, &*folder_fs)?;
             if let Some(parent) = table_folder_path.parent() {
-                folder_fs.create_dir_all(&table_folder_path)?;
-                fsync_directory(&table_folder_path, &*folder_fs)?;
                 fsync_directory(parent, &*folder_fs)?;
             }
         }

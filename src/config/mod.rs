@@ -240,7 +240,8 @@ pub struct Config<F: Fs = StdFs> {
     /// Each entry maps a range of levels to a base directory and filesystem
     /// backend. Uncovered levels fall back to the primary `path` and `fs`.
     ///
-    /// Zero overhead when `None` — a single branch check, no allocations.
+    /// Zero additional overhead when `None` — only a single branch check;
+    /// path construction allocations are unchanged.
     #[doc(hidden)]
     pub level_routes: Option<Vec<LevelRoute>>,
 
@@ -563,7 +564,7 @@ impl<F: Fs> Config<F> {
                 let folder = route.path.join(TABLES_FOLDER);
                 if !folders
                     .iter()
-                    .any(|(p, fs)| *p == folder && Arc::ptr_eq(fs, &route.fs))
+                    .any(|(p, fs)| p == &folder && Arc::ptr_eq(fs, &route.fs))
                 {
                     folders.push((folder, route.fs.clone()));
                 }
