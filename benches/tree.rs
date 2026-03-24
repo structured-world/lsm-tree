@@ -15,7 +15,7 @@ fn full_scan(c: &mut Criterion) {
             let path = tempdir().unwrap();
 
             let tree = Config::new(
-                path,
+                &path,
                 SequenceNumberCounter::default(),
                 SequenceNumberCounter::default(),
             )
@@ -40,7 +40,7 @@ fn full_scan(c: &mut Criterion) {
             let path = tempdir().unwrap();
 
             let tree = Config::new(
-                path,
+                &path,
                 SequenceNumberCounter::default(),
                 SequenceNumberCounter::default(),
             )
@@ -77,7 +77,7 @@ fn scan_vs_query(c: &mut Criterion) {
         let path = tempdir().unwrap();
 
         let tree = Config::new(
-            path,
+            &path,
             SequenceNumberCounter::default(),
             SequenceNumberCounter::default(),
         )
@@ -146,7 +146,7 @@ fn scan_vs_prefix(c: &mut Criterion) {
         let path = tempdir().unwrap();
 
         let tree = Config::new(
-            path,
+            &path,
             SequenceNumberCounter::default(),
             SequenceNumberCounter::default(),
         )
@@ -205,7 +205,7 @@ fn tree_get_pairs(c: &mut Criterion) {
         {
             let folder = tempfile::tempdir().unwrap();
             let tree = Config::new(
-                folder,
+                &folder,
                 SequenceNumberCounter::default(),
                 SequenceNumberCounter::default(),
             )
@@ -248,7 +248,7 @@ fn tree_get_pairs(c: &mut Criterion) {
         {
             let folder = tempfile::tempdir().unwrap();
             let tree = Config::new(
-                folder,
+                &folder,
                 SequenceNumberCounter::default(),
                 SequenceNumberCounter::default(),
             )
@@ -296,7 +296,7 @@ fn disk_point_read(c: &mut Criterion) {
     let folder = tempdir().unwrap();
 
     let tree = Config::new(
-        folder,
+        &folder,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
@@ -332,7 +332,7 @@ fn disjoint_tree_minmax(c: &mut Criterion) {
     let folder = tempfile::tempdir().unwrap();
 
     let tree = Config::new(
-        folder,
+        &folder,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
