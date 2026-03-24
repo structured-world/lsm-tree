@@ -495,9 +495,7 @@ impl AbstractTree for Tree {
             |current| {
                 let mut copy = current.clone();
 
-                let ctx = crate::version::TransformContext::new(
-                    self.config.comparator.as_ref(),
-                );
+                let ctx = crate::version::TransformContext::new(self.config.comparator.as_ref());
                 copy.version = copy.version.with_new_l0_run(
                     tables,
                     blob_files,
