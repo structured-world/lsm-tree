@@ -29,6 +29,16 @@ use optimize::optimize_runs;
 use run::Ranged;
 use std::{ops::Deref, sync::Arc};
 
+/// Context threaded through [`Version`] transformation methods.
+///
+/// Bundles the user comparator required for maintaining correct table ordering
+/// across level mutations. Passed to [`Version::with_new_l0_run`],
+/// [`Version::with_merge`], [`Version::with_moved`], and
+/// [`Version::with_dropped`].
+pub struct TransformContext<'a> {
+    pub comparator: &'a dyn UserComparator,
+}
+
 pub const DEFAULT_LEVEL_COUNT: u8 = 7;
 
 /// Monotonically increasing ID of a version.
@@ -361,8 +371,9 @@ impl Version {
         run: &[Table],
         blob_files: Option<&[BlobFile]>,
         diff: Option<FragmentationMap>,
-        comparator: &dyn UserComparator,
+        ctx: &TransformContext<'_>,
     ) -> Self {
+        let comparator = ctx.comparator;
         let id = self.id + 1;
 
         let mut levels = vec![];
@@ -444,8 +455,9 @@ impl Version {
         &self,
         ids: &[TableId],
         dropped_blob_files: &mut Vec<BlobFile>,
-        comparator: &dyn UserComparator,
+        ctx: &TransformContext<'_>,
     ) -> crate::Result<Self> {
+        let comparator = ctx.comparator;
         let id = self.id + 1;
 
         let mut levels = vec![];
@@ -522,10 +534,6 @@ impl Version {
         })
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "comparator is essential for correctness"
-    )]
     pub fn with_merge(
         &self,
         old_ids: &[TableId],
@@ -534,8 +542,9 @@ impl Version {
         diff: Option<FragmentationMap>,
         new_blob_files: Vec<BlobFile>,
         blob_files_to_drop: &HashSet<BlobFileId>,
-        comparator: &dyn UserComparator,
+        ctx: &TransformContext<'_>,
     ) -> Self {
+        let comparator = ctx.comparator;
         let id = self.id + 1;
 
         let mut levels = vec![];
@@ -621,8 +630,9 @@ impl Version {
         &self,
         ids: &[TableId],
         dest_level: usize,
-        comparator: &dyn UserComparator,
+        ctx: &TransformContext<'_>,
     ) -> Self {
+        let comparator = ctx.comparator;
         let id = self.id + 1;
 
         let affected_tables = self

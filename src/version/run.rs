@@ -95,22 +95,22 @@ impl<T: Ranged> Run<T> {
     }
 
     /// Pushes a table into the run and re-sorts by min key using lexicographic
-    /// byte ordering. Only correct when the tree uses the default comparator.
-    /// For custom comparators, use [`push_cmp`] instead.
+    /// byte ordering.
     ///
-    /// Kept public for backward compatibility with existing callers and unit tests.
-    pub fn push(&mut self, item: T) {
+    /// Only correct when the tree uses the default (lexicographic) comparator.
+    /// For custom comparators, use [`push_cmp`] instead.
+    pub fn push_lexicographic(&mut self, item: T) {
         self.0.push(item);
 
         self.0
             .sort_by(|a, b| a.key_range().min().cmp(b.key_range().min()));
     }
 
-    /// Like [`push`], but sorts tables using a custom comparator for key ordering.
+    /// Pushes a table and re-sorts using a custom comparator for key ordering.
     ///
-    /// Re-sorts the entire run on each call (mirrors [`push`] behavior).
-    /// Acceptable for typical run sizes (<100 tables); for bulk insertion
-    /// use [`extend`] followed by [`sort_by_cmp`].
+    /// Re-sorts the entire run on each call (mirrors [`push_lexicographic`]
+    /// behavior). Acceptable for typical run sizes (<100 tables); for bulk
+    /// insertion use [`extend`] followed by [`sort_by_cmp`].
     pub fn push_cmp(&mut self, item: T, cmp: &dyn UserComparator) {
         self.0.push(item);
         self.sort_by_cmp(cmp);
