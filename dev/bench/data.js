@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774323471726,
+  "lastUpdate": 1774324081499,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -3198,6 +3198,84 @@ window.BENCHMARK_DATA = {
             "value": 537122.139912223,
             "unit": "ops/sec",
             "extra": "P50: 1.6us | P99: 7.8us | P99.9: 13.1us\nthreads: 1 | elapsed: 0.37s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "distinct": true,
+          "id": "e45fcc938ec1d372b8c7313513b4ed27759a4ca5",
+          "message": "ci: add dependabot auto-merge for minor/patch updates",
+          "timestamp": "2026-03-24T05:46:49+02:00",
+          "tree_id": "ae271225c90a4255868be1f078fe51a96a1e178d",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/e45fcc938ec1d372b8c7313513b4ed27759a4ca5"
+        },
+        "date": 1774324080542,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 2007525.5709573363,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1298938.5574200107,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.5us | P99.9: 5.1us\nthreads: 1 | elapsed: 0.15s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 647640.7977408787,
+            "unit": "ops/sec",
+            "extra": "P50: 1.3us | P99: 5.4us | P99.9: 11.1us\nthreads: 1 | elapsed: 0.31s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2342430.6625298094,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 4.4us | P99.9: 9.4us\nthreads: 1 | elapsed: 0.09s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 418949.7025221453,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 6.1us | P99.9: 12.0us\nthreads: 1 | elapsed: 0.48s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 199979.3703281363,
+            "unit": "ops/sec",
+            "extra": "P50: 4.7us | P99: 6.7us | P99.9: 14.7us\nthreads: 1 | elapsed: 1.00s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1217297.5375062914,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.7us | P99.9: 6.0us\nthreads: 1 | elapsed: 0.16s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 687690.152344412,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.1us | P99.9: 4.5us\nthreads: 1 | elapsed: 0.29s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 548624.2188866674,
+            "unit": "ops/sec",
+            "extra": "P50: 1.5us | P99: 7.7us | P99.9: 13.4us\nthreads: 1 | elapsed: 0.36s | num: 200000"
           }
         ]
       }
