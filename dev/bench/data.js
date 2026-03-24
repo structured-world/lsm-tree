@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774310654393,
+  "lastUpdate": 1774311341855,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -2418,6 +2418,84 @@ window.BENCHMARK_DATA = {
             "value": 526228.9063116263,
             "unit": "ops/sec",
             "extra": "P50: 1.6us | P99: 7.8us | P99.9: 13.5us\nthreads: 1 | elapsed: 0.38s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "distinct": true,
+          "id": "0307b5935fe45651b85a53bd9ec4d809dbd8ce1b",
+          "message": "chore: expand changelog skip rules for release-plz\n\nSkip chore, ci, style, build, Merge commits from changelog.\nOnly feat/fix/perf/refactor/test/docs appear in release notes.",
+          "timestamp": "2026-03-24T02:13:19+02:00",
+          "tree_id": "528efb6eeed4e224c7a742585780b10a56e06cb0",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/0307b5935fe45651b85a53bd9ec4d809dbd8ce1b"
+        },
+        "date": 1774311340540,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1972890.355789863,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1302485.1958067347,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.4us | P99.9: 5.1us\nthreads: 1 | elapsed: 0.15s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 622230.0244336353,
+            "unit": "ops/sec",
+            "extra": "P50: 1.4us | P99: 5.4us | P99.9: 11.3us\nthreads: 1 | elapsed: 0.32s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2389767.464991191,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 4.2us | P99.9: 8.7us\nthreads: 1 | elapsed: 0.08s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 415964.1058915914,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 6.2us | P99.9: 12.2us\nthreads: 1 | elapsed: 0.48s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 194143.4883051404,
+            "unit": "ops/sec",
+            "extra": "P50: 4.8us | P99: 6.6us | P99.9: 14.8us\nthreads: 1 | elapsed: 1.03s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1228382.6080897925,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.7us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.16s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 738100.8546912657,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.1us | P99.9: 3.6us\nthreads: 1 | elapsed: 0.27s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 532982.0157504021,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 7.7us | P99.9: 13.2us\nthreads: 1 | elapsed: 0.38s | num: 200000"
           }
         ]
       }
