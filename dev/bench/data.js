@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774375325594,
+  "lastUpdate": 1774383352412,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -3900,6 +3900,84 @@ window.BENCHMARK_DATA = {
             "value": 331406.43222883326,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 492101 ops/sec | factor: 0.673 | P50: 1.9us | P99: 4.4us | P99.9: 12.4us\nthreads: 1 | elapsed: 0.41s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "distinct": true,
+          "id": "1cdc5809144cdc3c9b19b48ed1fc499ff3055fd9",
+          "message": "ci: auto-label issues by conventional title prefix\n\nParses issue titles for conventional commit format (feat/fix/perf/bench/etc)\nand applies matching labels. Also maps scopes (compaction, crash, encrypt)\nto domain-specific labels.",
+          "timestamp": "2026-03-24T22:05:05+02:00",
+          "tree_id": "ac70c8286a8e75442a5a5078795a661178352a96",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/1cdc5809144cdc3c9b19b48ed1fc499ff3055fd9"
+        },
+        "date": 1774383315199,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1323716.6167250746,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1975169 ops/sec | factor: 0.670 | P50: 0.3us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          },
+          {
+            "name": "fillrandom",
+            "value": 774829.5346473391,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1156153 ops/sec | factor: 0.670 | P50: 0.7us | P99: 2.8us | P99.9: 6.4us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          },
+          {
+            "name": "readrandom",
+            "value": 371818.14238035976,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 554804 ops/sec | factor: 0.670 | P50: 1.6us | P99: 5.6us | P99.9: 11.8us\nthreads: 1 | elapsed: 0.36s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          },
+          {
+            "name": "readseq",
+            "value": 1670923.4123340282,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2493250 ops/sec | factor: 0.670 | P50: 0.2us | P99: 4.2us | P99.9: 8.4us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          },
+          {
+            "name": "seekrandom",
+            "value": 269509.2857719811,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 402145 ops/sec | factor: 0.670 | P50: 2.2us | P99: 6.3us | P99.9: 12.6us\nthreads: 1 | elapsed: 0.50s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          },
+          {
+            "name": "prefixscan",
+            "value": 134814.68759039504,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 201162 ops/sec | factor: 0.670 | P50: 4.6us | P99: 6.5us | P99.9: 14.6us\nthreads: 1 | elapsed: 0.99s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          },
+          {
+            "name": "overwrite",
+            "value": 797083.1828964297,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1189359 ops/sec | factor: 0.670 | P50: 0.7us | P99: 2.8us | P99.9: 6.1us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          },
+          {
+            "name": "mergerandom",
+            "value": 483433.67522262805,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 721350 ops/sec | factor: 0.670 | P50: 0.3us | P99: 2.1us | P99.9: 3.6us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 344268.30829649814,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 513696 ops/sec | factor: 0.670 | P50: 1.8us | P99: 4.3us | P99.9: 12.2us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3 | runner: seq_wr=206696 rand_rd=610536 cpu=123 composite=34319.2"
           }
         ]
       }
