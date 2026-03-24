@@ -237,9 +237,12 @@ fn run_single(
         let db_path = match &cli.db {
             Some(p) if iterations > 1 => {
                 let sub = p.join(format!("iter-{iter}"));
-                // Clean previous data so each iteration starts fresh.
-                if sub.exists() {
-                    std::fs::remove_dir_all(&sub)?;
+                // Clean previous iteration data so each run starts fresh.
+                // These are benchmark-created `iter-N` dirs, not user data.
+                if let Err(e) = std::fs::remove_dir_all(&sub) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Err(e.into());
+                    }
                 }
                 std::fs::create_dir_all(&sub)?;
                 sub
@@ -287,7 +290,7 @@ fn run_single(
             (
                 "ops/sec (normalized)",
                 format!(
-                    "raw: {:.0} ops/sec | calibration: {:.3} | P50: {:.1}us | P99: {:.1}us | P99.9: {:.1}us\n\
+                    "raw: {:.0} ops/sec | factor: {:.3} | P50: {:.1}us | P99: {:.1}us | P99.9: {:.1}us\n\
                      threads: {} | elapsed: {:.2}s | num: {} | iterations: {} | runner: {}",
                     s.ops_per_sec, factor, s.p50, s.p99, s.p999,
                     cli.threads, s.secs, cli.num, iterations,
