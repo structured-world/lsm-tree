@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774327286800,
+  "lastUpdate": 1774356615093,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -3432,6 +3432,84 @@ window.BENCHMARK_DATA = {
             "value": 494835.12253301527,
             "unit": "ops/sec",
             "extra": "P50: 1.7us | P99: 8.0us | P99.9: 15.6us\nthreads: 1 | elapsed: 0.40s | num: 200000"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "255865126+sw-release-bot[bot]@users.noreply.github.com",
+            "name": "sw-release-bot[bot]",
+            "username": "sw-release-bot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "50bee97bbb00a56d3a611bc8868b3057a6ffe237",
+          "message": "chore: release v4.1.0 (#150)\n\n## 🤖 New release\n\n* `coordinode-lsm-tree`: 4.0.0 -> 4.1.0\n\n<details><summary><i><b>Changelog</b></i></summary><p>\n\n<blockquote>\n\n##\n[4.1.0](https://github.com/structured-world/coordinode-lsm-tree/compare/v4.0.0...v4.1.0)\n- 2026-03-24\n\n### Added\n\n- *(fs)* io_uring Fs implementation for high-throughput I/O\n([#106](https://github.com/structured-world/coordinode-lsm-tree/pull/106))\n- *(compression)* zstd dictionary compression support\n([#131](https://github.com/structured-world/coordinode-lsm-tree/pull/131))\n\n### Documentation\n\n- add benchmark dashboard link and update badges\n([#151](https://github.com/structured-world/coordinode-lsm-tree/pull/151))\n- add v4.0.0 fork epoch changelog (all changes since upstream v3.1.1)\n\n### Fixed\n\n- *(version)* fsync version file before rewriting CURRENT pointer\n([#152](https://github.com/structured-world/coordinode-lsm-tree/pull/152))\n- thread UserComparator through ingestion guards and range overlap\n([#139](https://github.com/structured-world/coordinode-lsm-tree/pull/139))\n\n### Performance\n\n- *(bench)* add multi-threaded support to all db_bench workloads\n([#155](https://github.com/structured-world/coordinode-lsm-tree/pull/155))\n- *(merge)* replace IntervalHeap with sorted-vec heap +\nreplace_min/replace_max\n([#148](https://github.com/structured-world/coordinode-lsm-tree/pull/148))\n- *(compaction)* merge input ranges before L2 overlap query\n([#146](https://github.com/structured-world/coordinode-lsm-tree/pull/146))\n\n### Refactored\n\n- *(version)* comparator API cleanup — TransformContext + rename\nRun::push()\n([#153](https://github.com/structured-world/coordinode-lsm-tree/pull/153))\n- add #[non_exhaustive] to CompressionType enum\n</blockquote>\n\n\n</p></details>\n\n---\nThis PR was generated with\n[release-plz](https://github.com/release-plz/release-plz/).\n\nCo-authored-by: sw-release-bot[bot] <255865126+sw-release-bot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-03-24T14:49:07+02:00",
+          "tree_id": "5f8b3f8de4139568eb715fed75ac391e4340a4ab",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/50bee97bbb00a56d3a611bc8868b3057a6ffe237"
+        },
+        "date": 1774356613725,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 2063460.9789263166,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1256739.090571565,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 1.6us | P99.9: 5.7us\nthreads: 1 | elapsed: 0.16s | num: 200000"
+          },
+          {
+            "name": "readrandom",
+            "value": 612246.5110413178,
+            "unit": "ops/sec",
+            "extra": "P50: 1.4us | P99: 5.5us | P99.9: 11.4us\nthreads: 1 | elapsed: 0.33s | num: 200000"
+          },
+          {
+            "name": "readseq",
+            "value": 2484671.10116685,
+            "unit": "ops/sec",
+            "extra": "P50: 0.2us | P99: 4.2us | P99.9: 8.4us\nthreads: 1 | elapsed: 0.08s | num: 200000"
+          },
+          {
+            "name": "seekrandom",
+            "value": 413327.09311376745,
+            "unit": "ops/sec",
+            "extra": "P50: 2.1us | P99: 6.3us | P99.9: 12.2us\nthreads: 1 | elapsed: 0.48s | num: 200000"
+          },
+          {
+            "name": "prefixscan",
+            "value": 201621.4213243626,
+            "unit": "ops/sec",
+            "extra": "P50: 4.6us | P99: 6.7us | P99.9: 14.7us\nthreads: 1 | elapsed: 0.99s | num: 200000"
+          },
+          {
+            "name": "overwrite",
+            "value": 1194288.0879162278,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.8us | P99.9: 6.5us\nthreads: 1 | elapsed: 0.17s | num: 200000"
+          },
+          {
+            "name": "mergerandom",
+            "value": 742752.4389557581,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 2.1us | P99.9: 2.9us\nthreads: 1 | elapsed: 0.27s | num: 200000"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 528786.5851475518,
+            "unit": "ops/sec",
+            "extra": "P50: 1.6us | P99: 7.6us | P99.9: 12.9us\nthreads: 1 | elapsed: 0.38s | num: 200000"
           }
         ]
       }
