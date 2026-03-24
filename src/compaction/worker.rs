@@ -216,9 +216,7 @@ fn move_tables(
         |current| {
             let mut copy = current.clone();
 
-            let ctx = crate::version::TransformContext {
-                comparator: opts.config.comparator.as_ref(),
-            };
+            let ctx = crate::version::TransformContext::new(opts.config.comparator.as_ref());
             copy.version = copy
                 .version
                 .with_moved(&table_ids, payload.dest_level as usize, &ctx);
@@ -665,9 +663,7 @@ fn drop_tables(
         |current| {
             let mut copy = current.clone();
 
-            let ctx = crate::version::TransformContext {
-                comparator: opts.config.comparator.as_ref(),
-            };
+            let ctx = crate::version::TransformContext::new(opts.config.comparator.as_ref());
             copy.version = copy
                 .version
                 .with_dropped(ids_to_drop, &mut dropped_blob_files, &ctx)?;

@@ -36,7 +36,19 @@ use std::{ops::Deref, sync::Arc};
 /// [`Version::with_merge`], [`Version::with_moved`], and
 /// [`Version::with_dropped`].
 pub struct TransformContext<'a> {
-    pub comparator: &'a dyn UserComparator,
+    comparator: &'a dyn UserComparator,
+}
+
+impl<'a> TransformContext<'a> {
+    /// Creates a new context with the given user comparator.
+    pub fn new(comparator: &'a dyn UserComparator) -> Self {
+        Self { comparator }
+    }
+
+    /// Returns the user comparator.
+    pub fn comparator(&self) -> &'a dyn UserComparator {
+        self.comparator
+    }
 }
 
 pub const DEFAULT_LEVEL_COUNT: u8 = 7;

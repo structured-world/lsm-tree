@@ -255,9 +255,7 @@ impl<'a> BlobIngestion<'a> {
             &index.config.path,
             |current| {
                 let mut copy = current.clone();
-                let ctx = crate::version::TransformContext {
-                    comparator: index.config.comparator.as_ref(),
-                };
+                let ctx = crate::version::TransformContext::new(index.config.comparator.as_ref());
                 copy.version =
                     copy.version
                         .with_new_l0_run(&created_tables, Some(&blob_files), None, &ctx);
