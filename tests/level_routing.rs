@@ -552,6 +552,92 @@ fn create_new_creates_all_tier_directories() -> lsm_tree::Result<()> {
     Ok(())
 }
 
+// Recovery skips unexpected subdirectories in tables/ instead of panicking.
+#[test]
+fn recovery_skips_unexpected_directory_in_tables_folder() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    // Phase 1: create tree and flush
+    {
+        let config = two_tier_config(dir.path());
+        let tree = config.open()?;
+        tree.insert("k", "v", 0);
+        tree.flush_active_memtable(0)?;
+    }
+
+    // Plant a subdirectory in the hot tables folder
+    let hot_tables = dir.path().join("hot").join("tables");
+    std::fs::create_dir_all(hot_tables.join("unexpected_subdir"))?;
+
+    // Phase 2: reopen should succeed (skip the dir, not panic)
+    {
+        let config = two_tier_config(dir.path());
+        let tree = config.open()?;
+        assert_eq!(
+            tree.get("k", lsm_tree::SeqNo::MAX)?.map(|v| v.to_vec()),
+            Some(b"v".to_vec()),
+        );
+    }
+
+    Ok(())
+}
+
+// Debug formatting works for LevelRoute.
+#[test]
+fn level_route_debug_format() {
+    let route = LevelRoute {
+        levels: 0..3,
+        path: "/mnt/nvme/db".into(),
+        fs: Arc::new(StdFs),
+    };
+    let dbg = format!("{route:?}");
+    assert!(dbg.contains("LevelRoute"));
+    assert!(dbg.contains("0..3"));
+    assert!(dbg.contains("/mnt/nvme/db"));
+}
+
+// Reopen tree on fresh routed path that doesn't exist yet (recovery creates it).
+#[test]
+fn recovery_creates_missing_routed_tables_dir() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    // Phase 1: create with primary only (no routes)
+    {
+        let config = Config::new(
+            dir.path().join("primary"),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        );
+        let tree = config.open()?;
+        tree.insert("a", "val", 0);
+        tree.flush_active_memtable(0)?;
+    }
+
+    // Phase 2: reopen with routes — routed dirs don't exist yet, recovery creates them
+    {
+        let config = Config::new(
+            dir.path().join("primary"),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .level_routes(vec![LevelRoute {
+            levels: 0..3,
+            path: dir.path().join("new_hot"),
+            fs: Arc::new(StdFs),
+        }]);
+        let tree = config.open()?;
+        // Data from primary should still be found
+        assert_eq!(
+            tree.get("a", lsm_tree::SeqNo::MAX)?.map(|v| v.to_vec()),
+            Some(b"val".to_vec()),
+        );
+        // New routed dir should have been created
+        assert!(dir.path().join("new_hot").join("tables").exists());
+    }
+
+    Ok(())
+}
+
 #[test]
 #[should_panic(expected = "overlapping level routes")]
 fn overlapping_routes_panic() {
