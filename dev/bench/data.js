@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774372842109,
+  "lastUpdate": 1774375325594,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -3822,6 +3822,84 @@ window.BENCHMARK_DATA = {
             "value": 334017.95382902323,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 497288 ops/sec | factor: 0.672 | P50: 1.8us | P99: 5.5us | P99.9: 13.0us\nthreads: 1 | elapsed: 0.40s | num: 200000 | iterations: 3 | runner: seq_wr=214730 rand_rd=590179 cpu=123 composite=34242.5"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d048147105cef0e8cfdda3c6075192dd412d6cc",
+          "message": "feat(config): per-level Fs routing for tiered storage (#163)\n\n## Summary\n\n- Add `LevelRoute` type and `level_routes` config field to route SST\nfiles to different storage devices based on LSM level (e.g., NVMe for\nL0–L1, SSD for L2–L4, HDD for L5–L6)\n- All write paths (flush, compaction, ingestion) respect level routing;\nrecovery scans all configured folders\n- Trivial moves across device boundaries auto-convert to merge (rewrite\nto correct tier)\n- Zero overhead when unconfigured — single `Option` branch check, no\nallocations\n\n## Technical Details\n\n**Config API:**\n- `LevelRoute { levels: Range<u8>, path: PathBuf, fs: Arc<dyn Fs> }` —\nmaps level ranges to storage tiers\n- `Config::tables_folder_for_level(level)` — resolves `(PathBuf, Arc<dyn\nFs>)` with fallback to primary\n- `Config::all_tables_folders()` — deduplicated list for recovery\nscanning\n- `Config::level_routes(vec![...])` — builder with overlap validation\n(panics on overlapping ranges)\n\n**Write paths updated:**\n- `flush_to_tables_with_rt()` — uses `tables_folder_for_level(0)` for L0\n- `prepare_table_writer()` — uses `tables_folder_for_level(dest_level)`\nfor compaction output\n- `Ingestion::new()` / `BlobIngestion` — route to level 0 tier\n- `do_compaction()` — detects cross-device `Choice::Move` and converts\nto `Merge`\n\n**Recovery:** `recover_levels()` scans all folders from\n`all_tables_folders()` instead of just the primary path. No manifest\nschema changes — path is computed from level at runtime.\n\n## Known Limitations\n\n- Blob files (value log) are not level-routed — they stay in the primary\npath\n- `rename()` across filesystems is not supported; cross-device moves are\nhandled by rewriting\n\n## Test Plan\n\n- [x] `flush_writes_to_hot_tier` — L0 flush goes to configured hot tier\ndirectory\n- [x] `compaction_writes_to_correct_tier` — major compaction moves\ntables to cold tier\n- [x] `recovery_discovers_tables_across_tiers` — reopen finds tables\nacross all paths\n- [x] `no_overhead_without_level_routes` — default config works\nunchanged\n- [x] `tables_folder_for_level_fallback` — routing logic for all level\nranges\n- [x] `all_tables_folders_deduplicates` — no duplicate paths in recovery\nscan\n- [x] `overlapping_routes_panic` — validation rejects overlapping level\nranges\n\nCloses #78\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai\n-->\n## Summary by CodeRabbit\n\n* **New Features**\n* Tiered storage routing: per-level storage locations and filesystems\nvia configurable level routes; new config options to target tables by\nlevel.\n\n* **Bug Fixes**\n* Compaction avoids invalid cross-tier moves by rewriting when tables\nspan different storage folders.\n* Recovery/reopen scan and clean tables across all routed tables/\ndirectories and create missing tier dirs.\n\n* **Tests**\n* Added integration tests covering routing, placement, compaction\nbehavior, recovery, and config invariants.\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+          "timestamp": "2026-03-24T20:00:51+02:00",
+          "tree_id": "79fa59556a16d9f1d1b896c05efb76e67f6caf1b",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/1d048147105cef0e8cfdda3c6075192dd412d6cc"
+        },
+        "date": 1774375324354,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1320196.418818304,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1960340 ops/sec | factor: 0.673 | P50: 0.4us | P99: 2.4us | P99.9: 5.4us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          },
+          {
+            "name": "fillrandom",
+            "value": 801243.1510153636,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1189754 ops/sec | factor: 0.673 | P50: 0.7us | P99: 2.8us | P99.9: 6.1us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          },
+          {
+            "name": "readrandom",
+            "value": 392414.8550608265,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 582691 ops/sec | factor: 0.673 | P50: 1.5us | P99: 5.5us | P99.9: 11.4us\nthreads: 1 | elapsed: 0.34s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          },
+          {
+            "name": "readseq",
+            "value": 1653511.9613935435,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2455276 ops/sec | factor: 0.673 | P50: 0.2us | P99: 4.3us | P99.9: 8.1us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          },
+          {
+            "name": "seekrandom",
+            "value": 270695.8622928822,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 401952 ops/sec | factor: 0.673 | P50: 2.2us | P99: 6.4us | P99.9: 12.4us\nthreads: 1 | elapsed: 0.50s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          },
+          {
+            "name": "prefixscan",
+            "value": 136887.7393676269,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 203263 ops/sec | factor: 0.673 | P50: 4.6us | P99: 6.8us | P99.9: 15.3us\nthreads: 1 | elapsed: 0.98s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          },
+          {
+            "name": "overwrite",
+            "value": 789356.8188063244,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1172104 ops/sec | factor: 0.673 | P50: 0.7us | P99: 2.9us | P99.9: 6.1us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          },
+          {
+            "name": "mergerandom",
+            "value": 487762.84370307426,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 724272 ops/sec | factor: 0.673 | P50: 0.3us | P99: 2.1us | P99.9: 2.8us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 331406.43222883326,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 492101 ops/sec | factor: 0.673 | P50: 1.9us | P99: 4.4us | P99.9: 12.4us\nthreads: 1 | elapsed: 0.41s | num: 200000 | iterations: 3 | runner: seq_wr=202498 rand_rd=613086 cpu=123 composite=34152.4"
           }
         ]
       }
