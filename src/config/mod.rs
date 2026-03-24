@@ -583,10 +583,15 @@ impl<F: Fs> Config<F> {
     /// # Reopen contract
     ///
     /// The route configuration is **not persisted** in the manifest.
-    /// A tree must be reopened with the same `level_routes` that were used
-    /// when it was created. Reopening with different routes will cause
-    /// recovery to fail (`Unrecoverable`) because routed SST files will
-    /// not be found in the expected directories.
+    /// On reopen, the [`Config`] must specify `level_routes` such that
+    /// [`all_tables_folders`](Self::all_tables_folders) includes every
+    /// directory and filesystem pair that may contain existing SST files
+    /// for this tree.
+    ///
+    /// Changing the mapping from levels to paths is allowed as long as
+    /// the previously used folders remain covered. If old folders are
+    /// omitted, recovery will fail (`Unrecoverable`) because the missing
+    /// tables cannot be found.
     ///
     /// # Panics
     ///
@@ -607,7 +612,16 @@ impl<F: Fs> Config<F> {
         self.level_routes = if routes.is_empty() {
             None
         } else {
-            Some(routes)
+            // Normalize paths the same way Config::new normalizes self.path
+            Some(
+                routes
+                    .into_iter()
+                    .map(|mut r| {
+                        r.path = absolute_path(&r.path);
+                        r
+                    })
+                    .collect(),
+            )
         };
         self
     }

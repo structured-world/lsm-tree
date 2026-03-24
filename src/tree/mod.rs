@@ -1487,7 +1487,7 @@ impl Tree {
 
         let recovery = recover(tree_path)?;
 
-        let table_map = {
+        let mut table_map = {
             let mut result: crate::HashMap<TableId, (u8 /* Level index */, Checksum, SeqNo)> =
                 crate::HashMap::default();
 
@@ -1571,7 +1571,9 @@ impl Tree {
                     crate::Error::Unrecoverable
                 })?;
 
-                if let Some(&(level_idx, checksum, global_seqno)) = table_map.get(&table_id) {
+                // Remove from map to prevent duplicate recovery if the same
+                // table file exists in multiple scanned folders.
+                if let Some((level_idx, checksum, global_seqno)) = table_map.remove(&table_id) {
                     let pin_filter = config.filter_block_pinning_policy.get(level_idx.into());
                     let pin_index = config.index_block_pinning_policy.get(level_idx.into());
 

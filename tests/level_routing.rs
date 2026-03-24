@@ -468,6 +468,10 @@ fn same_device_move_not_converted() -> lsm_tree::Result<()> {
 // rewritten to L2 (cold) rather than trivially moved. Leveled naturally picks
 // Move when a single table has no overlap at the next level, so we set up
 // exactly that scenario across the hot→cold boundary.
+//
+// The key insight: with enough flush+compact cycles, Leveled will produce a
+// single-table L1 with no L2 overlap → triggers Choice::Move → our guard
+// detects cross-folder and converts to Merge.
 #[test]
 fn leveled_compaction_across_device_boundary() -> lsm_tree::Result<()> {
     use lsm_tree::compaction::Leveled;
@@ -476,29 +480,38 @@ fn leveled_compaction_across_device_boundary() -> lsm_tree::Result<()> {
     let config = two_tier_config(dir.path());
     let tree = config.open()?;
 
-    // Flush several segments to build up L0 in the hot tier
-    for i in 0u64..20 {
-        tree.insert(format!("key{i:04}"), "x".repeat(200), i);
-        if i % 4 == 3 {
-            tree.flush_active_memtable(0)?;
+    // Multiple rounds of flush+compact to push data through L0→L1→L2.
+    // Each round adds non-overlapping keys to maximize chance of trivial moves.
+    for round in 0u64..5 {
+        for i in 0u64..10 {
+            let key = format!("r{round:02}k{i:04}");
+            tree.insert(key, "x".repeat(200), round * 100 + i);
+        }
+        tree.flush_active_memtable(0)?;
+
+        // Compact multiple times per round to cascade L0→L1→L2
+        for _ in 0..10 {
+            tree.compact(Arc::new(Leveled::default()), u64::MAX)?;
         }
     }
 
-    // Run leveled compaction repeatedly — this will push data through
-    // L0 → L1 (both hot) → L2 (cold/primary), triggering the cross-device
-    // Move→Merge conversion when Leveled tries to trivially move L1→L2.
-    for _ in 0..15 {
-        tree.compact(Arc::new(Leveled::default()), u64::MAX)?;
+    // Data must be fully readable after cross-device compactions
+    for round in 0u64..5 {
+        for i in 0u64..10 {
+            let key = format!("r{round:02}k{i:04}");
+            assert!(
+                tree.get(&key, lsm_tree::SeqNo::MAX)?.is_some(),
+                "key {key} missing after leveled cross-device compaction"
+            );
+        }
     }
 
-    // Data must be fully readable after cross-device compactions
-    for i in 0u64..20 {
-        let key = format!("key{i:04}");
-        assert!(
-            tree.get(&key, lsm_tree::SeqNo::MAX)?.is_some(),
-            "key {key} missing after leveled cross-device compaction"
-        );
-    }
+    // Cold tier should have tables (data pushed past L1)
+    let cold = count_table_files(&dir.path().join("primary").join("tables"));
+    assert!(
+        cold > 0,
+        "expected tables in cold tier after repeated leveled compaction"
+    );
 
     Ok(())
 }
