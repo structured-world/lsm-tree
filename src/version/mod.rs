@@ -534,6 +534,10 @@ impl Version {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "merge requires blob/GC params alongside context; further bundling planned"
+    )]
     pub fn with_merge(
         &self,
         old_ids: &[TableId],
