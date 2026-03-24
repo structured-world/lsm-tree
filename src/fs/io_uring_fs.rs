@@ -288,7 +288,14 @@ impl FsFile for IoUringFile {
             if n == 0 {
                 break; // EOF
             }
-            total_read += n as usize;
+            // io_uring is Linux-only where usize >= 32 bits.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "u32 fits in usize on Linux"
+            )]
+            {
+                total_read += n as usize;
+            }
         }
 
         Ok(total_read)
@@ -308,6 +315,11 @@ impl Read for IoUringFile {
         let cursor = self.cursor.get_mut();
         let n = self.ring.submit_read(self.file.as_raw_fd(), buf, *cursor)?;
         *cursor += u64::from(n);
+        // io_uring is Linux-only where usize >= 32 bits.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "u32 fits in usize on Linux"
+        )]
         Ok(n as usize)
     }
 }
@@ -439,12 +451,19 @@ impl RingThread {
         let ring = IoUring::new(sq_entries)?;
         // Bound the submission channel to ring capacity — provides
         // natural backpressure when callers outpace the I/O thread.
-        let (tx, rx) = mpsc::sync_channel(sq_entries as usize);
+        // io_uring is Linux-only where usize >= 32 bits.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "u32 fits in usize on Linux"
+        )]
+        let channel_cap = sq_entries as usize;
+        let (tx, rx) = mpsc::sync_channel(channel_cap);
 
         // If event_loop panics after submitting SQEs, those SQEs still
-        // reference caller buffers. Letting the panic propagate would close
-        // the channel, unblocking callers who then drop their buffers — UB.
-        // catch_unwind + abort is the only sound option.
+        // reference caller buffers. catch_unwind + abort is used, and
+        // pending is wrapped in ManuallyDrop inside event_loop so that
+        // SyncSenders are NOT dropped during unwind — callers stay blocked
+        // until abort kills the process.
         let handle = thread::Builder::new()
             .name("lsm-io-uring".into())
             .spawn(move || {
@@ -478,7 +497,12 @@ impl RingThread {
         reason = "rx is moved into the spawned thread — must be owned"
     )]
     fn event_loop(mut ring: IoUring, rx: mpsc::Receiver<Op>) {
-        let mut pending: HashMap<u64, mpsc::SyncSender<i32>> = HashMap::default();
+        // ManuallyDrop ensures that on panic, pending's SyncSenders are NOT
+        // dropped during stack unwinding. This keeps callers blocked on their
+        // result channels until catch_unwind + abort kills the process,
+        // preventing them from dropping buffers that the kernel may still access.
+        let mut pending =
+            std::mem::ManuallyDrop::new(HashMap::<u64, mpsc::SyncSender<i32>>::default());
         let mut next_id: u64 = 0;
 
         loop {
