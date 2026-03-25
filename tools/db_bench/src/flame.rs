@@ -34,7 +34,10 @@ pub fn setup(output_dir: &Path) -> Result<FlameGuard, Box<dyn std::error::Error>
     let (flame_layer, guard) = FlameLayer::with_file(&folded_path)?;
     let flame_layer = flame_layer.with_threads_collapsed(true);
 
-    tracing_subscriber::registry().with(flame_layer).init();
+    tracing_subscriber::registry()
+        .with(flame_layer)
+        .try_init()
+        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
     Ok(FlameGuard {
         _guard: guard,
