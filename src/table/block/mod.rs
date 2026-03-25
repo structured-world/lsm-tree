@@ -1251,6 +1251,44 @@ mod tests {
 
     #[test]
     #[cfg(zstd_any)]
+    fn zstd_decreased_uncompressed_length_triggers_decompress_error() {
+        use crate::coding::Encode;
+        use std::io::Cursor;
+
+        let payload: &[u8] = b"hello world hello world hello world";
+
+        let compressed =
+            crate::compression::ZstdBackend::compress(payload, 3).expect("zstd compress failed");
+
+        let data_length = compressed.len() as u32;
+        // Set uncompressed_length smaller than real decompressed size.
+        // The backend decompresses into a buffer of this size; the real output
+        // exceeds it, triggering the capacity/length mismatch error.
+        let uncompressed_length_too_small = payload.len() as u32 - 1;
+
+        let checksum = Checksum::from_raw(crate::hash::hash128(&compressed));
+
+        let header = Header {
+            data_length,
+            uncompressed_length: uncompressed_length_too_small,
+            checksum,
+            block_type: BlockType::Data,
+        };
+
+        let mut buf = header.encode_into_vec();
+        buf.extend_from_slice(&compressed);
+
+        let mut cursor = Cursor::new(buf);
+        let result = Block::from_reader(&mut cursor, CompressionType::Zstd(3), None, None);
+
+        assert!(
+            result.is_err(),
+            "expected decompression error for decreased uncompressed_length, got Ok",
+        );
+    }
+
+    #[test]
+    #[cfg(zstd_any)]
     fn block_roundtrip_zstd() -> crate::Result<()> {
         let mut writer = vec![];
 
