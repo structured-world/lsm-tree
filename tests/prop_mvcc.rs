@@ -246,7 +246,7 @@ fn run_mvcc_test(ops: Vec<MvccOp>) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    // 32 cases locally (matches CI). Override with PROPTEST_CASES=256 for thorough runs.
+    // 32 cases (edit cases field below to increase for thorough local runs).
     #![proptest_config(ProptestConfig {
         cases: 32,
         fork: false,

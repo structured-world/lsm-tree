@@ -31,7 +31,7 @@ jobs:
       - name: Install inferno
         run: |
           if ! command -v inferno-flamegraph &> /dev/null; then
-            cargo install inferno
+            cargo install inferno --locked
           fi
 
       - name: Run instrumented benchmarks

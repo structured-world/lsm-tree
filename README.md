@@ -79,8 +79,9 @@ Results from `main` are published to the
 [benchmark dashboard](https://structured-world.github.io/coordinode-lsm-tree/dev/bench/).
 PRs that regress performance by >15% trigger an alert; >25% regression fails CI.
 
-[Flamegraphs](https://structured-world.github.io/coordinode-lsm-tree/flamegraphs/)
-are generated on every merge to `main` using instrumented `db_bench` runs.
+Flamegraphs are generated on every merge to `main` using instrumented `db_bench` runs
+and published under `flamegraphs/<commit-sha>/flamegraph.svg` on
+[gh-pages](https://structured-world.github.io/coordinode-lsm-tree/).
 
 To run Criterion microbenchmarks locally:
 
