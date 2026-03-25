@@ -16,6 +16,47 @@
 //! - Decompression throughput is ~2–3.5x slower than the C reference.
 
 use super::CompressionProvider;
+use std::io::Read;
+
+/// Decompress using `StreamingDecoder` (implements `Read`), reading at most
+/// `capacity` bytes into a pre-allocated buffer. If the frame contains more
+/// data than `capacity`, the excess is never allocated — the limit is
+/// enforced during decode, not after.
+fn bounded_streaming_decode(source: &[u8], capacity: usize) -> crate::Result<Vec<u8>> {
+    let mut decoder = structured_zstd::decoding::StreamingDecoder::new(source)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+
+    // Pre-allocate exactly `capacity` bytes and read into it.
+    let mut output = vec![0u8; capacity];
+    let mut filled = 0;
+
+    loop {
+        let dest = output
+            .get_mut(filled..)
+            .ok_or(crate::Error::DecompressedSizeTooLarge {
+                declared: filled as u64,
+                limit: capacity as u64,
+            })?;
+        match decoder.read(dest) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => return Err(crate::Error::Io(e)),
+        }
+    }
+
+    // Probe for excess data: if the decoder still has bytes after filling
+    // the buffer, the frame exceeds capacity.
+    let mut probe = [0u8; 1];
+    if decoder.read(&mut probe).unwrap_or(0) > 0 {
+        return Err(crate::Error::DecompressedSizeTooLarge {
+            declared: (filled + 1) as u64,
+            limit: capacity as u64,
+        });
+    }
+
+    output.truncate(filled);
+    Ok(output)
+}
 
 /// Pure Rust zstd backend.
 pub struct ZstdPureProvider;
@@ -32,25 +73,7 @@ impl CompressionProvider for ZstdPureProvider {
     }
 
     fn decompress(data: &[u8], capacity: usize) -> crate::Result<Vec<u8>> {
-        let mut decoder = structured_zstd::decoding::FrameDecoder::new();
-        let mut output = Vec::with_capacity(capacity);
-
-        decoder
-            .decode_all_to_vec(data, &mut output)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
-
-        // Defence-in-depth: reject frames that decompress beyond the caller's
-        // declared limit. The block layer already validates uncompressed_length
-        // against MAX_DECOMPRESSION_SIZE, but a crafted frame with a lying
-        // content-size header could still expand further.
-        if output.len() > capacity {
-            return Err(crate::Error::DecompressedSizeTooLarge {
-                declared: output.len() as u64,
-                limit: capacity as u64,
-            });
-        }
-
-        Ok(output)
+        bounded_streaming_decode(data, capacity)
     }
 
     fn compress_with_dict(_data: &[u8], _level: i32, _dict_raw: &[u8]) -> crate::Result<Vec<u8>> {
@@ -73,6 +96,10 @@ impl CompressionProvider for ZstdPureProvider {
         let dict = structured_zstd::decoding::Dictionary::decode_dict(dict_raw)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
 
+        // StreamingDecoder doesn't support dictionaries directly.
+        // Use FrameDecoder with decode_all_to_vec — the capacity is enforced
+        // by the block layer's uncompressed_length validation (capped at
+        // MAX_DECOMPRESSION_SIZE = 256 MiB before this function is called).
         let mut decoder = structured_zstd::decoding::FrameDecoder::new();
         decoder
             .add_dict(dict)
@@ -83,6 +110,10 @@ impl CompressionProvider for ZstdPureProvider {
             .decode_all_to_vec(data, &mut output)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
 
+        // Post-decode check: the block layer already validates
+        // uncompressed_length <= MAX_DECOMPRESSION_SIZE before calling us,
+        // so well-formed frames won't exceed capacity. This catches only
+        // corrupted frames that bypass the header check.
         if output.len() > capacity {
             return Err(crate::Error::DecompressedSizeTooLarge {
                 declared: output.len() as u64,
