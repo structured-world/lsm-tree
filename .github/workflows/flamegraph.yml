@@ -29,7 +29,10 @@ jobs:
           prefix-key: flamegraph
 
       - name: Install inferno
-        run: cargo install inferno
+        run: |
+          if ! command -v inferno-flamegraph &> /dev/null; then
+            cargo install inferno
+          fi
 
       - name: Run instrumented benchmarks
         run: |

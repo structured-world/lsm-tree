@@ -33,6 +33,9 @@ jobs:
   test:
     needs: lint
     timeout-minutes: 20
+    permissions:
+      checks: write
+      pull-requests: write
     strategy:
       fail-fast: true
       matrix:
