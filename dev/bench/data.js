@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774389700646,
+  "lastUpdate": 1774401237377,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -4056,6 +4056,84 @@ window.BENCHMARK_DATA = {
             "value": 358243.69268951827,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 442178 ops/sec | factor: 0.810 | P50: 2.1us | P99: 5.0us | P99.9: 13.9us\nthreads: 1 | elapsed: 0.45s | num: 200000 | iterations: 3 | runner: seq_wr=207542 rand_rd=415516 cpu=108 composite=28388.7"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f5e98eadbec62e6fa0104c416f0909b33e534e6",
+          "message": "perf(bench): consolidate benchmarks + nextest + flamegraph pipeline (#175)\n\n## Summary\n\n- **Phase 1:** Delete 4 redundant Criterion bench files, keep 3 core\nmicrobenchmarks (bloom, memtable, merge)\n- **Phase 2:** Add nextest `ci` profile with retries and JUnit XML\ngeneration\n- **Phase 3:** Add flamegraph pipeline — `--flamegraph` flag in db_bench\n(feature-gated with `tracing-flame`), CI workflow generates combined SVG\non main merges and publishes to gh-pages\n- **Bonus:** Fix all compiler warnings, reduce full test suite from\n~580s to 39s, raise benchmark regression thresholds\n\n## Technical Details\n\n### Benchmark consolidation\nRemoved 4 bench files that duplicated db_bench workloads or measured\nnon-hot-path code: `tree.rs`, `merge_point_read.rs`, `prefix_bloom.rs`,\n`fd_table.rs`. Remaining 3 (bloom, memtable, merge) are needed for\nupcoming #169 and #170.\n\n### Nextest CI profile\n`.config/nextest.toml` now has a `ci` profile with `retries = 2`,\n`fail-fast = false`, and JUnit XML at `target/nextest/ci/junit.xml`.\n\n### Flamegraph pipeline\ndb_bench gains a `flamegraph` Cargo feature (`tracing` + `tracing-flame`\n+ `tracing-subscriber`) and `--flamegraph` CLI flag. When enabled,\ntracing spans at workload and thread level are collected into a single\n`all.folded` file with thread collapsing. New `flamegraph.yml` workflow\nruns on main merges, generates a combined SVG with `inferno-flamegraph`\n(`--locked`), and deploys to\n`gh-pages/flamegraphs/<sha>/flamegraph.svg`.\n\n### Test speedup\n| Test | Before | After |\n|------|--------|-------|\n| blob_tree_fifo_limit | 52s | 4s |\n| a_lot_of_ranges | 41s | 3s |\n| leveled_sequential_inserts | 38s | 5s |\n| prop_mvcc | 124s | 7s |\n| prop_btreemap_oracle | 252s | 10s |\n| prop_range_tombstone | 309s | 11s |\n| **Full suite** | **~580s** | **39s** |\n\nProptest cases set to 32 (hardcoded in ProptestConfig). Edit `cases`\nfield in test files for thorough local runs.\n\n### Benchmark thresholds\nRaised from 10%/15% to 15% alert / 25% fail — shared CI runners have too\nmuch variance for tight thresholds.\n\n## Test plan\n- [x] `cargo bench --features lz4 --no-run` — 3 benches compile\n- [x] `cargo clippy --all-features -- -D warnings` — zero warnings\n- [x] `cargo nextest run --all-features` — 1040 passed, 0 failed, 39s\n- [x] `cargo test --doc --features lz4` — 34 passed\n- [x] `cargo clippy --features flamegraph` on db_bench — clean\n- [x] `db_bench --flamegraph --benchmark fillseq` — produces valid\nall.folded\n\nCloses #174",
+          "timestamp": "2026-03-25T03:12:32+02:00",
+          "tree_id": "76f573c204c1f051c2533c1714a511f03267e9bb",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/9f5e98eadbec62e6fa0104c416f0909b33e534e6"
+        },
+        "date": 1774401235661,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1361076.7529940973,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2058343 ops/sec | factor: 0.661 | P50: 0.3us | P99: 2.3us | P99.9: 5.3us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
+          },
+          {
+            "name": "fillrandom",
+            "value": 793665.827207775,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1200253 ops/sec | factor: 0.661 | P50: 0.7us | P99: 2.7us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
+          },
+          {
+            "name": "readrandom",
+            "value": 401239.04497771687,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 606790 ops/sec | factor: 0.661 | P50: 1.5us | P99: 5.5us | P99.9: 11.4us\nthreads: 1 | elapsed: 0.33s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
+          },
+          {
+            "name": "readseq",
+            "value": 1650423.3171530243,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2495920 ops/sec | factor: 0.661 | P50: 0.2us | P99: 4.3us | P99.9: 7.8us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
+          },
+          {
+            "name": "seekrandom",
+            "value": 274444.40871492634,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 415040 ops/sec | factor: 0.661 | P50: 2.1us | P99: 6.2us | P99.9: 12.2us\nthreads: 1 | elapsed: 0.48s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
+          },
+          {
+            "name": "prefixscan",
+            "value": 129527.20823528396,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 195883 ops/sec | factor: 0.661 | P50: 4.8us | P99: 5.8us | P99.9: 14.8us\nthreads: 1 | elapsed: 1.02s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
+          },
+          {
+            "name": "overwrite",
+            "value": 750282.0169232421,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1134644 ops/sec | factor: 0.661 | P50: 0.7us | P99: 2.8us | P99.9: 7.8us\nthreads: 1 | elapsed: 0.18s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
+          },
+          {
+            "name": "mergerandom",
+            "value": 489031.26240185247,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 739557 ops/sec | factor: 0.661 | P50: 0.3us | P99: 2.1us | P99.9: 3.7us\nthreads: 1 | elapsed: 0.27s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 356934.8711726238,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 539789 ops/sec | factor: 0.661 | P50: 1.7us | P99: 4.2us | P99.9: 11.7us\nthreads: 1 | elapsed: 0.37s | num: 200000 | iterations: 3 | runner: seq_wr=209854 rand_rd=624387 cpu=123 composite=34782.7"
           }
         ]
       }
