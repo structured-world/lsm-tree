@@ -39,6 +39,17 @@ impl CompressionProvider for ZstdPureProvider {
             .decode_all_to_vec(data, &mut output)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
 
+        // Defence-in-depth: reject frames that decompress beyond the caller's
+        // declared limit. The block layer already validates uncompressed_length
+        // against MAX_DECOMPRESSION_SIZE, but a crafted frame with a lying
+        // content-size header could still expand further.
+        if output.len() > capacity {
+            return Err(crate::Error::DecompressedSizeTooLarge {
+                declared: output.len() as u64,
+                limit: capacity as u64,
+            });
+        }
+
         Ok(output)
     }
 
@@ -71,6 +82,13 @@ impl CompressionProvider for ZstdPureProvider {
         decoder
             .decode_all_to_vec(data, &mut output)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+
+        if output.len() > capacity {
+            return Err(crate::Error::DecompressedSizeTooLarge {
+                declared: output.len() as u64,
+                limit: capacity as u64,
+            });
+        }
 
         Ok(output)
     }
