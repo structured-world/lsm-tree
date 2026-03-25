@@ -33,9 +33,6 @@ jobs:
   test:
     needs: lint
     timeout-minutes: 20
-    # checks: write needed for publish-unit-test-result-action to create check runs
-    permissions:
-      checks: write
     strategy:
       fail-fast: true
       matrix:
@@ -60,10 +57,18 @@ jobs:
       - name: Check db_bench crate
         working-directory: tools/db_bench
         run: cargo check --all-features
+      - name: Generate bot token
+        id: bot-token
+        if: always() && runner.os == 'Linux'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
       - name: Publish test results
         uses: EnricoMi/publish-unit-test-result-action@v2
-        if: always() && runner.os == 'Linux'
+        if: always() && runner.os == 'Linux' && steps.bot-token.outputs.token != ''
         with:
+          github_token: ${{ steps.bot-token.outputs.token }}
           files: target/nextest/ci/junit.xml
           check_name: Test Results (${{ matrix.os }}, ${{ matrix.rust }})
 
