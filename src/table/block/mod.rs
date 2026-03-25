@@ -1219,6 +1219,8 @@ mod tests {
 
         let payload: &[u8] = b"hello world";
 
+        // Fully-qualified path resolves the trait method unambiguously without
+        // needing `use CompressionProvider` in this test module scope.
         let compressed =
             crate::compression::ZstdBackend::compress(payload, 3).expect("zstd compress failed");
 
