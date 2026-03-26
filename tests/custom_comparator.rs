@@ -41,7 +41,7 @@ fn reverse_comparator_point_read() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -62,7 +62,7 @@ fn reverse_comparator_iteration_order() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -99,7 +99,7 @@ fn reverse_comparator_after_flush() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -134,7 +134,7 @@ fn u64_comparator_point_read_and_order() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(U64BigEndianComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -173,7 +173,7 @@ fn u64_comparator_after_flush() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(U64BigEndianComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -209,7 +209,7 @@ fn default_comparator_unchanged_behavior() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
 
     // No custom comparator — default lexicographic should work as before
-    let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    let tree = Config::new(&folder, Default::default(), Default::default()).open()?;
 
     tree.insert("banana", "b", 0);
     tree.insert("apple", "a", 1);
@@ -233,7 +233,7 @@ fn reverse_comparator_bounded_range_scan() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -264,7 +264,7 @@ fn u64_comparator_bounded_range_scan() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(U64BigEndianComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -435,7 +435,7 @@ fn reverse_comparator_after_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -478,7 +478,7 @@ fn reverse_comparator_leveled_compaction() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -545,7 +545,7 @@ fn reverse_comparator_compaction_with_merge_operator() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .with_merge_operator(Some(Arc::new(ConcatMerge)))
         .open()?;
@@ -573,7 +573,7 @@ fn reverse_comparator_compaction_with_tombstone() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -612,7 +612,7 @@ fn reverse_comparator_memtable_range_tombstone_point_read() -> lsm_tree::Result<
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -645,7 +645,7 @@ fn reverse_comparator_range_tombstone_scan_after_flush() -> lsm_tree::Result<()>
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(ReverseComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
@@ -686,7 +686,7 @@ fn u64_comparator_range_scan_multi_table_run() -> lsm_tree::Result<()> {
     let folder = tempfile::tempdir()?;
     let cmp: SharedComparator = Arc::new(U64BigEndianComparator);
 
-    let tree = Config::new(folder, Default::default(), Default::default())
+    let tree = Config::new(&folder, Default::default(), Default::default())
         .comparator(cmp)
         .open()?;
 
