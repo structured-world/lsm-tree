@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0](https://github.com/structured-world/coordinode-lsm-tree/compare/v4.1.0...v4.2.0) - 2026-03-26
+
+### Added
+
+- comparator-aware range tombstones ([#180](https://github.com/structured-world/coordinode-lsm-tree/pull/180))
+- *(compression)* CompressionProvider trait + pure Rust zstd backend ([#176](https://github.com/structured-world/coordinode-lsm-tree/pull/176))
+- *(error)* RouteMismatch error, blocked_bloom cleanup, bench/clippy fixes ([#166](https://github.com/structured-world/coordinode-lsm-tree/pull/166))
+- *(config)* per-level Fs routing for tiered storage ([#163](https://github.com/structured-world/coordinode-lsm-tree/pull/163))
+
+### Performance
+
+- *(bench)* consolidate benchmarks + nextest + flamegraph pipeline ([#175](https://github.com/structured-world/coordinode-lsm-tree/pull/175))
+
+### Testing
+
+- *(table)* add zstd dict helper coverage ([#181](https://github.com/structured-world/coordinode-lsm-tree/pull/181))
+
 ## [4.1.0](https://github.com/structured-world/coordinode-lsm-tree/compare/v4.0.0...v4.1.0) - 2026-03-24
 
 ### Added
