@@ -1,6 +1,6 @@
 // Shared helpers for integration/property tests. Each test binary compiles
 // this module independently, so not every binary uses every item.
-#![expect(
+#![allow(
     dead_code,
     reason = "each test binary compiles this module independently; not every binary uses every helper"
 )]
