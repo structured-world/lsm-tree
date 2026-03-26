@@ -3,12 +3,12 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
+    MAX_SEQNO, SeqNo, SharedSequenceNumberGenerator,
     comparator::SharedComparator,
     fs::Fs,
     memtable::Memtable,
     tree::sealed::SealedMemtables,
-    version::{persist_version, Version},
-    SeqNo, SharedSequenceNumberGenerator, MAX_SEQNO,
+    version::{Version, persist_version},
 };
 use std::{collections::VecDeque, path::Path, sync::Arc};
 
@@ -36,12 +36,12 @@ pub struct SuperVersions {
 }
 
 impl SuperVersions {
-    pub fn new(version: Version, comparator: SharedComparator) -> Self {
+    pub fn new(version: Version, comparator: &SharedComparator) -> Self {
         let comparator_name: Arc<str> = comparator.name().into();
 
         Self {
             versions: vec![SuperVersion {
-                active_memtable: Arc::new(Memtable::new(0, comparator)),
+                active_memtable: Arc::new(Memtable::new(0, comparator.clone())),
                 sealed_memtables: Arc::default(),
                 version,
                 seqno: 0,

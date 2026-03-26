@@ -2,7 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use crate::{checksum::ChecksumType, FormatVersion, TreeType};
+use crate::{FormatVersion, TreeType, checksum::ChecksumType};
 use byteorder::ReadBytesExt;
 use std::{io::Read, path::Path};
 
@@ -130,8 +130,8 @@ mod tests {
     use byteorder::WriteBytesExt;
     use std::io::Write;
 
-    /// Write the mandatory manifest sections (format_version, tree_type,
-    /// level_count, filter_hash_type) into an sfa archive at `path`.
+    /// Write the mandatory manifest sections (`format_version`, `tree_type`,
+    /// `level_count`, `filter_hash_type`) into an sfa archive at `path`.
     /// If `comparator_name` is `Some`, also writes that section.
     fn write_test_manifest(
         path: &std::path::Path,

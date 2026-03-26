@@ -4,8 +4,8 @@
 
 // Format constants live in writer (the format definition site).
 // Extracting to a shared module is an upstream structural decision.
-use super::writer::{validate_header_crc, BLOB_HEADER_MAGIC_V3, BLOB_HEADER_MAGIC_V4};
-use crate::{vlog::BlobFileId, Checksum, SeqNo, UserKey, UserValue};
+use super::writer::{BLOB_HEADER_MAGIC_V3, BLOB_HEADER_MAGIC_V4, validate_header_crc};
+use crate::{Checksum, SeqNo, UserKey, UserValue, vlog::BlobFileId};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::{
     fs::File,
@@ -198,15 +198,10 @@ impl Iterator for Scanner {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::useless_vec,
-    reason = "test code"
-)]
+#[expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
-    use crate::{fs::StdFs, vlog::blob_file::writer::Writer as BlobFileWriter, Slice};
+    use crate::{Slice, fs::StdFs, vlog::blob_file::writer::Writer as BlobFileWriter};
     use tempfile::tempdir;
     use test_log::test;
 
@@ -319,7 +314,7 @@ mod tests {
         Ok(())
     }
 
-    /// Write a V3 blob file (b"BLOB" magic, no header_crc) manually,
+    /// Write a V3 blob file (b"BLOB" magic, no `header_crc`) manually,
     /// then verify the scanner can read it with V3 backward compat path.
     #[test]
     fn blob_scanner_reads_v3_format() -> crate::Result<()> {

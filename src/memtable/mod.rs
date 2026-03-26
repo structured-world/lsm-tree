@@ -11,12 +11,12 @@ use crate::comparator::SharedComparator;
 use crate::key::InternalKey;
 use crate::range_tombstone::RangeTombstone;
 use crate::{
-    value::{InternalValue, SeqNo},
     UserKey, ValueType,
+    value::{InternalValue, SeqNo},
 };
 use std::ops::RangeBounds;
-use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 pub use crate::tree::inner::MemtableId;
 
@@ -50,11 +50,6 @@ pub struct Memtable {
     /// starvation is not a concern here: range deletes are rare, the write-side
     /// critical section is O(log n) with n typically small, and the memtable
     /// rotates (becoming read-only) well before contention could accumulate.
-    // NOTE: The interval tree uses lexicographic `Ord` on `UserKey` for
-    // containment queries. With a custom comparator, RT suppression in
-    // the memtable may produce incorrect results for non-lexicographic
-    // orderings. Threading the comparator into the AVL tree is tracked
-    // as a follow-up issue.
     pub(crate) range_tombstones: RwLock<interval_tree::IntervalTree>,
 
     /// Approximate active memtable size.
@@ -90,16 +85,22 @@ impl Memtable {
 
     // `pub` + `#[doc(hidden)]`: used by the host crate (fjall) to construct
     // ephemeral memtables. Not part of the semver-stable API.
-    // The comparator parameter is mandatory because memtable ordering must
-    // match the tree's comparator; a default would silently produce wrong order.
+    // Keep the comparator by-value for hidden-public API compatibility while
+    // still requiring callers to pass the tree comparator explicitly.
     #[doc(hidden)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "hidden-public constructor keeps the preexisting by-value signature for compatibility"
+    )]
     #[must_use]
     pub fn new(id: MemtableId, comparator: SharedComparator) -> Self {
         Self {
             id,
             items: skiplist::SkipMap::new(comparator.clone()),
-            comparator,
-            range_tombstones: RwLock::new(interval_tree::IntervalTree::new()),
+            comparator: comparator.clone(),
+            range_tombstones: RwLock::new(interval_tree::IntervalTree::new_with_comparator(
+                comparator.clone(),
+            )),
             approximate_size: AtomicU64::default(),
             highest_seqno: AtomicU64::default(),
             requested_rotation: AtomicBool::default(),
@@ -236,7 +237,7 @@ impl Memtable {
         );
 
         // Reject invalid intervals in release builds (debug_assert is not enough)
-        if start >= end {
+        if self.comparator.compare(&start, &end) != std::cmp::Ordering::Less {
             return 0;
         }
 
@@ -336,8 +337,8 @@ impl Memtable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::comparator::default_comparator;
     use crate::ValueType;
+    use crate::comparator::default_comparator;
     use std::sync::{Arc, Barrier};
     use test_log::test;
 

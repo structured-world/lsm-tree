@@ -1,6 +1,9 @@
 // Shared helpers for integration/property tests. Each test binary compiles
 // this module independently, so not every binary uses every item.
-#![expect(
+// `#[expect(dead_code)]` becomes noisy here because binaries that happen to use
+// every helper trigger `unfulfilled_lint_expectations`, while others need the
+// suppression. Keep this as `allow` until the test helper layout changes.
+#![allow(
     dead_code,
     reason = "each test binary compiles this module independently; not every binary uses every helper"
 )]

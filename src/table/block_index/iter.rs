@@ -3,9 +3,9 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    comparator::SharedComparator,
-    table::{block::ParsedItem, index_block::Iter as IndexBlockIter, IndexBlock, KeyedBlockHandle},
     SeqNo,
+    comparator::SharedComparator,
+    table::{IndexBlock, KeyedBlockHandle, block::ParsedItem, index_block::Iter as IndexBlockIter},
 };
 use self_cell::self_cell;
 
@@ -42,18 +42,18 @@ impl OwnedIndexBlockIter {
     ) -> Option<Self> {
         let mut iter = Self::from_block(block, comparator);
 
-        if let Some((key, seqno)) = lo {
-            if !iter.seek_lower(key, seqno) {
-                return None;
-            }
+        if let Some((key, seqno)) = lo
+            && !iter.seek_lower(key, seqno)
+        {
+            return None;
         }
         // NOTE: seek_upper on index blocks (restart_interval=1) always succeeds —
         // it positions the back-end cursor but does not reject out-of-range bounds.
         // The None path here guards against future decoder changes.
-        if let Some((key, seqno)) = hi {
-            if !iter.seek_upper(key, seqno) {
-                return None;
-            }
+        if let Some((key, seqno)) = hi
+            && !iter.seek_upper(key, seqno)
+        {
+            return None;
         }
 
         Some(iter)
@@ -88,19 +88,21 @@ impl DoubleEndedIterator for OwnedIndexBlockIter {
 }
 
 #[cfg(test)]
-#[expect(
+#[allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::useless_vec,
+    clippy::doc_markdown,
+    clippy::cast_possible_truncation,
     reason = "test code"
 )]
 mod tests {
     use super::*;
     use crate::{
-        comparator::default_comparator,
-        table::block::{BlockOffset, BlockType, Header},
-        table::BlockHandle,
         Checksum,
+        comparator::default_comparator,
+        table::BlockHandle,
+        table::block::{BlockOffset, BlockType, Header},
     };
 
     /// Builds an IndexBlock containing entries with the given keys (seqno=0 for all).

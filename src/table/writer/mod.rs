@@ -7,10 +7,11 @@ mod index;
 mod meta;
 
 use super::{
-    block::Header as BlockHeader, filter::BloomConstructionPolicy, Block, BlockOffset, DataBlock,
-    KeyedBlockHandle,
+    Block, BlockOffset, DataBlock, KeyedBlockHandle, block::Header as BlockHeader,
+    filter::BloomConstructionPolicy,
 };
 use crate::{
+    Checksum, CompressionType, InternalValue, TableId, UserKey, ValueType,
     checksum::{ChecksumType, ChecksummedWriter},
     coding::Encode,
     encryption::EncryptionProvider,
@@ -18,15 +19,14 @@ use crate::{
     prefix::PrefixExtractor,
     range_tombstone::RangeTombstone,
     table::{
+        BlockHandle,
         writer::{
             filter::{FilterWriter, FullFilterWriter},
             index::FullIndexWriter,
         },
-        BlockHandle,
     },
     time::unix_timestamp,
     vlog::BlobFileId,
-    Checksum, CompressionType, InternalValue, TableId, UserKey, ValueType,
 };
 use index::BlockIndexWriter;
 use std::{io::BufWriter, path::PathBuf, sync::Arc};
@@ -345,13 +345,12 @@ impl Writer {
             self.meta.weak_tombstone_count += 1;
         }
 
-        if value_type == ValueType::Value {
-            if let Some((prev_key, prev_type)) = &self.previous_item {
-                if prev_type == &ValueType::WeakTombstone && prev_key.as_ref() == user_key.as_ref()
-                {
-                    self.meta.weak_tombstone_reclaimable_count += 1;
-                }
-            }
+        if value_type == ValueType::Value
+            && let Some((prev_key, prev_type)) = &self.previous_item
+            && prev_type == &ValueType::WeakTombstone
+            && prev_key.as_ref() == user_key.as_ref()
+        {
+            self.meta.weak_tombstone_reclaimable_count += 1;
         }
 
         // NOTE: Check if we visit a new key
@@ -563,7 +562,7 @@ impl Writer {
 
         // Write range tombstones block (if any)
         if !self.range_tombstones.is_empty() {
-            use byteorder::{WriteBytesExt, LE};
+            use byteorder::{LE, WriteBytesExt};
 
             self.file_writer.start("range_tombstones")?;
 
@@ -602,7 +601,7 @@ impl Writer {
         }
 
         if !self.linked_blob_files.is_empty() {
-            use byteorder::{WriteBytesExt, LE};
+            use byteorder::{LE, WriteBytesExt};
 
             self.file_writer.start("linked_blob_files")?;
 

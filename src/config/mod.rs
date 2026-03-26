@@ -20,6 +20,8 @@ pub use restart_interval::RestartIntervalPolicy;
 pub type PartitioningPolicy = PinningPolicy;
 
 use crate::{
+    AnyTree, BlobTree, Cache, CompressionType, DescriptorTable, SequenceNumberCounter,
+    SharedSequenceNumberGenerator, Tree,
     compaction::filter::Factory,
     comparator::{self, SharedComparator},
     encryption::EncryptionProvider,
@@ -29,8 +31,6 @@ use crate::{
     path::absolute_path,
     prefix::PrefixExtractor,
     version::DEFAULT_LEVEL_COUNT,
-    AnyTree, BlobTree, Cache, CompressionType, DescriptorTable, SequenceNumberCounter,
-    SharedSequenceNumberGenerator, Tree,
 };
 use std::{
     ops::Range,
@@ -519,13 +519,13 @@ impl Config {
         }
 
         // Blob files don't support dictionary compression — reject early.
-        if let Some(ref kv_opts) = self.kv_separation_opts {
-            if matches!(kv_opts.compression, CompressionType::ZstdDict { .. }) {
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "zstd dictionary compression is not supported for blob files",
-                )));
-            }
+        if let Some(ref kv_opts) = self.kv_separation_opts
+            && matches!(kv_opts.compression, CompressionType::ZstdDict { .. })
+        {
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "zstd dictionary compression is not supported for blob files",
+            )));
         }
 
         Ok(())
@@ -547,6 +547,38 @@ impl Config {
             visible_seqno,
             ..Default::default()
         }
+    }
+}
+
+#[cfg(all(test, zstd_any))]
+mod tests {
+    use super::*;
+    use crate::{CompressionType, SequenceNumberCounter};
+
+    #[test]
+    fn blob_zstd_dict_compression_is_rejected() {
+        let folder = tempfile::tempdir().unwrap_or_else(|err| panic!("tempdir failed: {err}"));
+        let cfg = Config::new(
+            folder.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .with_kv_separation(Some(KvSeparationOptions::default().compression(
+            CompressionType::ZstdDict {
+                level: 3,
+                dict_id: 7,
+            },
+        )));
+
+        let err = match cfg.validate_zstd_dictionary() {
+            Ok(()) => panic!("blob-file zstd dictionary compression must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("zstd dictionary compression is not supported for blob files")
+        );
     }
 }
 

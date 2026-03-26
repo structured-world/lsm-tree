@@ -29,4 +29,5 @@ old
 
 # proptest regression artifacts
 **/proptest-regressions/
+**/*.proptest-regressions
 benchmark-results.json

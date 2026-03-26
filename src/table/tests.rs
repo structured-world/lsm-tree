@@ -2,6 +2,13 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
+#![allow(
+    clippy::doc_markdown,
+    clippy::default_trait_access,
+    reason = "test code"
+)]
+#![expect(clippy::expect_used, reason = "test code")]
+
 use super::*;
 use crate::{
     config::BloomConstructionPolicy, fs::StdFs,
@@ -33,10 +40,10 @@ fn test_with_table(
         }
 
         for (idx, item) in items.iter().enumerate() {
-            if let Some(rotate) = rotate_every {
-                if idx % rotate == 0 {
-                    writer.spill_block()?;
-                }
+            if let Some(rotate) = rotate_every
+                && idx % rotate == 0
+            {
+                writer.spill_block()?;
             }
             writer.write(item.clone())?;
         }
@@ -221,10 +228,10 @@ fn test_with_table(
         }
 
         for (idx, item) in items.iter().enumerate() {
-            if let Some(rotate) = rotate_every {
-                if idx % rotate == 0 {
-                    writer.spill_block()?;
-                }
+            if let Some(rotate) = rotate_every
+                && idx % rotate == 0
+            {
+                writer.spill_block()?;
             }
             writer.write(item.clone())?;
         }
@@ -1349,7 +1356,7 @@ fn table_partitioned_index() -> crate::Result<()> {
         None,
         crate::comparator::default_comparator(),
         #[cfg(feature = "metrics")]
-        Default::default(),
+        Arc::default(),
     )
     .unwrap();
 
@@ -1463,14 +1470,16 @@ fn table_global_seqno() -> crate::Result<()> {
         None,
         crate::comparator::default_comparator(),
         #[cfg(feature = "metrics")]
-        Default::default(),
+        Arc::default(),
     )
     .unwrap();
 
     // global seqno is 7, so a1 is = 8 -> can not be read by snapshot=8
-    assert!(table
-        .get(b"a1", 8, BloomBuilder::get_hash(b"a1"))?
-        .is_none());
+    assert!(
+        table
+            .get(b"a1", 8, BloomBuilder::get_hash(b"a1"))?
+            .is_none()
+    );
 
     assert_eq!(
         b"a0",
@@ -1527,7 +1536,7 @@ fn assert_rt_decode_error(data: Vec<u8>, expected_field: &str, expected_offset: 
 #[test]
 #[expect(clippy::unwrap_used)]
 fn decode_range_tombstones_invalid_interval_returns_error() {
-    use byteorder::{WriteBytesExt, LE};
+    use byteorder::{LE, WriteBytesExt};
 
     // Build a single tombstone where start ("z") >= end ("a")
     let mut buf = Vec::new();
@@ -1556,7 +1565,7 @@ fn decode_range_tombstones_empty_block_returns_error() {
 #[test]
 #[expect(clippy::unwrap_used)]
 fn decode_range_tombstones_start_len_exceeds_remaining_returns_error() {
-    use byteorder::{WriteBytesExt, LE};
+    use byteorder::{LE, WriteBytesExt};
 
     // start_len = 100 but only 1 byte of data follows; offset = 0 (entry start)
     let mut buf = Vec::new();
@@ -1569,7 +1578,7 @@ fn decode_range_tombstones_start_len_exceeds_remaining_returns_error() {
 #[test]
 #[expect(clippy::unwrap_used)]
 fn decode_range_tombstones_truncated_end_len_returns_error() {
-    use byteorder::{WriteBytesExt, LE};
+    use byteorder::{LE, WriteBytesExt};
 
     // Valid start_len + start, then truncated before end_len completes
     // offset = 3 (after u16 start_len + 1-byte key)
@@ -1584,7 +1593,7 @@ fn decode_range_tombstones_truncated_end_len_returns_error() {
 #[test]
 #[expect(clippy::unwrap_used)]
 fn decode_range_tombstones_end_len_exceeds_remaining_returns_error() {
-    use byteorder::{WriteBytesExt, LE};
+    use byteorder::{LE, WriteBytesExt};
 
     // Valid start, then end_len = 100 but only 1 byte follows
     // offset = 3 (after u16 start_len + 1-byte key)
@@ -1600,7 +1609,7 @@ fn decode_range_tombstones_end_len_exceeds_remaining_returns_error() {
 #[test]
 #[expect(clippy::unwrap_used)]
 fn decode_range_tombstones_truncated_seqno_returns_error() {
-    use byteorder::{WriteBytesExt, LE};
+    use byteorder::{LE, WriteBytesExt};
 
     // Valid start + end, but seqno truncated (only 4 of 8 bytes)
     // offset = 6 (after u16+1+u16+1 = 6 bytes for start/end fields)
@@ -1621,11 +1630,11 @@ fn decode_range_tombstones_truncated_seqno_returns_error() {
 #[cfg(feature = "metrics")]
 fn load_block_range_tombstone_metrics() -> crate::Result<()> {
     use crate::{
+        CompressionType,
         cache::Cache,
         descriptor_table::DescriptorTable,
         range_tombstone::RangeTombstone,
         table::{block::BlockType, util::load_block},
-        CompressionType,
     };
     use std::sync::atomic::Ordering::Relaxed;
 
@@ -1848,8 +1857,8 @@ fn meta_seqno_kv_max_corruption_returns_invalid_data() -> crate::Result<()> {
     Ok(())
 }
 
-/// bloom_may_contain_key with full (non-partitioned) filter delegates to
-/// bloom_may_contain_hash. Both methods agree for full filters.
+/// `bloom_may_contain_key` with full (non-partitioned) filter delegates to
+/// `bloom_may_contain_hash`. Both methods agree for full filters.
 #[test]
 fn bloom_may_contain_key_full_filter() -> crate::Result<()> {
     let items: Vec<InternalValue> = ["a", "c", "e"]
@@ -1892,10 +1901,10 @@ fn bloom_may_contain_key_full_filter() -> crate::Result<()> {
     )
 }
 
-/// bloom_may_contain_key with partitioned filter seeks the correct partition
+/// `bloom_may_contain_key` with partitioned filter seeks the correct partition
 /// and returns Ok(false) for a key beyond all partition boundaries.
 ///
-/// Contrast: bloom_may_contain_key_hash returns Ok(true) conservatively
+/// Contrast: `bloom_may_contain_key_hash` returns Ok(true) conservatively
 /// for the same key because it cannot seek partitions by hash alone.
 /// This is the core behavioral improvement introduced by this PR.
 #[test]

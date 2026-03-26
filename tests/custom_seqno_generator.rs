@@ -3,11 +3,11 @@
 // (found in the LICENSE-* files in the repository)
 
 use lsm_tree::{
-    AbstractTree, Config, SeqNo, SequenceNumberCounter, SequenceNumberGenerator,
-    SharedSequenceNumberGenerator, MAX_SEQNO,
+    AbstractTree, Config, MAX_SEQNO, SeqNo, SequenceNumberCounter, SequenceNumberGenerator,
+    SharedSequenceNumberGenerator,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A custom generator that starts from a configurable offset,
 /// proving the trait-object wiring works end-to-end.
@@ -19,7 +19,7 @@ struct OffsetGenerator {
 }
 
 impl OffsetGenerator {
-    fn new(start: u64) -> SharedSequenceNumberGenerator {
+    fn shared(start: u64) -> SharedSequenceNumberGenerator {
         assert!(start <= MAX_SEQNO, "start must not exceed MAX_SEQNO");
         Arc::new(Self {
             counter: AtomicU64::new(start),
@@ -62,8 +62,8 @@ impl SequenceNumberGenerator for OffsetGenerator {
 fn custom_generator_via_builder() -> lsm_tree::Result<()> {
     let path = lsm_tree::get_tmp_folder();
 
-    let seqno = OffsetGenerator::new(1000);
-    let visible_seqno = OffsetGenerator::new(1000);
+    let seqno = OffsetGenerator::shared(1000);
+    let visible_seqno = OffsetGenerator::shared(1000);
 
     let tree = Config::new(
         &path,
@@ -88,8 +88,8 @@ fn custom_generator_via_builder() -> lsm_tree::Result<()> {
 fn custom_generator_via_new_with_generators() -> lsm_tree::Result<()> {
     let path = lsm_tree::get_tmp_folder();
 
-    let seqno = OffsetGenerator::new(5000);
-    let visible_seqno = OffsetGenerator::new(5000);
+    let seqno = OffsetGenerator::shared(5000);
+    let visible_seqno = OffsetGenerator::shared(5000);
 
     let tree = Config::new_with_generators(&path, seqno.clone(), visible_seqno.clone()).open()?;
 

@@ -4,8 +4,8 @@
 
 use super::Tree;
 use crate::{
-    config::FilterPolicyEntry, table::multi_writer::MultiWriter, BlobIndirection, SeqNo, UserKey,
-    UserValue,
+    BlobIndirection, SeqNo, UserKey, UserValue, config::FilterPolicyEntry,
+    table::multi_writer::MultiWriter,
 };
 use std::cmp::Ordering;
 use std::path::PathBuf;
@@ -56,6 +56,7 @@ impl<'a> Ingestion<'a> {
             6,
             level_fs,
         )?
+        .set_comparator(tree.config.comparator.clone())
         .use_bloom_policy({
             if tree.config.expect_point_read_hits {
                 crate::config::BloomConstructionPolicy::BitsPerKey(0.0)

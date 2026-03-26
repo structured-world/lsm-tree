@@ -3,8 +3,8 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    iter_guard::IterGuardImpl, table::Table, version::Version, vlog::BlobFile, AnyTree, BlobTree,
-    Config, Guard, InternalValue, KvPair, Memtable, SeqNo, TableId, Tree, UserKey, UserValue,
+    AnyTree, BlobTree, Config, Guard, InternalValue, KvPair, Memtable, SeqNo, TableId, Tree,
+    UserKey, UserValue, iter_guard::IterGuardImpl, table::Table, version::Version, vlog::BlobFile,
 };
 use std::{
     ops::RangeBounds,
@@ -113,7 +113,8 @@ pub trait AbstractTree: sealed::Sealed {
         for mt in latest.sealed_memtables.iter() {
             range_tombstones.extend(mt.range_tombstones_sorted());
         }
-        range_tombstones.sort();
+        range_tombstones
+            .sort_by(|a, b| a.cmp_with_comparator(b, self.tree_config().comparator.as_ref()));
         range_tombstones.dedup();
 
         let merger = Merger::new(
@@ -385,7 +386,7 @@ pub trait AbstractTree: sealed::Sealed {
     /// use lsm_tree::{AbstractTree, Config, Tree};
     ///
     /// let folder = tempfile::tempdir()?;
-    /// let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    /// let tree = Config::new(&folder, Default::default(), Default::default()).open()?;
     ///
     /// assert_eq!(tree.len(0, None)?, 0);
     /// tree.insert("1", "abc", 0);

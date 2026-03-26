@@ -7,7 +7,9 @@ pub mod inner;
 pub mod sealed;
 
 use crate::{
-    compaction::{drop_range::OwnedBounds, state::CompactionState, CompactionStrategy},
+    AbstractTree, Checksum, KvPair, SeqNo, SequenceNumberCounter, TableId, UserKey, UserValue,
+    ValueType,
+    compaction::{CompactionStrategy, drop_range::OwnedBounds, state::CompactionState},
     config::Config,
     file::CURRENT_VERSION_FILE,
     format_version::FormatVersion,
@@ -18,10 +20,8 @@ use crate::{
     slice::Slice,
     table::Table,
     value::InternalValue,
-    version::{recovery::recover, SuperVersion, SuperVersions, Version},
+    version::{SuperVersion, SuperVersions, Version, recovery::recover},
     vlog::BlobFile,
-    AbstractTree, Checksum, KvPair, SeqNo, SequenceNumberCounter, TableId, UserKey, UserValue,
-    ValueType,
 };
 use inner::{TreeId, TreeInner};
 use std::{
@@ -394,6 +394,7 @@ impl AbstractTree for Tree {
             0,
             level_fs,
         )?
+        .set_comparator(self.config.comparator.clone())
         .use_data_block_restart_interval(data_block_restart_interval)
         .use_index_block_restart_interval(index_block_restart_interval)
         .use_data_block_compression(data_block_compression)
@@ -1088,21 +1089,21 @@ impl Tree {
                 let mut best: Option<InternalValue> = None;
 
                 for run in level.iter() {
-                    if let Some(table) = run.get_for_key_cmp(key, comparator) {
-                        if let Some(item) = table.get(key, seqno, key_hash)? {
-                            match &best {
-                                // >= keeps first-seen on tie. Seqno is monotonically
-                                // unique per write; equal seqno for the same user key
-                                // across tables is impossible in normal operation.
-                                Some(current) if current.key.seqno >= item.key.seqno => {}
-                                _ => {
-                                    // Short-circuit: seqno is the read horizon, so no
-                                    // other run in this level can have a higher one.
-                                    if item.key.seqno == seqno {
-                                        return Ok(ignore_tombstone_value(item));
-                                    }
-                                    best = Some(item);
+                    if let Some(table) = run.get_for_key_cmp(key, comparator)
+                        && let Some(item) = table.get(key, seqno, key_hash)?
+                    {
+                        match &best {
+                            // >= keeps first-seen on tie. Seqno is monotonically
+                            // unique per write; equal seqno for the same user key
+                            // across tables is impossible in normal operation.
+                            Some(current) if current.key.seqno >= item.key.seqno => {}
+                            _ => {
+                                // Short-circuit: seqno is the read horizon, so no
+                                // other run in this level can have a higher one.
+                                if item.key.seqno == seqno {
+                                    return Ok(ignore_tombstone_value(item));
                                 }
+                                best = Some(item);
                             }
                         }
                     }
@@ -1113,10 +1114,10 @@ impl Tree {
                 }
             } else {
                 for run in level.iter() {
-                    if let Some(table) = run.get_for_key_cmp(key, comparator) {
-                        if let Some(item) = table.get(key, seqno, key_hash)? {
-                            return Ok(ignore_tombstone_value(item));
-                        }
+                    if let Some(table) = run.get_for_key_cmp(key, comparator)
+                        && let Some(item) = table.get(key, seqno, key_hash)?
+                    {
+                        return Ok(ignore_tombstone_value(item));
                     }
                 }
             }
@@ -1201,7 +1202,9 @@ impl Tree {
 
         // Check for old version
         if config.path.join("version").try_exists()? {
-            log::error!("It looks like you are trying to open a V1 database - the database needs a manual migration, however a migration tool is not provided, as V1 is extremely outdated.");
+            log::error!(
+                "It looks like you are trying to open a V1 database - the database needs a manual migration, however a migration tool is not provided, as V1 is extremely outdated."
+            );
             return Err(crate::Error::InvalidVersion(FormatVersion::V1.into()));
         }
 
@@ -1232,7 +1235,7 @@ impl Tree {
         strategy: Arc<dyn CompactionStrategy>,
         mvcc_gc_watermark: SeqNo,
     ) -> crate::Result<crate::compaction::CompactionResult> {
-        use crate::compaction::worker::{do_compaction, Options};
+        use crate::compaction::worker::{Options, do_compaction};
 
         let mut opts = Options::from_tree(self, strategy);
         opts.mvcc_gc_watermark = mvcc_gc_watermark;
@@ -1290,7 +1293,7 @@ impl Tree {
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
     ) -> impl DoubleEndedIterator<Item = crate::Result<KvPair>> + 'static {
         use crate::prefix::compute_prefix_hash;
-        use crate::range::{prefix_to_range, IterState, TreeIter};
+        use crate::range::{IterState, TreeIter, prefix_to_range};
 
         let prefix_bytes = prefix.as_ref();
 
@@ -1424,7 +1427,7 @@ impl Tree {
             memtable_id_counter: SequenceNumberCounter::new(1),
             table_id_counter: SequenceNumberCounter::new(highest_table_id + 1),
             blob_file_id_counter: SequenceNumberCounter::default(),
-            version_history: Arc::new(RwLock::new(SuperVersions::new(version, comparator))),
+            version_history: Arc::new(RwLock::new(SuperVersions::new(version, &comparator))),
             stop_signal: StopSignal::default(),
             config: Arc::new(config),
             major_compaction_lock: RwLock::default(),
@@ -1485,7 +1488,7 @@ impl Tree {
         config: &Config,
         #[cfg(feature = "metrics")] metrics: &Arc<Metrics>,
     ) -> crate::Result<Version> {
-        use crate::{file::fsync_directory, fs::Fs, TableId};
+        use crate::{TableId, file::fsync_directory, fs::Fs};
 
         let tree_path = tree_path.as_ref();
 

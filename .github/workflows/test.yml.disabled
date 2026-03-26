@@ -18,7 +18,7 @@ jobs:
       matrix:
         rust_version:
           - stable
-          - "1.90.0" # MSRV
+          - "1.92.0" # MSRV
         os:
           - ubuntu-latest
           - windows-latest
@@ -67,11 +67,11 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
       - name: Run tests
-        run: cargo llvm-cov --no-report nextest --all-features
+        run: cargo +nightly llvm-cov --no-report nextest --all-features
       - name: Run doc tests
-        run: cargo llvm-cov --no-report --doc --features lz4
+        run: cargo +nightly llvm-cov --no-report --doc --features lz4
       - name: Create code coverage report
-        run: cargo llvm-cov report --doctests --lcov --output-path lcov.info
+        run: cargo +nightly llvm-cov report --doctests --lcov --output-path lcov.info
       - name: Upload coverage data to codecov
         uses: codecov/codecov-action@v5
         with:

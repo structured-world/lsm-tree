@@ -1,5 +1,5 @@
 // Guard: trait import required for .key() method on iterator items (IterGuard trait)
-use lsm_tree::{get_tmp_folder, AbstractTree, AnyTree, Config, Guard, SequenceNumberCounter};
+use lsm_tree::{AbstractTree, AnyTree, Config, Guard, SequenceNumberCounter, get_tmp_folder};
 use test_log::test;
 
 fn open_tree(path: &std::path::Path) -> AnyTree {
@@ -618,8 +618,8 @@ fn range_tombstone_prefix_iteration_with_sst() -> lsm_tree::Result<()> {
 // --- Test P: Compaction with MultiWriter rotation preserves RTs across tables ---
 #[test]
 fn range_tombstone_survives_compaction_with_rotation() -> lsm_tree::Result<()> {
-    use lsm_tree::config::CompressionPolicy;
     use lsm_tree::CompressionType;
+    use lsm_tree::config::CompressionPolicy;
 
     let folder = get_tmp_folder();
 
@@ -1003,8 +1003,8 @@ fn range_tombstone_disjoint_survives_multiple_compactions() -> lsm_tree::Result<
 #[test]
 #[ignore = "allocates ~68 MiB to force MultiWriter rotation — run with --ignored"]
 fn range_tombstone_multi_table_flush_keeps_newer_values_reachable() -> lsm_tree::Result<()> {
-    use lsm_tree::config::CompressionPolicy;
     use lsm_tree::CompressionType;
+    use lsm_tree::config::CompressionPolicy;
 
     let folder = get_tmp_folder();
     // Disable compression: large repetitive payloads compress to almost nothing
@@ -1140,6 +1140,34 @@ fn range_tombstone_memtable_narrow_range_queries_ignore_disjoint_rt() -> lsm_tre
         collect_range_keys_rev(&tree, "x"..="z", 11)?,
         Vec::<Vec<u8>>::new()
     );
+
+    Ok(())
+}
+
+// Regression: a flushed broad RT plus a newer narrow RT must not suppress
+// unrelated keys inserted after the flush. This reproduces a property-test
+// failure where the flushed table incorrectly hid key [5] after key [0] was
+// reinserted in the active memtable.
+#[test]
+fn flushed_broad_rt_does_not_hide_unrelated_keys_after_reinsert() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = open_tree(folder.path());
+
+    tree.remove_range(vec![0], vec![8], 1);
+    tree.insert(vec![5], vec![5], 2);
+    tree.remove_range(vec![0], vec![1], 3);
+    tree.flush_active_memtable(0)?;
+
+    tree.insert(vec![0], vec![0], 4);
+
+    assert_eq!(Some(vec![0].into()), tree.get(vec![0], 5)?);
+    assert_eq!(Some(vec![5].into()), tree.get(vec![5], 5)?);
+
+    let keys: Vec<Vec<u8>> = tree
+        .iter(5, None)
+        .map(|item| item.key().map(|k| k.to_vec()))
+        .collect::<lsm_tree::Result<_>>()?;
+    assert_eq!(keys, vec![vec![0], vec![5]]);
 
     Ok(())
 }

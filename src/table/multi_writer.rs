@@ -4,10 +4,10 @@
 
 use super::{filter::BloomConstructionPolicy, writer::Writer};
 use crate::{
+    Checksum, CompressionType, HashMap, SequenceNumberCounter, TableId, UserKey,
     blob_tree::handle::BlobIndirection, encryption::EncryptionProvider, fs::Fs,
     prefix::PrefixExtractor, range_tombstone::RangeTombstone, table::writer::LinkedFile,
-    value::InternalValue, vlog::BlobFileId, Checksum, CompressionType, HashMap,
-    SequenceNumberCounter, TableId, UserKey,
+    value::InternalValue, vlog::BlobFileId,
 };
 use std::{path::PathBuf, sync::Arc};
 
@@ -47,6 +47,7 @@ pub struct MultiWriter {
     bloom_policy: BloomConstructionPolicy,
 
     current_key: Option<UserKey>,
+    comparator: crate::SharedComparator,
 
     linked_blobs: HashMap<BlobFileId, LinkedFile>,
 
@@ -112,6 +113,7 @@ impl MultiWriter {
             bloom_policy: BloomConstructionPolicy::default(),
 
             current_key: None,
+            comparator: crate::comparator::default_comparator(),
 
             linked_blobs: HashMap::default(),
             range_tombstones: Vec::new(),
@@ -127,8 +129,19 @@ impl MultiWriter {
     }
 
     /// Enables RT clipping: each tombstone is intersected with the output
-    /// table's KV key range. Use this for compaction where input tables are
-    /// consumed; do NOT use for flush where RTs must cover older SSTs.
+    /// Sets the user comparator used for output ordering and RT clipping.
+    #[must_use]
+    pub fn set_comparator(mut self, comparator: crate::SharedComparator) -> Self {
+        self.comparator = comparator;
+        self
+    }
+
+    /// Enables RT clipping to the output table's responsibility range.
+    ///
+    /// Clipped RTs may extend beyond the table's own KV key range to cover the
+    /// gap up to the next output table. Use this for compaction where input
+    /// tables are consumed; do NOT use for flush where RTs must cover older
+    /// SSTs.
     #[must_use]
     pub fn use_clip_range_tombstones(mut self) -> Self {
         self.clip_range_tombstones = true;
@@ -155,6 +168,7 @@ impl MultiWriter {
         clip: bool,
         writer: &mut Writer,
         clip_upper: Option<&UserKey>,
+        comparator: &dyn crate::comparator::UserComparator,
     ) {
         if let (Some(first_key), Some(last_key)) =
             (writer.meta.first_key.clone(), writer.meta.last_key.clone())
@@ -179,7 +193,9 @@ impl MultiWriter {
 
                 if let Some(max_exclusive) = max_exclusive {
                     for rt in tombstones {
-                        if let Some(clipped) = rt.intersect_opt(first_key.as_ref(), max_exclusive) {
+                        if let Some(clipped) =
+                            rt.intersect_opt_with(first_key.as_ref(), max_exclusive, comparator)
+                        {
                             // Widen last_key so point reads for keys in the
                             // gap will consult this table for RT suppression.
                             //
@@ -197,9 +213,14 @@ impl MultiWriter {
                             // Only last_key needs widening: intersect_opt
                             // already clamps clipped.start >= first_key.
                             if let Some(existing) = &mut writer.meta.last_key {
-                                let safe = clip_upper
-                                    .is_some_and(|upper| clipped.end.as_ref() < upper.as_ref());
-                                if safe && clipped.end.as_ref() > existing.as_ref() {
+                                let safe = clip_upper.is_some_and(|upper| {
+                                    comparator.compare(&clipped.end, upper.as_ref())
+                                        == std::cmp::Ordering::Less
+                                });
+                                if safe
+                                    && comparator.compare(&clipped.end, existing.as_ref())
+                                        == std::cmp::Ordering::Greater
+                                {
                                     *existing = clipped.end.clone();
                                 }
                             }
@@ -214,13 +235,15 @@ impl MultiWriter {
                     // unchanged; widening it during compaction would break the
                     // disjoint-run invariant that point reads rely on.
                     for rt in tombstones {
-                        let clipped_start = if rt.start.as_ref() > first_key.as_ref() {
+                        let clipped_start = if comparator.compare(&rt.start, first_key.as_ref())
+                            == std::cmp::Ordering::Greater
+                        {
                             rt.start.as_ref()
                         } else {
                             first_key.as_ref()
                         };
 
-                        if clipped_start < rt.end.as_ref() {
+                        if comparator.compare(clipped_start, &rt.end) == std::cmp::Ordering::Less {
                             writer.write_range_tombstone(RangeTombstone::new(
                                 UserKey::from(clipped_start),
                                 rt.end.clone(),
@@ -242,7 +265,9 @@ impl MultiWriter {
                 for rt in tombstones {
                     match &mut writer.meta.first_key {
                         Some(existing) => {
-                            if rt.start.as_ref() < existing.as_ref() {
+                            if comparator.compare(&rt.start, existing.as_ref())
+                                == std::cmp::Ordering::Less
+                            {
                                 *existing = rt.start.clone();
                             }
                         }
@@ -252,7 +277,9 @@ impl MultiWriter {
                     }
                     match &mut writer.meta.last_key {
                         Some(existing) => {
-                            if rt.end.as_ref() > existing.as_ref() {
+                            if comparator.compare(&rt.end, existing.as_ref())
+                                == std::cmp::Ordering::Greater
+                            {
                                 *existing = rt.end.clone();
                             }
                         }
@@ -425,6 +452,7 @@ impl MultiWriter {
                 self.clip_range_tombstones,
                 &mut old_writer,
                 self.current_key.as_ref(),
+                self.comparator.as_ref(),
             );
         }
 
@@ -476,6 +504,7 @@ impl MultiWriter {
                 self.clip_range_tombstones,
                 &mut self.writer,
                 None,
+                self.comparator.as_ref(),
             );
         }
 
@@ -497,14 +526,14 @@ impl MultiWriter {
 }
 
 #[cfg(test)]
-#[expect(
+#[allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::useless_vec,
     reason = "test code"
 )]
 mod tests {
-    use crate::{config::CompressionPolicy, AbstractTree, Config, SeqNo, SequenceNumberCounter};
+    use crate::{AbstractTree, Config, SeqNo, SequenceNumberCounter, config::CompressionPolicy};
     use test_log::test;
 
     // NOTE: Tests that versions of the same key stay
@@ -550,7 +579,7 @@ mod tests {
     #[test]
     fn clip_preserves_rt_covering_gap_between_output_tables() -> crate::Result<()> {
         use crate::range_tombstone::RangeTombstone;
-        use crate::{fs::StdFs, InternalValue, UserKey};
+        use crate::{InternalValue, UserKey, fs::StdFs};
         use std::sync::Arc;
 
         let folder = tempfile::tempdir()?;
@@ -645,7 +674,7 @@ mod tests {
     // Verify the RT is still written but key_range stays disjoint.
     #[test]
     fn clip_rt_spanning_next_table_does_not_overlap_key_ranges() -> crate::Result<()> {
-        use crate::{fs::StdFs, InternalValue, UserKey};
+        use crate::{InternalValue, UserKey, fs::StdFs};
         use std::sync::Arc;
 
         let folder = tempfile::tempdir()?;
@@ -724,9 +753,7 @@ mod tests {
         let t2_min = tables[1].metadata.key_range.min();
         assert!(
             t1_max.as_ref() < t2_min.as_ref(),
-            "key_ranges must be disjoint: table1.max={:?} must be < table2.min={:?}",
-            t1_max,
-            t2_min,
+            "key_ranges must be disjoint: table1.max={t1_max:?} must be < table2.min={t2_min:?}",
         );
 
         // RT must still be written to at least one output table

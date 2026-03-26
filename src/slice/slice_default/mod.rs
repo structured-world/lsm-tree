@@ -28,7 +28,9 @@ impl Slice {
     #[doc(hidden)]
     #[must_use]
     pub unsafe fn builder_unzeroed(len: usize) -> Builder {
-        ByteView::builder_unzeroed(len)
+        // SAFETY: callers opt into the uninitialized builder contract via this
+        // unsafe API and must fully initialize the returned buffer before any read.
+        unsafe { ByteView::builder_unzeroed(len) }
     }
 
     pub(crate) fn slice(&self, range: impl std::ops::RangeBounds<usize>) -> Self {
