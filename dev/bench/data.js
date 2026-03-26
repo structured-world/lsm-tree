@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774463549012,
+  "lastUpdate": 1774559633922,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -4290,6 +4290,84 @@ window.BENCHMARK_DATA = {
             "value": 342197.82946662937,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 518733 ops/sec | factor: 0.660 | P50: 1.7us | P99: 4.3us | P99.9: 12.1us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3 | runner: seq_wr=222931 rand_rd=600012 cpu=123 composite=34865.4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c10f1ac008665af7a0546a2bef99423c56d21028",
+          "message": "feat: comparator-aware range tombstones (#180)\n\n## Summary\n- thread the user comparator through memtable range tombstones, RT scan\nfiltering, MVCC suppression, table-skip checks, and RT clipping\n- add reverse-comparator regression coverage for memtable point reads\nand post-flush range scans\n- fold the Rust baseline update into this delivery: pin\n`rust-toolchain.toml` to `1.94.0`, raise MSRV to `1.92`, and migrate to\nRust 2024\n\n## Testing\n- `cargo nextest run --all-features`\n- `cargo test --doc --all-features`\n- `cargo check --all-features` in `tools/db_bench`\n\nCloses #94",
+          "timestamp": "2026-03-26T23:12:27+02:00",
+          "tree_id": "0e04fc2d6fe4a599c3d687aa0a8d2b165f988490",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/c10f1ac008665af7a0546a2bef99423c56d21028"
+        },
+        "date": 1774559632920,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1285955.1272474488,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1967767 ops/sec | factor: 0.654 | P50: 0.4us | P99: 2.3us | P99.9: 5.7us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
+          },
+          {
+            "name": "fillrandom",
+            "value": 696202.672039784,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1065329 ops/sec | factor: 0.654 | P50: 0.7us | P99: 3.1us | P99.9: 6.9us\nthreads: 1 | elapsed: 0.19s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
+          },
+          {
+            "name": "readrandom",
+            "value": 366025.70440617675,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 560092 ops/sec | factor: 0.654 | P50: 1.6us | P99: 6.0us | P99.9: 12.8us\nthreads: 1 | elapsed: 0.36s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
+          },
+          {
+            "name": "readseq",
+            "value": 1520593.7487406214,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2326811 ops/sec | factor: 0.654 | P50: 0.2us | P99: 4.5us | P99.9: 9.5us\nthreads: 1 | elapsed: 0.09s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
+          },
+          {
+            "name": "seekrandom",
+            "value": 245007.34205135627,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 374910 ops/sec | factor: 0.654 | P50: 2.3us | P99: 6.9us | P99.9: 14.0us\nthreads: 1 | elapsed: 0.53s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
+          },
+          {
+            "name": "prefixscan",
+            "value": 129553.73757008258,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 198243 ops/sec | factor: 0.654 | P50: 4.7us | P99: 6.3us | P99.9: 15.6us\nthreads: 1 | elapsed: 1.01s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
+          },
+          {
+            "name": "overwrite",
+            "value": 710461.4141659187,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1087147 ops/sec | factor: 0.654 | P50: 0.7us | P99: 3.1us | P99.9: 8.3us\nthreads: 1 | elapsed: 0.18s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
+          },
+          {
+            "name": "mergerandom",
+            "value": 498877.3180610398,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 763382 ops/sec | factor: 0.654 | P50: 0.4us | P99: 0.6us | P99.9: 3.2us\nthreads: 1 | elapsed: 0.26s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 320571.37304466893,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 490538 ops/sec | factor: 0.654 | P50: 1.8us | P99: 5.2us | P99.9: 13.1us\nthreads: 1 | elapsed: 0.41s | num: 200000 | iterations: 3 | runner: seq_wr=219554 rand_rd=681562 cpu=108 composite=35194.6"
           }
         ]
       }
