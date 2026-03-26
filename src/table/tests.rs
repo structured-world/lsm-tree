@@ -17,23 +17,45 @@ use crate::{
 use tempfile::tempdir;
 use test_log::test;
 
-#[expect(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::cast_possible_truncation,
-    clippy::unwrap_used
-)]
 fn test_with_table(
     items: &[InternalValue],
     f: impl Fn(Table) -> crate::Result<()>,
     rotate_every: Option<usize>,
     config_writer: Option<impl Fn(Writer) -> Writer>,
 ) -> crate::Result<()> {
+    test_with_table_impl(
+        items,
+        f,
+        rotate_every,
+        config_writer,
+        #[cfg(zstd_any)]
+        None,
+    )
+}
+
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::cast_possible_truncation,
+    clippy::unwrap_used
+)]
+fn test_with_table_impl(
+    items: &[InternalValue],
+    f: impl Fn(Table) -> crate::Result<()>,
+    rotate_every: Option<usize>,
+    config_writer: Option<impl Fn(Writer) -> Writer>,
+    #[cfg(zstd_any)] zstd_dictionary: Option<Arc<crate::compression::ZstdDictionary>>,
+) -> crate::Result<()> {
     let dir = tempdir()?;
     let file = dir.path().join("table");
 
     {
         let mut writer = Writer::new(file.clone(), 0, 0, Arc::new(StdFs))?;
+
+        #[cfg(zstd_any)]
+        if zstd_dictionary.is_some() {
+            writer = writer.use_zstd_dictionary(zstd_dictionary.clone());
+        }
 
         if let Some(f) = &config_writer {
             writer = f(writer);
@@ -64,7 +86,7 @@ fn test_with_table(
                 false,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -98,7 +120,7 @@ fn test_with_table(
                 false,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -132,7 +154,7 @@ fn test_with_table(
                 true,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -166,7 +188,7 @@ fn test_with_table(
                 true,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -200,7 +222,7 @@ fn test_with_table(
                 true,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -222,6 +244,11 @@ fn test_with_table(
     // Test with partitioned indexes
     {
         let mut writer = Writer::new(file.clone(), 0, 0, Arc::new(StdFs))?.use_partitioned_index();
+
+        #[cfg(zstd_any)]
+        if zstd_dictionary.is_some() {
+            writer = writer.use_zstd_dictionary(zstd_dictionary.clone());
+        }
 
         if let Some(f) = config_writer {
             writer = f(writer);
@@ -252,7 +279,7 @@ fn test_with_table(
                 false,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -285,7 +312,7 @@ fn test_with_table(
                 false,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -318,7 +345,7 @@ fn test_with_table(
                 true,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -352,7 +379,7 @@ fn test_with_table(
                 true,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary.clone(),
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -386,7 +413,7 @@ fn test_with_table(
                 true,
                 None,
                 #[cfg(zstd_any)]
-                None,
+                zstd_dictionary,
                 crate::comparator::default_comparator(),
                 #[cfg(feature = "metrics")]
                 metrics,
@@ -404,6 +431,29 @@ fn test_with_table(
     }
 
     Ok(())
+}
+
+#[cfg(feature = "zstd")]
+fn test_with_table_and_zstd_dictionary(
+    items: &[InternalValue],
+    f: impl Fn(Table) -> crate::Result<()>,
+    rotate_every: Option<usize>,
+    config_writer: Option<impl Fn(Writer) -> Writer>,
+    zstd_dictionary: Arc<crate::compression::ZstdDictionary>,
+) -> crate::Result<()> {
+    test_with_table_impl(items, f, rotate_every, config_writer, Some(zstd_dictionary))
+}
+
+#[cfg(feature = "zstd")]
+fn make_test_dictionary() -> crate::compression::ZstdDictionary {
+    let mut samples = Vec::new();
+    for i in 0u32..500 {
+        let key = format!("key-{i:05}");
+        let val = format!("value-{i:05}-padding-to-make-it-longer");
+        samples.extend_from_slice(key.as_bytes());
+        samples.extend_from_slice(val.as_bytes());
+    }
+    crate::compression::ZstdDictionary::new(&samples)
 }
 
 #[test]
@@ -445,6 +495,54 @@ fn table_point_read() -> crate::Result<()> {
         },
         None,
         Some(|x| x),
+    )
+}
+
+#[test]
+#[cfg(feature = "zstd")]
+fn table_point_read_zstd_dictionary() -> crate::Result<()> {
+    let dict = Arc::new(make_test_dictionary());
+    let expected_dict_id = dict.id();
+    let compression = crate::CompressionType::zstd_dict(3, expected_dict_id)?;
+    let items = [
+        crate::InternalValue::from_components(
+            b"key-00001",
+            b"value-00001-padding-to-make-it-longer",
+            3,
+            crate::ValueType::Value,
+        ),
+        crate::InternalValue::from_components(
+            b"key-00002",
+            b"value-00002-padding-to-make-it-longer",
+            2,
+            crate::ValueType::Value,
+        ),
+    ];
+
+    test_with_table_and_zstd_dictionary(
+        &items,
+        |table| {
+            assert!(matches!(
+                table.metadata.data_block_compression,
+                crate::CompressionType::ZstdDict { dict_id, .. } if dict_id == expected_dict_id
+            ));
+            assert_eq!(items, &*table.iter().flatten().collect::<Vec<_>>());
+            assert_eq!(
+                b"value-00001-padding-to-make-it-longer",
+                &*table
+                    .get(
+                        b"key-00001",
+                        SeqNo::MAX,
+                        BloomBuilder::get_hash(b"key-00001"),
+                    )?
+                    .unwrap()
+                    .value,
+            );
+            Ok(())
+        },
+        None,
+        Some(|writer: Writer| writer.use_data_block_compression(compression)),
+        dict,
     )
 }
 
