@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 /// Tombstones are activated when the scan reaches their `start` key, and
 /// expired when the scan reaches or passes their `end` key.
 ///
-/// Uses a sorted vector keyed by `(end asc, id asc)` in comparator order,
+/// Uses a sorted vector keyed by `(end desc, id asc)` in comparator order,
 /// with the expiring-soonest tombstone kept at the tail for cheap `last()`.
 pub struct ActiveTombstoneSet {
     comparator: SharedComparator,
@@ -75,7 +75,7 @@ impl ActiveTombstoneSet {
             .pending_expiry
             .binary_search_by(|(existing_end, existing_id, _)| {
                 comparator
-                    .compare(existing_end, &end)
+                    .compare(&end, existing_end)
                     .then_with(|| existing_id.cmp(&id))
             })
             .unwrap_or_else(|idx| idx);
@@ -408,6 +408,20 @@ mod tests {
         // second RT was never incorrectly activated.
         set.expire_until(b"m");
         assert!(set.is_empty());
+    }
+
+    #[test]
+    fn forward_expire_narrower_tombstone_before_wider_one() {
+        let mut set = ActiveTombstoneSet::new();
+        set.activate(&rt(b"\x00", b"\x06", 3), 100);
+        set.activate(&rt(b"\x00", b"\x01", 5), 100);
+
+        assert_eq!(set.max_active_seqno(), Some(5));
+        set.expire_until(b"\x02");
+
+        assert_eq!(set.max_active_seqno(), Some(3));
+        assert!(!set.is_suppressed(4));
+        assert!(set.is_suppressed(2));
     }
 
     // ──── Reverse tests ────

@@ -386,7 +386,7 @@ pub trait AbstractTree: sealed::Sealed {
     /// use lsm_tree::{AbstractTree, Config, Tree};
     ///
     /// let folder = tempfile::tempdir()?;
-    /// let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    /// let tree = Config::new(&folder, Default::default(), Default::default()).open()?;
     ///
     /// assert_eq!(tree.len(0, None)?, 0);
     /// tree.insert("1", "abc", 0);
