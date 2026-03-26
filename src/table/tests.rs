@@ -5,8 +5,9 @@
 #![allow(
     clippy::doc_markdown,
     clippy::default_trait_access,
-    clippy::expect_used
+    reason = "test code"
 )]
+#![expect(clippy::expect_used, reason = "test code")]
 
 use super::*;
 use crate::{
