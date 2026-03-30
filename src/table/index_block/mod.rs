@@ -20,6 +20,7 @@ use crate::{
         util::{SliceIndexes, compare_prefixed_slice},
     },
 };
+use std::io::{Error, ErrorKind};
 
 #[derive(Debug)]
 pub struct IndexBlockParsedItem {
@@ -49,8 +50,16 @@ impl ParsedItem<KeyedBlockHandle> for IndexBlockParsedItem {
         }
     }
 
+    fn seqno(&self) -> SeqNo {
+        self.seqno
+    }
+
     fn key_offset(&self) -> usize {
         self.end_key.0
+    }
+
+    fn key_end_offset(&self) -> usize {
+        self.end_key.1
     }
 
     fn materialize(&self, bytes: &Slice) -> KeyedBlockHandle {
@@ -102,9 +111,25 @@ impl IndexBlock {
     }
 
     pub fn encode_into_vec(items: &[KeyedBlockHandle]) -> crate::Result<Vec<u8>> {
+        Self::encode_into_vec_with_restart_interval(items, 1)
+    }
+
+    /// Builds an index block with the given restart interval into a new `Vec`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`std::io::ErrorKind::InvalidInput`] when `restart_interval == 0`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `items` is empty.
+    pub fn encode_into_vec_with_restart_interval(
+        items: &[KeyedBlockHandle],
+        restart_interval: u8,
+    ) -> crate::Result<Vec<u8>> {
         let mut buf = vec![];
 
-        Self::encode_into(&mut buf, items)?;
+        Self::encode_into_with_restart_interval(&mut buf, items, restart_interval)?;
 
         Ok(buf)
     }
@@ -115,13 +140,38 @@ impl IndexBlock {
     ///
     /// Panics if the given item array if empty.
     pub fn encode_into(writer: &mut Vec<u8>, items: &[KeyedBlockHandle]) -> crate::Result<()> {
+        Self::encode_into_with_restart_interval(writer, items, 1)
+    }
+
+    /// Builds an index block using the provided restart interval.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`std::io::ErrorKind::InvalidInput`] when `restart_interval == 0`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `items` is empty.
+    pub fn encode_into_with_restart_interval(
+        writer: &mut Vec<u8>,
+        items: &[KeyedBlockHandle],
+        restart_interval: u8,
+    ) -> crate::Result<()> {
+        if restart_interval == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "index block restart interval must be greater than zero",
+            )
+            .into());
+        }
+
         #[expect(clippy::expect_used)]
         let first_key = items.first().expect("chunk should not be empty").end_key();
 
         let mut serializer = Encoder::<'_, BlockOffset, KeyedBlockHandle>::new(
             writer,
             items.len(),
-            1,   // hard-coded for now, TODO: see https://github.com/fjall-rs/lsm-tree/issues/184
+            restart_interval,
             0.0, // Index blocks do not support hash index
             first_key,
         );
@@ -131,5 +181,49 @@ impl IndexBlock {
         }
 
         serializer.finish()
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+    use crate::table::BlockHandle;
+
+    fn make_shared_prefix_handles(count: usize) -> Vec<KeyedBlockHandle> {
+        (0..count)
+            .map(|i| {
+                let key = format!("adj:out:vertex-0001:edge-{i:04}:target-0001");
+                KeyedBlockHandle::new(
+                    key.into(),
+                    i as u64,
+                    BlockHandle::new(BlockOffset((i as u64) * 4096), 4096),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn higher_restart_interval_reduces_index_block_size_for_shared_prefix_keys() {
+        let handles = make_shared_prefix_handles(256);
+
+        let legacy = IndexBlock::encode_into_vec_with_restart_interval(&handles, 1).unwrap();
+        let compressed = IndexBlock::encode_into_vec_with_restart_interval(&handles, 16).unwrap();
+
+        assert!(
+            compressed.len() < legacy.len(),
+            "compressed={} should be smaller than legacy={}",
+            compressed.len(),
+            legacy.len(),
+        );
+    }
+
+    #[test]
+    fn zero_restart_interval_is_rejected() {
+        let handles = make_shared_prefix_handles(2);
+        let Err(err) = IndexBlock::encode_into_vec_with_restart_interval(&handles, 0) else {
+            panic!("restart interval of zero must be rejected");
+        };
+        assert!(matches!(err, crate::Error::Io(e) if e.kind() == ErrorKind::InvalidInput));
     }
 }

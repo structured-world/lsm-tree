@@ -96,6 +96,17 @@ fn validated_kv_seqno(kv_seqno: SeqNo, max_seqno: SeqNo) -> crate::Result<SeqNo>
     Ok(kv_seqno)
 }
 
+fn validated_restart_interval_index(restart_interval: u8) -> crate::Result<u8> {
+    if restart_interval == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "restart_interval#index must be greater than zero",
+        )
+        .into());
+    }
+    Ok(restart_interval)
+}
+
 impl ParsedMeta {
     #[expect(clippy::expect_used, clippy::too_many_lines)]
     pub fn load_with_handle(
@@ -167,11 +178,8 @@ impl ParsedMeta {
             );
         }
 
-        assert_eq!(
-            read_u8!(block, b"restart_interval#index", &cmp),
-            1,
-            "index block restart intervals >1 are not supported for this version",
-        );
+        let _index_block_restart_interval =
+            validated_restart_interval_index(read_u8!(block, b"restart_interval#index", &cmp))?;
 
         let id = read_u64!(block, b"table_id", &cmp);
         let item_count = read_u64!(block, b"item_count", &cmp);
@@ -305,6 +313,18 @@ mod tests {
     #[test]
     fn validated_kv_seqno_exceeds_max_returns_error() {
         let err = validated_kv_seqno(11, 10).unwrap_err();
+        assert!(matches!(err, crate::Error::Io(e) if e.kind() == std::io::ErrorKind::InvalidData));
+    }
+
+    #[test]
+    fn validated_restart_interval_index_non_zero() {
+        assert_eq!(validated_restart_interval_index(1).unwrap(), 1);
+        assert_eq!(validated_restart_interval_index(u8::MAX).unwrap(), u8::MAX);
+    }
+
+    #[test]
+    fn validated_restart_interval_index_zero_returns_error() {
+        let err = validated_restart_interval_index(0).unwrap_err();
         assert!(matches!(err, crate::Error::Io(e) if e.kind() == std::io::ErrorKind::InvalidData));
     }
 }

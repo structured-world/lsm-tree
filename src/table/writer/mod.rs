@@ -211,21 +211,44 @@ impl Writer {
 
     #[must_use]
     pub fn use_partitioned_index(mut self) -> Self {
+        assert!(
+            self.meta.data_block_count == 0 && self.chunk.is_empty(),
+            "partitioned index must be configured before writing starts",
+        );
         self.index_writer = Box::new(index::PartitionedIndexWriter::new())
             .use_compression(self.index_block_compression)
+            .use_partition_size(self.meta_partition_size)
+            .use_restart_interval(self.index_block_restart_interval)
             .use_encryption(self.encryption.clone());
         self
     }
 
     #[must_use]
     pub fn use_data_block_restart_interval(mut self, interval: u8) -> Self {
+        assert!(
+            interval > 0,
+            "data block restart interval must be greater than zero",
+        );
+        assert!(
+            self.meta.data_block_count == 0 && self.chunk.is_empty(),
+            "data block restart interval must be configured before writing starts",
+        );
         self.data_block_restart_interval = interval;
         self
     }
 
     #[must_use]
     pub fn use_index_block_restart_interval(mut self, interval: u8) -> Self {
+        assert!(
+            interval > 0,
+            "index block restart interval must be greater than zero",
+        );
+        assert!(
+            self.meta.data_block_count == 0 && self.chunk.is_empty(),
+            "index block restart interval must be configured before writing starts",
+        );
         self.index_block_restart_interval = interval;
+        self.index_writer = self.index_writer.use_restart_interval(interval);
         self
     }
 
@@ -804,6 +827,126 @@ mod tests {
 
         writer.spill_block()?;
         assert_eq!(0, writer.chunk_size);
+
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "index block restart interval must be greater than zero")]
+    fn writer_rejects_zero_index_block_restart_interval() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(e) => panic!("tempdir should be created: {e}"),
+        };
+        let path = dir.path().join("1");
+        let writer = match Writer::new(path, 1, 0, Arc::new(StdFs)) {
+            Ok(writer) => writer,
+            Err(e) => panic!("writer should be created: {e}"),
+        };
+        let _writer = writer.use_index_block_restart_interval(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "data block restart interval must be greater than zero")]
+    fn writer_rejects_zero_data_block_restart_interval() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(e) => panic!("tempdir should be created: {e}"),
+        };
+        let path = dir.path().join("1");
+        let writer = match Writer::new(path, 1, 0, Arc::new(StdFs)) {
+            Ok(writer) => writer,
+            Err(e) => panic!("writer should be created: {e}"),
+        };
+        let _writer = writer.use_data_block_restart_interval(0);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "data block restart interval must be configured before writing starts"
+    )]
+    fn writer_rejects_data_block_restart_interval_change_after_write() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(e) => panic!("tempdir should be created: {e}"),
+        };
+        let path = dir.path().join("1");
+        let mut writer = match Writer::new(path, 1, 0, Arc::new(StdFs)) {
+            Ok(writer) => writer,
+            Err(e) => panic!("writer should be created: {e}"),
+        };
+        if let Err(e) = writer.write(InternalValue::from_components(
+            b"a",
+            b"v",
+            0,
+            ValueType::Value,
+        )) {
+            panic!("write should succeed: {e}");
+        }
+        let _writer = writer.use_data_block_restart_interval(2);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "index block restart interval must be configured before writing starts"
+    )]
+    fn writer_rejects_index_block_restart_interval_change_after_write() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(e) => panic!("tempdir should be created: {e}"),
+        };
+        let path = dir.path().join("1");
+        let mut writer = match Writer::new(path, 1, 0, Arc::new(StdFs)) {
+            Ok(writer) => writer,
+            Err(e) => panic!("writer should be created: {e}"),
+        };
+        if let Err(e) = writer.write(InternalValue::from_components(
+            b"a",
+            b"v",
+            0,
+            ValueType::Value,
+        )) {
+            panic!("write should succeed: {e}");
+        }
+        let _writer = writer.use_index_block_restart_interval(2);
+    }
+
+    #[test]
+    #[should_panic(expected = "partitioned index must be configured before writing starts")]
+    fn writer_rejects_partitioned_index_switch_after_write() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(e) => panic!("tempdir should be created: {e}"),
+        };
+        let path = dir.path().join("1");
+        let mut writer = match Writer::new(path, 1, 0, Arc::new(StdFs)) {
+            Ok(writer) => writer,
+            Err(e) => panic!("writer should be created: {e}"),
+        };
+        if let Err(e) = writer.write(InternalValue::from_components(
+            b"a",
+            b"v",
+            0,
+            ValueType::Value,
+        )) {
+            panic!("write should succeed: {e}");
+        }
+        let _writer = writer.use_partitioned_index();
+    }
+
+    #[test]
+    fn writer_meta_partition_size_is_chainable_with_full_index_writer() -> crate::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("full-index");
+        let mut writer = Writer::new(path, 1, 0, Arc::new(StdFs))?.use_meta_partition_size(8_192);
+
+        writer.write(InternalValue::from_components(
+            b"k",
+            b"v",
+            0,
+            ValueType::Value,
+        ))?;
+        writer.spill_block()?;
 
         Ok(())
     }

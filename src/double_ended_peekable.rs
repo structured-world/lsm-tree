@@ -52,6 +52,14 @@ impl<T, I> DoubleEndedPeekable<T, I>
 where
     I: Iterator<Item = T>,
 {
+    pub fn reset_front_peeked(&mut self) {
+        self.front = MaybePeeked::Unpeeked;
+    }
+
+    pub fn reset_back_peeked(&mut self) {
+        self.back = MaybePeeked::Unpeeked;
+    }
+
     pub fn inner_mut(&mut self) -> &mut I {
         &mut self.iter
     }

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 pub struct FullIndexWriter {
     compression: CompressionType,
+    restart_interval: u8,
     block_handles: Vec<KeyedBlockHandle>,
     encryption: Option<Arc<dyn EncryptionProvider>>,
 }
@@ -23,6 +24,7 @@ impl FullIndexWriter {
     pub fn new() -> Self {
         Self {
             compression: CompressionType::None,
+            restart_interval: 1,
             block_handles: Vec::new(),
             encryption: None,
         }
@@ -39,6 +41,11 @@ impl<W: std::io::Write + std::io::Seek> BlockIndexWriter<W> for FullIndexWriter 
     }
 
     fn use_partition_size(self: Box<Self>, _: u32) -> Box<dyn BlockIndexWriter<W>> {
+        self
+    }
+
+    fn use_restart_interval(mut self: Box<Self>, interval: u8) -> Box<dyn BlockIndexWriter<W>> {
+        self.restart_interval = interval;
         self
     }
 
@@ -70,7 +77,11 @@ impl<W: std::io::Write + std::io::Seek> BlockIndexWriter<W> for FullIndexWriter 
         file_writer.start("tli")?;
 
         let mut bytes = vec![];
-        IndexBlock::encode_into(&mut bytes, &self.block_handles)?;
+        IndexBlock::encode_into_with_restart_interval(
+            &mut bytes,
+            &self.block_handles,
+            self.restart_interval,
+        )?;
 
         let header = Block::write_into(
             file_writer,
