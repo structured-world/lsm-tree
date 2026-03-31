@@ -954,4 +954,27 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    #[should_panic(expected = "partitioned filter must be configured before writing starts")]
+    fn writer_rejects_partitioned_filter_switch_after_write() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(e) => panic!("tempdir should be created: {e}"),
+        };
+        let path = dir.path().join("1");
+        let mut writer = match Writer::new(path, 1, 0, Arc::new(StdFs)) {
+            Ok(writer) => writer,
+            Err(e) => panic!("writer should be created: {e}"),
+        };
+        if let Err(e) = writer.write(InternalValue::from_components(
+            b"a",
+            b"v",
+            0,
+            ValueType::Value,
+        )) {
+            panic!("write should succeed: {e}");
+        }
+        let _writer = writer.use_partitioned_filter();
+    }
 }

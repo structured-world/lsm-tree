@@ -776,10 +776,6 @@ impl<F: Fs> Config<F> {
     #[must_use]
     pub fn data_block_restart_interval_policy(mut self, policy: RestartIntervalPolicy) -> Self {
         assert!(
-            !policy.is_empty(),
-            "data block restart interval policy must not be empty",
-        );
-        assert!(
             policy.iter().all(|interval| *interval > 0),
             "data block restart interval must be greater than zero",
         );
@@ -799,10 +795,6 @@ impl<F: Fs> Config<F> {
     /// Panics if any restart interval in `policy` is zero.
     #[must_use]
     pub fn index_block_restart_interval_policy(mut self, policy: RestartIntervalPolicy) -> Self {
-        assert!(
-            !policy.is_empty(),
-            "index block restart interval policy must not be empty",
-        );
         assert!(
             policy.iter().all(|interval| *interval > 0),
             "index block restart interval must be greater than zero",
@@ -1025,5 +1017,35 @@ mod builder_tests {
             SequenceNumberCounter::default(),
         )
         .data_block_restart_interval_policy(RestartIntervalPolicy::all(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "compression policy may not be empty")]
+    fn index_restart_interval_policy_rejects_empty() {
+        let folder = match tempfile::tempdir() {
+            Ok(folder) => folder,
+            Err(err) => panic!("tempdir failed: {err}"),
+        };
+        let _cfg = Config::new(
+            folder.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .index_block_restart_interval_policy(RestartIntervalPolicy::new([]));
+    }
+
+    #[test]
+    #[should_panic(expected = "compression policy may not be empty")]
+    fn data_restart_interval_policy_rejects_empty() {
+        let folder = match tempfile::tempdir() {
+            Ok(folder) => folder,
+            Err(err) => panic!("tempdir failed: {err}"),
+        };
+        let _cfg = Config::new(
+            folder.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .data_block_restart_interval_policy(RestartIntervalPolicy::new([]));
     }
 }
