@@ -212,8 +212,11 @@ mod tests {
 
     #[test]
     fn from_block_with_bounds_both_bounds() {
-        let block = make_index_block(&[b"a", b"b", b"c", b"d"], 1);
-        let mut iter = OwnedIndexBlockIter::from_block_with_bounds(
+        // Include trailing key "e" so the hi bound actually clips the sequence;
+        // with [a,b,c,d] and hi="c", "d" is already the tail and a broken
+        // upper-bound path would still pass.
+        let block = make_index_block(&[b"a", b"b", b"c", b"d", b"e"], 1);
+        let iter = OwnedIndexBlockIter::from_block_with_bounds(
             block,
             default_comparator(),
             Some((b"b", SeqNo::MAX)),
@@ -221,8 +224,8 @@ mod tests {
         )
         .unwrap();
 
-        // Forward from lo bound
-        assert_eq!(iter.next().unwrap().end_key().as_ref(), b"b");
+        let keys: Vec<_> = iter.map(|h| h.end_key().to_vec()).collect();
+        assert_eq!(keys, vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec()]);
     }
 
     #[test]
@@ -240,13 +243,10 @@ mod tests {
         .unwrap();
 
         let keys: Vec<_> = iter.map(|h| h.end_key().to_vec()).collect();
-        // lo="c" → first block with end_key >= "c" is "c"
-        // hi="f" → forward limit includes up to "f"
-        assert!(!keys.is_empty());
-        assert!(keys.first().unwrap().as_slice() >= b"c".as_slice());
-        assert!(keys.last().unwrap().as_slice() <= b"f".as_slice());
-        assert!(keys.iter().all(|k| k.as_slice() >= b"c".as_slice()));
-        assert!(keys.iter().all(|k| k.as_slice() <= b"f".as_slice()));
+        assert_eq!(
+            keys,
+            vec![b"c".to_vec(), b"d".to_vec(), b"e".to_vec(), b"f".to_vec(),]
+        );
     }
 
     #[test]
