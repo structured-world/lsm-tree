@@ -84,3 +84,9 @@ name = "bloom"
 harness = false
 path = "benches/bloom.rs"
 required-features = []
+
+[[bench]]
+name = "index_block"
+harness = false
+path = "benches/index_block.rs"
+required-features = []

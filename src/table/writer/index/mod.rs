@@ -31,6 +31,10 @@ pub trait BlockIndexWriter<W: std::io::Write + std::io::Seek> {
         compression: CompressionType,
     ) -> Box<dyn BlockIndexWriter<W>>;
 
+    // No default: `Box<Self> -> Box<dyn>` requires `Sized` which would break
+    // object safety. Same constraint applies to all `use_*` builder methods.
+    fn use_restart_interval(self: Box<Self>, interval: u8) -> Box<dyn BlockIndexWriter<W>>;
+
     fn use_partition_size(self: Box<Self>, size: u32) -> Box<dyn BlockIndexWriter<W>>;
 
     /// Sets the encryption provider for index blocks.

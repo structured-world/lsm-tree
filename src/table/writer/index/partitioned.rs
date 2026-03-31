@@ -20,6 +20,7 @@ pub struct PartitionedIndexWriter {
     relative_file_pos: u64,
 
     compression: CompressionType,
+    restart_interval: u8,
 
     tli_handles: Vec<KeyedBlockHandle>,
     data_block_handles: Vec<KeyedBlockHandle>,
@@ -45,6 +46,7 @@ impl PartitionedIndexWriter {
 
             partition_size: 4_096,
             compression: CompressionType::None,
+            restart_interval: 1,
 
             tli_handles: Vec::new(),
             data_block_handles: Vec::new(),
@@ -58,7 +60,11 @@ impl PartitionedIndexWriter {
 
     fn cut_index_block(&mut self) -> crate::Result<()> {
         let mut bytes = vec![];
-        IndexBlock::encode_into(&mut bytes, &self.data_block_handles)?;
+        IndexBlock::encode_into_with_restart_interval(
+            &mut bytes,
+            &self.data_block_handles,
+            self.restart_interval,
+        )?;
 
         let header = Block::write_into(
             &mut self.block_buffer,
@@ -123,7 +129,11 @@ impl PartitionedIndexWriter {
         }
 
         let mut bytes = vec![];
-        IndexBlock::encode_into(&mut bytes, &self.tli_handles)?;
+        IndexBlock::encode_into_with_restart_interval(
+            &mut bytes,
+            &self.tli_handles,
+            self.restart_interval,
+        )?;
 
         let header = Block::write_into(
             file_writer,
@@ -163,6 +173,11 @@ impl<W: std::io::Write + std::io::Seek> BlockIndexWriter<W> for PartitionedIndex
 
     fn use_partition_size(mut self: Box<Self>, size: u32) -> Box<dyn BlockIndexWriter<W>> {
         self.partition_size = size;
+        self
+    }
+
+    fn use_restart_interval(mut self: Box<Self>, interval: u8) -> Box<dyn BlockIndexWriter<W>> {
+        self.restart_interval = interval;
         self
     }
 

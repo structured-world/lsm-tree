@@ -3,7 +3,10 @@
 // (found in the LICENSE-* files in the repository)
 
 pub(crate) mod binary_index;
-pub mod decoder;
+// Crate-internal: Decoder, Decodable, ParsedItem are not part of the public API.
+// They are re-exported as pub(crate) below; narrowing the module prevents
+// external code from reaching these traits via lsm_tree::table::block::decoder::*.
+pub(crate) mod decoder;
 mod encoder;
 pub mod hash_index;
 mod header;

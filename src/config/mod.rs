@@ -769,24 +769,39 @@ impl<F: Fs> Config<F> {
     /// inside data blocks.
     ///
     /// Default = 16
+    ///
+    /// # Panics
+    ///
+    /// Panics if any restart interval in `policy` is zero.
     #[must_use]
     pub fn data_block_restart_interval_policy(mut self, policy: RestartIntervalPolicy) -> Self {
+        assert!(
+            policy.iter().all(|interval| *interval > 0),
+            "data block restart interval must be greater than zero",
+        );
         self.data_block_restart_interval_policy = policy;
         self
     }
 
-    // TODO: not supported yet in index blocks
-    // /// Sets the restart interval inside index blocks.
-    // ///
-    // /// A higher restart interval saves space while increasing lookup times
-    // /// inside index blocks.
-    // ///
-    // /// Default = 1
-    // #[must_use]
-    // pub fn index_block_restart_interval_policy(mut self, policy: RestartIntervalPolicy) -> Self {
-    //     self.index_block_restart_interval_policy = policy;
-    //     self
-    // }
+    /// Sets the restart interval inside index blocks.
+    ///
+    /// A higher restart interval saves space while increasing lookup times
+    /// inside index blocks.
+    ///
+    /// Default = 1
+    ///
+    /// # Panics
+    ///
+    /// Panics if any restart interval in `policy` is zero.
+    #[must_use]
+    pub fn index_block_restart_interval_policy(mut self, policy: RestartIntervalPolicy) -> Self {
+        assert!(
+            policy.iter().all(|interval| *interval > 0),
+            "index block restart interval must be greater than zero",
+        );
+        self.index_block_restart_interval_policy = policy;
+        self
+    }
 
     /// Sets the filter construction policy.
     #[must_use]
@@ -948,5 +963,89 @@ impl<F: Fs> Config<F> {
     ) -> Self {
         self.zstd_dictionary = dictionary;
         self
+    }
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+    use crate::SequenceNumberCounter;
+
+    #[test]
+    fn restart_interval_policies_can_be_overridden_independently() {
+        let folder = match tempfile::tempdir() {
+            Ok(folder) => folder,
+            Err(err) => panic!("tempdir failed: {err}"),
+        };
+        let cfg = Config::new(
+            folder.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .data_block_restart_interval_policy(RestartIntervalPolicy::all(7))
+        .index_block_restart_interval_policy(RestartIntervalPolicy::all(3));
+
+        assert_eq!(cfg.data_block_restart_interval_policy.first(), Some(&7));
+        assert_eq!(cfg.index_block_restart_interval_policy.first(), Some(&3));
+    }
+
+    #[test]
+    #[should_panic(expected = "index block restart interval must be greater than zero")]
+    fn index_restart_interval_policy_rejects_zero_values() {
+        let folder = match tempfile::tempdir() {
+            Ok(folder) => folder,
+            Err(err) => panic!("tempdir failed: {err}"),
+        };
+        let _cfg = Config::new(
+            folder.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .index_block_restart_interval_policy(RestartIntervalPolicy::all(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "data block restart interval must be greater than zero")]
+    fn data_restart_interval_policy_rejects_zero_values() {
+        let folder = match tempfile::tempdir() {
+            Ok(folder) => folder,
+            Err(err) => panic!("tempdir failed: {err}"),
+        };
+        let _cfg = Config::new(
+            folder.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .data_block_restart_interval_policy(RestartIntervalPolicy::all(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "restart interval policy may not be empty")]
+    fn index_restart_interval_policy_rejects_empty() {
+        let folder = match tempfile::tempdir() {
+            Ok(folder) => folder,
+            Err(err) => panic!("tempdir failed: {err}"),
+        };
+        let _cfg = Config::new(
+            folder.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .index_block_restart_interval_policy(RestartIntervalPolicy::new([]));
+    }
+
+    #[test]
+    #[should_panic(expected = "restart interval policy may not be empty")]
+    fn data_restart_interval_policy_rejects_empty() {
+        let folder = match tempfile::tempdir() {
+            Ok(folder) => folder,
+            Err(err) => panic!("tempdir failed: {err}"),
+        };
+        let _cfg = Config::new(
+            folder.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .data_block_restart_interval_policy(RestartIntervalPolicy::new([]));
     }
 }
