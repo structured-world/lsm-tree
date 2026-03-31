@@ -198,7 +198,7 @@ impl Decodable<IndexBlockParsedItem> for KeyedBlockHandle {
         offset: usize,
         entries_end: usize,
     ) -> Option<IndexBlockParsedItem> {
-        let marker = unwrap!(reader.read_u8());
+        let marker = reader.read_u8().ok()?;
 
         if marker == TRAILER_START_MARKER {
             return None;
@@ -207,10 +207,10 @@ impl Decodable<IndexBlockParsedItem> for KeyedBlockHandle {
             return None;
         }
 
-        let handle = unwrap!(BlockHandle::decode_from(reader));
-        let seqno = unwrap!(reader.read_u64_varint());
+        let handle = BlockHandle::decode_from(reader).ok()?;
+        let seqno = reader.read_u64_varint().ok()?;
 
-        let key_len: usize = unwrap!(reader.read_u16_varint()).into();
+        let key_len: usize = reader.read_u16_varint().ok()?.into();
         #[expect(
             clippy::cast_possible_truncation,
             reason = "blocks tend to be some megabytes in size at most, so position should fit into usize"
@@ -229,7 +229,7 @@ impl Decodable<IndexBlockParsedItem> for KeyedBlockHandle {
         if key_end > entries_end {
             return None;
         }
-        unwrap!(reader.seek_relative(offset_i64));
+        reader.seek_relative(offset_i64).ok()?;
 
         Some(IndexBlockParsedItem {
             prefix: None,
@@ -246,7 +246,7 @@ impl Decodable<IndexBlockParsedItem> for KeyedBlockHandle {
         data: &'a [u8],
         entries_end: usize,
     ) -> Option<(&'a [u8], SeqNo)> {
-        let marker = unwrap!(reader.read_u8());
+        let marker = reader.read_u8().ok()?;
 
         if marker == TRAILER_START_MARKER {
             return None;
@@ -255,11 +255,11 @@ impl Decodable<IndexBlockParsedItem> for KeyedBlockHandle {
             return None;
         }
 
-        let _file_offset = unwrap!(reader.read_u64_varint());
-        let _size = unwrap!(reader.read_u32_varint());
-        let seqno = unwrap!(reader.read_u64_varint());
+        let _file_offset = reader.read_u64_varint().ok()?;
+        let _size = reader.read_u32_varint().ok()?;
+        let seqno = reader.read_u64_varint().ok()?;
 
-        let key_len: usize = unwrap!(reader.read_u16_varint()).into();
+        let key_len: usize = reader.read_u16_varint().ok()?.into();
         #[expect(
             clippy::cast_possible_truncation,
             reason = "blocks tend to be some megabytes in size at most, so position should fit into usize"
@@ -275,7 +275,7 @@ impl Decodable<IndexBlockParsedItem> for KeyedBlockHandle {
             reason = "key_len is bounded by u16::MAX, no wrap expected"
         )]
         let key_len_i64 = key_len as i64;
-        unwrap!(reader.seek_relative(key_len_i64));
+        reader.seek_relative(key_len_i64).ok()?;
 
         let key = data.get(key_start..key_end);
 
