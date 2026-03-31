@@ -73,8 +73,11 @@ impl OwnedIndexBlockIter {
         self.with_dependent_mut(|_, m| m.seek(needle, seqno))
     }
 
-    /// Upper-bound seek for forward-limit positioning: resets back cache
-    /// but does not check back-cache validity (allows all-same-end-key blocks).
+    /// Upper-bound seek for forward-limit positioning.
+    ///
+    /// Preserves the current front cursor and re-seeks only the back cursor,
+    /// so this tightens the existing forward window instead of performing a
+    /// full upper re-seek.
     pub fn seek_upper(&mut self, needle: &[u8], _seqno: SeqNo) -> bool {
         self.with_dependent_mut(|_, m| {
             // reset_front=false: preserve front cache from prior seek_lower
@@ -199,13 +202,12 @@ mod tests {
         // Forward iteration still starts from the beginning
         assert_eq!(iter.next().unwrap().end_key().as_ref(), b"a");
 
-        // seek_upper("c") positions the back cursor at the partition boundary;
-        // next_back yields items from that position downward
-        let back = iter.next_back().unwrap();
-        assert!(back.end_key().as_ref() <= &b"d"[..]);
-        // Confirm backward iteration continues in reverse order
-        let prev = iter.next_back().unwrap();
-        assert!(prev.end_key().as_ref() < back.end_key().as_ref());
+        // seek_upper("c", 0) positions the back cursor at the first block
+        // with end_key > "c", which is "d". next_back yields from there downward.
+        assert_eq!(iter.next_back().unwrap().end_key().as_ref(), b"d");
+        assert_eq!(iter.next_back().unwrap().end_key().as_ref(), b"c");
+        assert_eq!(iter.next_back().unwrap().end_key().as_ref(), b"b");
+        assert!(iter.next_back().is_none());
     }
 
     #[test]
