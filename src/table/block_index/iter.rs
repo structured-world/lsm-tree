@@ -240,8 +240,11 @@ mod tests {
         let keys: Vec<_> = iter.map(|h| h.end_key().to_vec()).collect();
         // lo="c" → first block with end_key >= "c" is "c"
         // hi="f" → forward limit includes up to "f"
-        assert!(keys.first().unwrap().as_slice() >= b"c".as_slice());
         assert!(!keys.is_empty());
+        assert!(keys.first().unwrap().as_slice() >= b"c".as_slice());
+        assert!(keys.last().unwrap().as_slice() <= b"f".as_slice());
+        assert!(keys.iter().all(|k| k.as_slice() >= b"c".as_slice()));
+        assert!(keys.iter().all(|k| k.as_slice() <= b"f".as_slice()));
     }
 
     #[test]
