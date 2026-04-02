@@ -172,8 +172,9 @@ impl Iterator for Iter {
                 let lo = self.lo.as_ref().map(|(k, s)| (k.as_ref(), *s));
                 let hi = self.hi.as_ref().map(|(k, s)| (k.as_ref(), *s));
 
-                // TODO(#194): empty child partition (trimmed by lo/hi bounds) stops
-                // the scan via `?` instead of continuing to the next TLI entry.
+                // TODO(#194): empty child partition (trimmed by lo/hi bounds)
+                // currently causes an early `return None` instead of continuing
+                // to the next TLI entry.
                 let mut iter = match OwnedIndexBlockIter::from_block_with_bounds(
                     index_block,
                     self.comparator.clone(),
