@@ -25,8 +25,8 @@ impl FullBlockIndex {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::InvalidTrailer`] if the block trailer is
-    /// malformed.
+    /// Returns [`crate::Error::InvalidTag`] if `block` is not an index block,
+    /// or [`crate::Error::InvalidTrailer`] if the block trailer is malformed.
     pub fn new(block: IndexBlock, comparator: SharedComparator) -> crate::Result<Self> {
         if block.inner.header.block_type != BlockType::Index {
             return Err(crate::Error::InvalidTag((
