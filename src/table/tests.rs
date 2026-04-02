@@ -2116,9 +2116,10 @@ fn two_level_index_scan_skips_empty_child_partition() -> crate::Result<()> {
     use crate::table::block_index::{BlockIndex, BlockIndexIter};
 
     // Eight distinct keys, each gets its own data block (block_size=1 byte).
-    // With meta_partition_size=3, the partitioned index writer cuts a new
-    // child partition roughly every 3 data-block handles, yielding ≥2 child
-    // partitions.
+    // meta_partition_size=3 is a very small byte budget for partitioned index
+    // metadata, so the index writer splits child partitions aggressively
+    // (effectively on or before the first handle), yielding multiple child
+    // partitions for this test.
     let items: Vec<InternalValue> = ["a", "b", "c", "d", "e", "f", "g", "h"]
         .iter()
         .enumerate()
