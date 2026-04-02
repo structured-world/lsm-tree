@@ -2227,16 +2227,16 @@ fn two_level_index_scan_skips_empty_child_partition() -> crate::Result<()> {
             backward_keys.push(h.end_key().to_vec());
         }
 
-        // Drain remaining forward
-        while let Some(Ok(h)) = it.next() {
-            forward_keys.push(h.end_key().to_vec());
-        }
-
-        let total = forward_keys.len() + backward_keys.len();
-        assert!(
-            total >= 4,
-            "mixed scan [c..f] should yield ≥4 handles, got {total}",
+        // The block index is a sparse index: seek_upper positions the back
+        // cursor at the first block whose end_key > hi, so next_back()
+        // starts from "g" (the first handle past "f"), then works down
+        // through "f" and "e" until the cursors meet.
+        assert_eq!(forward_keys, vec![b"c".to_vec(), b"d".to_vec()]);
+        assert_eq!(
+            backward_keys,
+            vec![b"g".to_vec(), b"f".to_vec(), b"e".to_vec()]
         );
+        assert!(it.next().is_none(), "iterator should be exhausted");
     }
 
     Ok(())
