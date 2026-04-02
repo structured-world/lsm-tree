@@ -2182,27 +2182,46 @@ fn two_level_index_scan_skips_empty_child_partition() -> crate::Result<()> {
     {
         let mut it = table.block_index.iter();
         assert!(it.seek_lower(b"d", u64::MAX));
-        let forward: Vec<_> = it.collect::<Result<Vec<_>, _>>()?;
-        assert!(
-            forward.len() >= 5,
-            "forward scan from 'd' should yield handles for d..h (≥5), got {}",
-            forward.len(),
+        let forward_keys: Vec<_> = it
+            .map(|r| r.map(|h| h.end_key().to_vec()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            forward_keys,
+            vec![
+                b"d".to_vec(),
+                b"e".to_vec(),
+                b"f".to_vec(),
+                b"g".to_vec(),
+                b"h".to_vec(),
+            ],
+            "forward scan from 'd' should yield exactly d..h",
         );
-        assert_eq!(forward.first().unwrap().end_key().as_ref(), b"d");
-        assert_eq!(forward.last().unwrap().end_key().as_ref(), b"h");
     }
 
     // --- backward scan with hi bound ---
+    // seek_upper("e", 0) positions the back cursor at the first handle
+    // whose end_key > "e", which is "f". Reverse iteration starts from
+    // "f" and works down to "a".
     {
         let mut it = table.block_index.iter();
         assert!(it.seek_upper(b"e", 0));
-        let backward: Vec<_> = std::iter::from_fn(|| it.next_back().map(|r| r.unwrap())).collect();
-        assert!(
-            !backward.is_empty(),
-            "backward scan up to 'e' should yield at least one handle",
+        let backward_keys: Vec<_> = std::iter::from_fn(|| {
+            it.next_back()
+                .map(|r| r.expect("no I/O error").end_key().to_vec())
+        })
+        .collect();
+        assert_eq!(
+            backward_keys,
+            vec![
+                b"f".to_vec(),
+                b"e".to_vec(),
+                b"d".to_vec(),
+                b"c".to_vec(),
+                b"b".to_vec(),
+                b"a".to_vec(),
+            ],
+            "backward scan up to 'e' should yield f..a in reverse",
         );
-        // The last handle yielded in reverse should be for the lowest key
-        assert_eq!(backward.last().unwrap().end_key().as_ref(), b"a");
     }
 
     // --- mixed forward + backward with both bounds ---
