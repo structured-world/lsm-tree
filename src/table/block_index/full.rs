@@ -4,7 +4,7 @@
 
 use crate::SeqNo;
 use crate::comparator::SharedComparator;
-use crate::table::block::Decoder;
+use crate::table::block::{BlockType, Decoder};
 use crate::table::block_index::{BlockIndexIter, iter::OwnedIndexBlockIter};
 use crate::table::index_block::IndexBlockParsedItem;
 use crate::table::{IndexBlock, KeyedBlockHandle};
@@ -28,9 +28,14 @@ impl FullBlockIndex {
     /// Returns [`crate::Error::InvalidTrailer`] if the block trailer is
     /// malformed.
     pub fn new(block: IndexBlock, comparator: SharedComparator) -> crate::Result<Self> {
+        if block.inner.header.block_type != BlockType::Index {
+            return Err(crate::Error::InvalidTag((
+                "BlockType",
+                block.inner.header.block_type.into(),
+            )));
+        }
         // Validate trailer layout once at construction so later iter() calls
-        // cannot panic. Block type is the caller's responsibility (checked by
-        // read_tli / filter_tli path before reaching here).
+        // cannot panic.
         Decoder::<KeyedBlockHandle, IndexBlockParsedItem>::try_new(&block.inner)?;
         Ok(Self { block, comparator })
     }
