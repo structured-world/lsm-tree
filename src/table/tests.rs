@@ -2205,11 +2205,10 @@ fn two_level_index_scan_skips_empty_child_partition() -> crate::Result<()> {
     {
         let mut it = table.block_index.iter();
         assert!(it.seek_upper(b"e", 0));
-        let backward_keys: Vec<_> = std::iter::from_fn(|| {
-            it.next_back()
-                .map(|r| r.expect("no I/O error").end_key().to_vec())
-        })
-        .collect();
+        let mut backward_keys = Vec::new();
+        while let Some(res) = it.next_back() {
+            backward_keys.push(res?.end_key().to_vec());
+        }
         assert_eq!(
             backward_keys,
             vec![
