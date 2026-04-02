@@ -2117,7 +2117,6 @@ fn bloom_may_contain_key_partitioned_filter() -> crate::Result<()> {
 /// in `seek_upper_bound_cursor`. This test validates overall iteration
 /// correctness rather than the exact `Ok(None)` path.
 #[test]
-#[expect(clippy::unwrap_used)]
 fn two_level_index_scan_skips_empty_child_partition() -> crate::Result<()> {
     use crate::ValueType::Value;
     use crate::table::block_index::{BlockIndex, BlockIndexIter};
