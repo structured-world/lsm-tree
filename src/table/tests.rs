@@ -2233,16 +2233,16 @@ fn two_level_index_scan_skips_empty_child_partition() -> crate::Result<()> {
         let mut backward_keys = vec![];
 
         // Consume two from front
-        if let Some(Ok(h)) = it.next() {
-            forward_keys.push(h.end_key().to_vec());
+        if let Some(res) = it.next() {
+            forward_keys.push(res?.end_key().to_vec());
         }
-        if let Some(Ok(h)) = it.next() {
-            forward_keys.push(h.end_key().to_vec());
+        if let Some(res) = it.next() {
+            forward_keys.push(res?.end_key().to_vec());
         }
 
         // Consume from back
-        while let Some(Ok(h)) = it.next_back() {
-            backward_keys.push(h.end_key().to_vec());
+        while let Some(res) = it.next_back() {
+            backward_keys.push(res?.end_key().to_vec());
         }
 
         // The block index is a sparse index: seek_upper positions the back
