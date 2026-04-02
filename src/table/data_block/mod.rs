@@ -469,8 +469,9 @@ impl DataBlock {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::InvalidTrailer`] if the block trailer is
-    /// malformed.
+    /// Returns [`crate::Error::InvalidTag`] if the wrapped block is not a data
+    /// or meta block, or [`crate::Error::InvalidTrailer`] if the block trailer
+    /// is malformed.
     ///
     /// # Breaking change
     ///

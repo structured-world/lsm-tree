@@ -108,6 +108,8 @@ impl Iter {
             self.tli = Some(it);
             Ok(true)
         } else {
+            // Empty range: mark exhausted to prevent repeated rebuilds.
+            self.poisoned = true;
             Ok(false)
         }
     }
