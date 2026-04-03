@@ -257,6 +257,14 @@ impl Fs for MemFs {
             ));
         }
 
+        // Opening a directory path without create flags is an error (mirrors EISDIR).
+        if is_dir && !opts.create && !opts.create_new {
+            return Err(io::Error::other(format!(
+                "path is a directory: {}",
+                path.display()
+            )));
+        }
+
         // Mirror std::fs::OpenOptions: truncate/create require write access.
         if opts.truncate && !wants_write {
             return Err(io::Error::new(
