@@ -35,50 +35,48 @@ impl FileAccessor {
         }
     }
 
-    /// Returns a cached table FD or opens the file via [`Fs`] on cache miss.
+    /// Returns a table FD, opening via [`Fs`] on descriptor-table cache miss.
     ///
-    /// The returned `bool` indicates whether the file descriptor was already
-    /// cached (`true`) or freshly opened (`false`).
+    /// Returns `(fd, None)` for pinned FDs (no cache involved),
+    /// `(fd, Some(true))` for descriptor-table cache hit,
+    /// `(fd, Some(false))` for cache miss (freshly opened and cached).
     pub fn get_or_open_table(
         &self,
         table_id: &GlobalTableId,
         path: &Path,
-    ) -> std::io::Result<(Arc<dyn FsFile>, bool)> {
+    ) -> std::io::Result<(Arc<dyn FsFile>, Option<bool>)> {
         match self {
-            // Pinned FD — not a descriptor-table cache event; report as miss
-            // so metrics reflect only actual cache traffic.
-            Self::File(fd) => Ok((fd.clone(), false)),
+            Self::File(fd) => Ok((fd.clone(), None)),
             Self::DescriptorTable { table, fs } => {
                 if let Some(fd) = table.access_for_table(table_id) {
-                    return Ok((fd, true));
+                    return Ok((fd, Some(true)));
                 }
                 let fd: Arc<dyn FsFile> =
                     Arc::from(fs.open(path, &FsOpenOptions::new().read(true))?);
                 table.insert_for_table(*table_id, fd.clone());
-                Ok((fd, false))
+                Ok((fd, Some(false)))
             }
         }
     }
 
     /// Returns a cached blob file FD or opens it via [`Fs`] on cache miss.
-    ///
-    /// The returned `bool` indicates whether the file descriptor was already
-    /// cached (`true`) or freshly opened (`false`).
+    /// Returns a blob file FD. See [`get_or_open_table`](Self::get_or_open_table) for
+    /// semantics of the `Option<bool>` cache-hit indicator.
     pub fn get_or_open_blob_file(
         &self,
         table_id: &GlobalTableId,
         path: &Path,
-    ) -> std::io::Result<(Arc<dyn FsFile>, bool)> {
+    ) -> std::io::Result<(Arc<dyn FsFile>, Option<bool>)> {
         match self {
-            Self::File(fd) => Ok((fd.clone(), false)),
+            Self::File(fd) => Ok((fd.clone(), None)),
             Self::DescriptorTable { table, fs } => {
                 if let Some(fd) = table.access_for_blob_file(table_id) {
-                    return Ok((fd, true));
+                    return Ok((fd, Some(true)));
                 }
                 let fd: Arc<dyn FsFile> =
                     Arc::from(fs.open(path, &FsOpenOptions::new().read(true))?);
                 table.insert_for_blob_file(*table_id, fd.clone());
-                Ok((fd, false))
+                Ok((fd, Some(false)))
             }
         }
     }

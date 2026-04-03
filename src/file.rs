@@ -75,9 +75,15 @@ pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &dyn Fs) -> std::io::Resu
             &FsOpenOptions::new().write(true).create_new(true),
         ) {
             Ok(mut file) => {
-                file.write_all(content)?;
-                file.flush()?;
-                FsFile::sync_all(&*file)?;
+                let write_result = file
+                    .write_all(content)
+                    .and_then(|()| file.flush())
+                    .and_then(|()| FsFile::sync_all(&*file));
+                if let Err(e) = write_result {
+                    drop(file);
+                    let _ = fs.remove_file(&candidate);
+                    return Err(e);
+                }
                 break candidate;
             }
             // Leftover temp file from a previous crash — retry with next seq.

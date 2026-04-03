@@ -468,6 +468,16 @@ impl Config {
         self
     }
 
+    /// Sets the filesystem backend from an existing shared handle.
+    ///
+    /// Useful when multiple configs should reuse the same backend
+    /// instance, including trait objects and backends that are not `Clone`.
+    #[must_use]
+    pub fn with_shared_fs(mut self, fs: Arc<dyn Fs>) -> Self {
+        self.fs = fs;
+        self
+    }
+
     /// Opens a tree using the config.
     ///
     /// # Errors

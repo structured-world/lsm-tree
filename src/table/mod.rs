@@ -119,7 +119,7 @@ impl Table {
         Ok(if let Some(handle) = &self.regions.linked_blob_files {
             let table_id = self.global_id();
 
-            let (fd, _cache_hit) = self
+            let (fd, _) = self
                 .file_accessor
                 .get_or_open_table(&table_id, &self.path)?;
 
