@@ -247,6 +247,21 @@ impl Fs for MemFs {
 
         let exists = state.files.contains_key(&path);
         let is_dir = state.dirs.contains(&path);
+        let wants_write = opts.write || opts.append;
+
+        // Mirror std::fs::OpenOptions: truncate/create require write access.
+        if opts.truncate && !wants_write {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "truncate requires write or append access",
+            ));
+        }
+        if (opts.create || opts.create_new) && !wants_write {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "create/create_new requires write or append access",
+            ));
+        }
 
         // Reject creating a file at a path that is already a directory.
         if is_dir && (opts.create || opts.create_new) {
