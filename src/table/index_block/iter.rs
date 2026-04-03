@@ -3,14 +3,14 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    SeqNo,
     comparator::SharedComparator,
     double_ended_peekable::{DoubleEndedPeekable, DoubleEndedPeekableExt},
     table::{
-        KeyedBlockHandle,
         block::{Decoder, ParsedItem},
         index_block::IndexBlockParsedItem,
+        KeyedBlockHandle,
     },
+    SeqNo,
 };
 
 pub struct Iter<'a> {
@@ -82,7 +82,12 @@ impl<'a> Iter<'a> {
     /// For incremental bound adjustment that preserves a prior `seek_lower`'s
     /// front cache, use `seek_upper_bound_cursor` instead.
     pub fn seek_upper(&mut self, needle: &[u8], _seqno: SeqNo) -> bool {
+        // seek_upper_impl may return Err on a poisoned/clamped cursor;
+        // the public bool-returning API treats that as "not found" for
+        // backward compatibility — callers that need error propagation
+        // should use seek_upper_bound_cursor instead.
         self.seek_upper_impl(needle, true, true, true)
+            .unwrap_or(false)
     }
 
     pub(crate) fn seek_upper_impl(
@@ -91,7 +96,7 @@ impl<'a> Iter<'a> {
         reset_front: bool,
         reset_back: bool,
         check_back_cache: bool,
-    ) -> bool {
+    ) -> crate::Result<bool> {
         let cmp = &self.comparator;
         if reset_front {
             self.decoder.reset_front_peeked();
@@ -132,7 +137,7 @@ impl<'a> Iter<'a> {
             )
         };
         if !found {
-            return false;
+            return Ok(false);
         }
 
         if restart_interval > 1 {
@@ -160,30 +165,43 @@ impl<'a> Iter<'a> {
             }
 
             // advance_upper_restart_interval may have clamped/poisoned the upper
-            // cursor (empty stack after corruption). Surface the failure so callers
-            // do not treat a clamped cursor as a successful upper seek.
+            // cursor (empty stack after corruption). Propagate as an error so
+            // callers do not treat a poisoned cursor as "empty range".
             if self
                 .decoder
                 .inner_mut()
                 .upper_stack_tail_cmp(|item, bytes| item.compare_key(needle, bytes, cmp.as_ref()))
                 .is_none()
             {
-                return false;
+                return Err(crate::Error::InvalidTrailer);
             }
         }
 
         if check_back_cache {
-            self.decoder.peek_back().is_some()
+            Ok(self.decoder.peek_back().is_some())
         } else {
-            true
+            Ok(true)
         }
     }
 
-    pub(crate) fn seek_lower_bound_cursor(&mut self, needle: &[u8], seqno: SeqNo) -> bool {
-        self.seek_with_cache_resets(needle, seqno, true, false)
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "API plumbing: inner seek_with_cache_resets will become fallible \
+                  when Decoder binary-index parsing surfaces errors"
+    )]
+    pub(crate) fn seek_lower_bound_cursor(
+        &mut self,
+        needle: &[u8],
+        seqno: SeqNo,
+    ) -> crate::Result<bool> {
+        Ok(self.seek_with_cache_resets(needle, seqno, true, false))
     }
 
-    pub(crate) fn seek_upper_bound_cursor(&mut self, needle: &[u8], _seqno: SeqNo) -> bool {
+    pub(crate) fn seek_upper_bound_cursor(
+        &mut self,
+        needle: &[u8],
+        _seqno: SeqNo,
+    ) -> crate::Result<bool> {
         // Keep the front cache intact: lower-bound cursor seeks intentionally
         // seed the first candidate via `peek()`. Clearing front cache here
         // would skip that candidate because the underlying decoder has already
@@ -226,13 +244,13 @@ impl DoubleEndedIterator for Iter<'_> {
 mod tests {
     use super::*;
     use crate::{
-        Checksum,
         coding::Decode,
         comparator::default_comparator,
         table::{
-            Block, BlockHandle, BlockOffset, IndexBlock, KeyedBlockHandle,
             block::{BlockType, Header, ParsedItem, Trailer},
+            Block, BlockHandle, BlockOffset, IndexBlock, KeyedBlockHandle,
         },
+        Checksum,
     };
     use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
     use std::io::Cursor;
@@ -474,7 +492,9 @@ mod tests {
         let index = make_index_block(8);
         let mut iter = index.iter(default_comparator());
 
-        assert!(iter.seek_upper_bound_cursor(b"adj:out:vertex-0001:edge-0007z", SeqNo::MAX));
+        assert!(iter
+            .seek_upper_bound_cursor(b"adj:out:vertex-0001:edge-0007z", SeqNo::MAX)
+            .unwrap());
 
         let keys: Vec<Vec<u8>> = iter
             .map(|item| item.materialize(index.as_slice()).end_key().to_vec())
@@ -582,6 +602,100 @@ mod tests {
                 Err(crate::Error::InvalidTrailer)
             ),
             "corrupt binary_index_offset must be rejected by try_iter",
+        );
+    }
+
+    /// Finds the byte offset of the second restart head by reading the binary
+    /// index from the block trailer.
+    fn second_restart_head_byte_offset(bytes: &[u8]) -> usize {
+        let probe = IndexBlock::new(Block {
+            data: bytes.to_vec().into(),
+            header: Header {
+                block_type: BlockType::Index,
+                checksum: Checksum::from_raw(0),
+                data_length: 0,
+                uncompressed_length: 0,
+            },
+        });
+        let trailer_offset = Trailer::new(&probe.inner).trailer_offset();
+        let trailer = &bytes[trailer_offset..];
+
+        // Trailer layout: restart_interval(u8)[0], step_size(u8)[1],
+        //   binary_index_len(u32LE)[2..6], binary_index_offset(u32LE)[6..10], ...
+        let step_size = trailer[1] as usize;
+        let binary_index_offset = LittleEndian::read_u32(&trailer[6..10]) as usize;
+
+        // Entry 1 in the binary index is the second restart head offset
+        let entry_pos = binary_index_offset + step_size;
+        if step_size == 2 {
+            LittleEndian::read_u16(&bytes[entry_pos..entry_pos + 2]) as usize
+        } else {
+            LittleEndian::read_u32(&bytes[entry_pos..entry_pos + 4]) as usize
+        }
+    }
+
+    /// Returns the byte offset of the first truncated (non-head) item in the
+    /// restart interval starting at `restart_offset`, after skipping the full
+    /// restart head + its key bytes.
+    fn first_truncated_item_offset_in_interval(bytes: &[u8], restart_offset: usize) -> usize {
+        let mut cursor = Cursor::new(&bytes[restart_offset..]);
+        // Restart head: marker(0) + BlockHandle + seqno + key_len + key_bytes
+        let marker = cursor.read_u8().unwrap();
+        assert_eq!(marker, 0, "expected restart head marker");
+        let _ = BlockHandle::decode_from(&mut cursor).unwrap();
+        let _ = cursor.read_u64_varint().unwrap();
+        let key_len: u64 = cursor.read_u16_varint().unwrap().into();
+        cursor.set_position(cursor.position() + key_len);
+        // Now at the first truncated item
+        let truncated_marker = cursor.read_u8().unwrap();
+        assert_eq!(truncated_marker, 1, "second entry should be truncated");
+        let _ = cursor.read_u16_varint().unwrap(); // shared prefix len
+                                                   // cursor is now at rest_key_len — corrupt THIS to break fill_stack
+        restart_offset + usize::try_from(cursor.position()).unwrap()
+    }
+
+    fn make_index_block_with_corrupt_second_interval_item() -> IndexBlock {
+        let handles = make_handles(16);
+        let mut bytes = IndexBlock::encode_into_vec_with_restart_interval(&handles, 8).unwrap();
+        let second_restart = second_restart_head_byte_offset(&bytes);
+        let rest_key_len_pos = first_truncated_item_offset_in_interval(&bytes, second_restart);
+        // Overwrite rest_key_len with an impossibly large varint
+        bytes[rest_key_len_pos] = 0xFF;
+        bytes[rest_key_len_pos + 1] = 0xFF;
+        bytes[rest_key_len_pos + 2] = 0x03;
+        IndexBlock::new(Block {
+            data: bytes.into(),
+            header: Header {
+                block_type: BlockType::Index,
+                checksum: Checksum::from_raw(0),
+                data_length: 0,
+                uncompressed_length: 0,
+            },
+        })
+    }
+
+    #[test]
+    fn seek_upper_bound_cursor_returns_err_on_poisoned_cursor() {
+        // Block layout: 16 entries with restart_interval=8 → 2 restart intervals.
+        // First interval (entries 0-7, keys edge-0000..edge-0007) is valid.
+        // Second interval has a corrupted non-head item (entry 9): its
+        // rest_key_len is overwritten so fill_stack poisons the back cursor.
+        // The restart head (entry 8) is valid so binary search still works.
+        //
+        // Needle "edge-0007z" lands in the first interval via binary search.
+        // trim_back_to_upper_bound doesn't pop anything (all first-interval
+        // items ≤ needle), but the stack tail "edge-0007" < "edge-0007z" so
+        // the advance loop fires.
+        // advance_upper_restart_interval clears the stack and tries to fill from
+        // the corrupt second interval → fill_stack fails → stack empty →
+        // seek_upper_bound_cursor must return Err(InvalidTrailer), not Ok(false).
+        let index = make_index_block_with_corrupt_second_interval_item();
+        let mut iter = index.iter(default_comparator());
+
+        let result = iter.seek_upper_bound_cursor(b"adj:out:vertex-0001:edge-0007z", SeqNo::MAX);
+        assert!(
+            matches!(result, Err(crate::Error::InvalidTrailer)),
+            "poisoned upper cursor must return Err(InvalidTrailer), got {result:?}",
         );
     }
 }

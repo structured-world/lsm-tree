@@ -73,14 +73,12 @@ impl OwnedIndexBlockIter {
         // resets front but preserves back; seek_upper_bound_cursor preserves
         // front (the candidate seeded by seek_lower's peek()).
         if let Some((key, seqno)) = lo
-            && !iter.with_dependent_mut(|_, m| m.seek_lower_bound_cursor(key, seqno))
+            && !iter.with_dependent_mut(|_, m| m.seek_lower_bound_cursor(key, seqno))?
         {
             return Ok(None);
         }
-        // TODO(#196): seek_upper_bound_cursor returns bool — a poisoned/clamped
-        // cursor is indistinguishable from "empty range". Make fallible.
         if let Some((key, seqno)) = hi
-            && !iter.with_dependent_mut(|_, m| m.seek_upper_bound_cursor(key, seqno))
+            && !iter.with_dependent_mut(|_, m| m.seek_upper_bound_cursor(key, seqno))?
         {
             return Ok(None);
         }
@@ -106,7 +104,13 @@ impl OwnedIndexBlockIter {
             // reset_front=false: preserve front cache from prior seek_lower
             // reset_back=true: clear stale back state from reverse iteration
             // check_back_cache=false: forward-limit mode, don't require peek_back
+            //
+            // seek_upper_impl may return Err on a poisoned/clamped cursor;
+            // the public bool-returning API treats that as "not found" for
+            // backward compatibility — callers that need error propagation
+            // should use from_block_with_bounds / seek_upper_bound_cursor.
             m.seek_upper_impl(needle, false, true, false)
+                .unwrap_or(false)
         })
     }
 }
