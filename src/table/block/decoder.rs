@@ -142,15 +142,23 @@ impl<'a, Item: Decodable<Parsed>, Parsed: ParsedItem<Item>> Decoder<'a, Item, Pa
         let trailer = Trailer::try_new(block)?;
         let mut reader = trailer.as_slice();
 
-        let restart_interval = unwrap!(reader.read_u8());
-        let binary_index_step_size = unwrap!(reader.read_u8());
+        let restart_interval = reader.read_u8().map_err(|_| crate::Error::InvalidTrailer)?;
+        let binary_index_step_size = reader.read_u8().map_err(|_| crate::Error::InvalidTrailer)?;
 
         validate_trailer_fields(restart_interval, binary_index_step_size)?;
 
-        let binary_index_len = unwrap!(reader.read_u32::<LittleEndian>());
-        let binary_index_offset = unwrap!(reader.read_u32::<LittleEndian>());
-        let hash_index_len = unwrap!(reader.read_u32::<LittleEndian>());
-        let hash_index_offset = unwrap!(reader.read_u32::<LittleEndian>());
+        let binary_index_len = reader
+            .read_u32::<LittleEndian>()
+            .map_err(|_| crate::Error::InvalidTrailer)?;
+        let binary_index_offset = reader
+            .read_u32::<LittleEndian>()
+            .map_err(|_| crate::Error::InvalidTrailer)?;
+        let hash_index_len = reader
+            .read_u32::<LittleEndian>()
+            .map_err(|_| crate::Error::InvalidTrailer)?;
+        let hash_index_offset = reader
+            .read_u32::<LittleEndian>()
+            .map_err(|_| crate::Error::InvalidTrailer)?;
 
         let mut decoder = Self {
             block,

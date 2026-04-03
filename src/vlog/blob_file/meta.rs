@@ -13,7 +13,6 @@ use crate::{
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{Read, Write};
 
-// TODO(#195): add corruption regression test for this error path
 macro_rules! read_u64 {
     ($block:expr, $name:expr, $cmp:expr) => {{
         let bytes = $block
@@ -262,6 +261,49 @@ mod tests {
         assert!(
             matches!(result, Err(crate::Error::InvalidHeader("BlobFileMeta"))),
             "expected Err(InvalidHeader(\"BlobFileMeta\")), got {result:?}",
+        );
+    }
+
+    /// Regression test for #195: corrupt the block trailer (last bytes) of a
+    /// valid blob file metadata block.  `from_slice` must return `Err`, not
+    /// panic.  The checksum layer catches byte-level corruption before trailer
+    /// parsing; the `point_read` → `ok_or` error path for missing/malformed
+    /// fields is exercised by `test_blob_file_meta_missing_field_returns_err`.
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn test_blob_file_meta_corrupted_trailer_returns_err() {
+        let meta = Metadata {
+            id: 0,
+            version: 4,
+            created_at: 1_234_567_890,
+            compression: CompressionType::None,
+            item_count: 100,
+            total_compressed_bytes: 1024,
+            total_uncompressed_bytes: 2048,
+            key_range: KeyRange::new((b"a".into(), b"z".into())),
+        };
+
+        let mut buf = Vec::new();
+        meta.encode_into(&mut buf).unwrap();
+
+        // Corrupt the last 4 bytes of the block (trailer region).
+        // This triggers a ChecksumMismatch in `Block::from_reader` — the
+        // first defense layer.  The deeper point_read → ok_or path (which
+        // previously could panic) is exercised separately by
+        // `test_blob_file_meta_missing_field_returns_err`, where the block
+        // is structurally valid but omits a required property.
+        let len = buf.len();
+        assert!(len >= 4, "buffer too small for corruption");
+        #[expect(clippy::indexing_slicing, reason = "length checked above")]
+        for b in &mut buf[len - 4..] {
+            *b ^= 0xFF;
+        }
+
+        let buf = Slice::from(buf);
+        let result = Metadata::from_slice(&buf);
+        assert!(
+            result.is_err(),
+            "corrupted trailer must produce Err, got {result:?}",
         );
     }
 
