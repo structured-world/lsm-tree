@@ -64,9 +64,10 @@ pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &dyn Fs) -> std::io::Resu
     let folder = path.parent().expect("should have a parent");
 
     let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp_path = folder.join(format!(".tmp_{seq}"));
+    let pid = std::process::id();
+    let tmp_path = folder.join(format!(".tmp_{pid}_{seq}"));
 
-    {
+    let result = (|| -> std::io::Result<()> {
         let mut file = fs.open(
             &tmp_path,
             &FsOpenOptions::new().write(true).create_new(true),
@@ -74,13 +75,16 @@ pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &dyn Fs) -> std::io::Resu
         file.write_all(content)?;
         file.flush()?;
         FsFile::sync_all(&*file)?;
-    }
+        drop(file);
+        fs.rename(&tmp_path, path)?;
+        Ok(())
+    })();
 
-    if let Err(e) = fs.rename(&tmp_path, path) {
-        // Best-effort cleanup of the temp file.
+    if result.is_err() {
+        // Best-effort cleanup of the temp file on any failure.
         let _ = fs.remove_file(&tmp_path);
-        return Err(e);
     }
+    result?;
     fsync_directory(folder, fs)?;
 
     Ok(())

@@ -284,7 +284,7 @@ impl Fs for MemFs {
                 data,
                 cursor,
                 readable: opts.read,
-                writable: opts.write,
+                writable: opts.write || opts.append,
                 is_append: opts.append,
             }))
         } else if opts.create {

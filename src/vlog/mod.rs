@@ -77,7 +77,9 @@ pub fn recover_blob_files(
             let file = fs.open(blob_file_path, &crate::fs::FsOpenOptions::new().read(true))?;
 
             let meta = {
-                let reader = sfa::Reader::new(blob_file_path)?;
+                let mut reader_file =
+                    fs.open(blob_file_path, &crate::fs::FsOpenOptions::new().read(true))?;
+                let reader = sfa::Reader::from_reader(&mut reader_file)?;
                 let toc = reader.toc();
 
                 let metadata_section = toc.section(b"meta")
