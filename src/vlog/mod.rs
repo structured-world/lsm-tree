@@ -16,6 +16,7 @@ pub use {
 use crate::{
     Checksum, DescriptorTable, TreeId,
     file_accessor::FileAccessor,
+    fs::Fs,
     vlog::blob_file::{Inner as BlobFileInner, Metadata},
 };
 use std::{
@@ -28,10 +29,19 @@ pub fn recover_blob_files(
     ids: &[(BlobFileId, Checksum)],
     tree_id: TreeId,
     descriptor_table: Option<&Arc<DescriptorTable>>,
+    fs: &Arc<dyn Fs>,
 ) -> crate::Result<(Vec<BlobFile>, Vec<PathBuf>)> {
-    if !folder.try_exists()? {
-        return Ok((vec![], vec![]));
-    }
+    // Recover directly from read_dir; treat NotFound as empty (avoids TOCTOU
+    // with a separate exists() check). This is correct even when `ids` is
+    // non-empty: the blobs folder may not exist for standard (non-blob) trees,
+    // and callers handle missing blob files via orphan detection.
+    let entries = match fs.read_dir(folder) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((vec![], vec![]));
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let cnt = ids.len();
 
@@ -46,9 +56,8 @@ pub fn recover_blob_files(
     let mut blob_files = Vec::with_capacity(ids.len());
     let mut orphaned_blob_files = vec![];
 
-    for (idx, dirent) in std::fs::read_dir(folder)?.enumerate() {
-        let dirent = dirent?;
-        let file_name = dirent.file_name();
+    for (idx, dirent) in entries.into_iter().enumerate() {
+        let file_name = &dirent.file_name;
 
         // https://en.wikipedia.org/wiki/.DS_Store
         if file_name == ".DS_Store" {
@@ -56,22 +65,22 @@ pub fn recover_blob_files(
         }
 
         // https://en.wikipedia.org/wiki/AppleSingle_and_AppleDouble_formats
-        if file_name.to_string_lossy().starts_with("._") {
+        if file_name.starts_with("._") {
             continue;
         }
 
-        let blob_file_name = file_name.to_str().ok_or_else(|| {
-            log::error!("invalid table file name {}", file_name.display());
+        // Skip directories before parsing — non-numeric directory names would
+        // fail the parse and abort recovery.
+        if dirent.is_dir {
+            continue;
+        }
+
+        let blob_file_id = file_name.parse::<BlobFileId>().map_err(|e| {
+            log::error!("invalid blob file name {file_name:?}: {e:?}");
             crate::Error::Unrecoverable
         })?;
 
-        let blob_file_id = blob_file_name.parse::<BlobFileId>().map_err(|e| {
-            log::error!("invalid table file name {blob_file_name:?}: {e:?}");
-            crate::Error::Unrecoverable
-        })?;
-
-        let blob_file_path = dirent.path();
-        assert!(!blob_file_path.is_dir());
+        let blob_file_path = &dirent.path;
 
         if let Some(&(_, checksum)) = ids.iter().find(|(id, _)| id == &blob_file_id) {
             log::trace!(
@@ -79,10 +88,10 @@ pub fn recover_blob_files(
                 blob_file_path.display(),
             );
 
-            let file = std::fs::File::open(&blob_file_path)?;
+            let mut file = fs.open(blob_file_path, &crate::fs::FsOpenOptions::new().read(true))?;
 
             let meta = {
-                let reader = sfa::Reader::new(&blob_file_path)?;
+                let reader = sfa::Reader::from_reader(&mut file)?;
                 let toc = reader.toc();
 
                 let metadata_section = toc.section(b"meta")
@@ -94,20 +103,27 @@ pub fn recover_blob_files(
                 let metadata_len = usize::try_from(metadata_section.len())
                     .map_err(|_| crate::Error::Unrecoverable)?;
                 let metadata_slice =
-                    crate::file::read_exact(&file, metadata_section.pos(), metadata_len)?;
+                    crate::file::read_exact(&*file, metadata_section.pos(), metadata_len)?;
 
                 Metadata::from_slice(&metadata_slice)?
             };
 
             let file_accessor = if let Some(dt) = descriptor_table.cloned() {
-                FileAccessor::DescriptorTable(dt)
+                // Pre-populate the FD cache with the handle we already opened
+                // so the first read doesn't need to reopen.
+                let global_id = (tree_id, blob_file_id).into();
+                dt.insert_for_blob_file(global_id, Arc::from(file));
+                FileAccessor::DescriptorTable {
+                    table: dt,
+                    fs: fs.clone(),
+                }
             } else {
-                FileAccessor::File(Arc::new(file))
+                FileAccessor::File(Arc::from(file))
             };
 
             blob_files.push(BlobFile(Arc::new(BlobFileInner {
                 id: blob_file_id,
-                path: blob_file_path,
+                path: blob_file_path.clone(),
                 meta,
                 is_deleted: AtomicBool::new(false),
                 checksum,
@@ -136,15 +152,39 @@ pub fn recover_blob_files(
 pub type BlobFileId = u64;
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
     use test_log::test;
 
     #[test]
-    fn vlog_recovery_missing_blob_file() {
-        assert!(matches!(
-            recover_blob_files(Path::new("."), &[(0, Checksum::from_raw(0))], 0, None),
-            Err(crate::Error::Unrecoverable),
-        ));
+    fn vlog_recovery_missing_blob_file_returns_unrecoverable() {
+        // Manifest says blob id=0 exists, but the blobs folder is empty.
+        // Recovery should fail with Unrecoverable because blob_files.len() < ids.len().
+        let dir = tempfile::tempdir().unwrap();
+        let result = recover_blob_files(
+            dir.path(),
+            &[(0, Checksum::from_raw(0))],
+            0,
+            None,
+            &(Arc::new(crate::fs::StdFs) as Arc<dyn crate::fs::Fs>),
+        );
+        assert!(matches!(result, Err(crate::Error::Unrecoverable)));
+    }
+
+    #[test]
+    fn vlog_recovery_nonexistent_folder_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no_such_dir");
+        let (blob_files, orphans) = recover_blob_files(
+            &missing,
+            &[(0, Checksum::from_raw(0))],
+            0,
+            None,
+            &(Arc::new(crate::fs::StdFs) as Arc<dyn crate::fs::Fs>),
+        )
+        .unwrap();
+        assert!(blob_files.is_empty());
+        assert!(orphans.is_empty());
     }
 }

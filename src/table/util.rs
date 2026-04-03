@@ -5,9 +5,9 @@
 use super::{Block, BlockHandle, GlobalTableId};
 use crate::{
     Cache, CompressionType, KeyRange, Table, encryption::EncryptionProvider,
-    file_accessor::FileAccessor, fs::FsFile, table::block::BlockType, version::run::Ranged,
+    file_accessor::FileAccessor, table::block::BlockType, version::run::Ranged,
 };
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 #[cfg(feature = "metrics")]
 use crate::metrics::Metrics;
@@ -83,23 +83,17 @@ pub fn load_block(
         return Ok(block);
     }
 
-    let (fd, fd_cache_miss) = if let Some(cached_fd) = file_accessor.access_for_table(&table_id) {
-        #[cfg(feature = "metrics")]
+    #[cfg(feature = "metrics")]
+    let (fd, cache_hit) = file_accessor.get_or_open_table(&table_id, path)?;
+    #[cfg(not(feature = "metrics"))]
+    let (fd, _) = file_accessor.get_or_open_table(&table_id, path)?;
+
+    #[cfg(feature = "metrics")]
+    if cache_hit {
         metrics.table_file_opened_cached.fetch_add(1, Relaxed);
-
-        (cached_fd, false)
     } else {
-        let file = std::fs::File::open(path)?;
-
-        #[cfg(feature = "metrics")]
         metrics.table_file_opened_uncached.fetch_add(1, Relaxed);
-
-        // The if-branch returns Arc<dyn FsFile> from the descriptor
-        // table, so the else-branch needs an explicit type annotation
-        // to trigger unsizing coercion.
-        let fd: Arc<dyn FsFile> = Arc::new(file);
-        (fd, true)
-    };
+    }
 
     let block = Block::from_file(
         fd.as_ref(),
@@ -147,11 +141,6 @@ pub fn load_block(
                 .data_block_io_requested
                 .fetch_add(handle.size().into(), Relaxed);
         }
-    }
-
-    // Cache FD
-    if fd_cache_miss {
-        file_accessor.insert_for_table(table_id, fd);
     }
 
     cache.insert_block(table_id, handle.offset(), block.clone());

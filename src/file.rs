@@ -47,40 +47,54 @@ pub fn read_exact(file: &dyn FsFile, offset: u64, size: usize) -> std::io::Resul
     Ok(builder.freeze().into())
 }
 
-/// Atomically rewrites a file.
+/// Atomically rewrites a file via the [`Fs`] trait.
+///
+/// Writes `content` to a temporary file in the same directory, fsyncs it,
+/// then renames over `path`. This ensures readers never see a partial write.
 pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &dyn Fs) -> std::io::Result<()> {
+    use crate::fs::FsOpenOptions;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
     #[expect(
         clippy::expect_used,
         reason = "every file should have a parent directory"
     )]
     let folder = path.parent().expect("should have a parent");
 
-    // NOTE: tempfile crate uses std::fs internally; migrating temp-file
-    // creation to Fs would require a custom implementation.
-    let mut temp_file = tempfile::NamedTempFile::new_in(folder)?;
-    temp_file.write_all(content)?;
-    temp_file.flush()?;
-    temp_file.as_file_mut().sync_all()?;
-    temp_file.persist(path)?;
+    // PID + monotonic seq gives uniqueness within a process and across
+    // concurrent processes. A crash-then-PID-reuse collision is theoretically
+    // possible but vanishingly unlikely (requires exact PID reuse AND seq
+    // counter restart to same value). lsm-tree uses exclusive file locking
+    // so the same data directory is never written by two processes.
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let tmp_path = folder.join(format!(".tmp_{pid}_{seq}"));
 
-    // Suppress unused-variable warning on Windows where the post-persist
-    // sync block is skipped (directory fsync is unsupported).
-    let _ = &fs;
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        use crate::fs::FsOpenOptions;
-
-        let file = fs.open(path, &FsOpenOptions::new().read(true))?;
+    let result = (|| -> std::io::Result<()> {
+        let mut file = fs.open(
+            &tmp_path,
+            &FsOpenOptions::new().write(true).create_new(true),
+        )?;
+        file.write_all(content)?;
+        file.flush()?;
         FsFile::sync_all(&*file)?;
+        drop(file);
+        // std::fs::rename overwrites existing destinations on all platforms
+        // (Rust uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows).
+        fs.rename(&tmp_path, path)?;
+        Ok(())
+    })();
 
-        #[expect(
-            clippy::expect_used,
-            reason = "files should always have a parent directory"
-        )]
-        let folder = path.parent().expect("should have parent folder");
-        fs.sync_directory(folder)?;
+    if result.is_err() {
+        // Best-effort cleanup of the temp file on any failure path.
+        // Safe to call even if fs.open() failed (file never created) —
+        // remove_file will return NotFound which we ignore.
+        let _ = fs.remove_file(&tmp_path);
     }
+    result?;
+    fsync_directory(folder, fs)?;
 
     Ok(())
 }
