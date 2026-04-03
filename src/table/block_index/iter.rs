@@ -73,14 +73,12 @@ impl OwnedIndexBlockIter {
         // resets front but preserves back; seek_upper_bound_cursor preserves
         // front (the candidate seeded by seek_lower's peek()).
         if let Some((key, seqno)) = lo
-            && !iter.with_dependent_mut(|_, m| m.seek_lower_bound_cursor(key, seqno))
+            && !iter.with_dependent_mut(|_, m| m.seek_lower_bound_cursor(key, seqno))?
         {
             return Ok(None);
         }
-        // TODO(#196): seek_upper_bound_cursor returns bool — a poisoned/clamped
-        // cursor is indistinguishable from "empty range". Make fallible.
         if let Some((key, seqno)) = hi
-            && !iter.with_dependent_mut(|_, m| m.seek_upper_bound_cursor(key, seqno))
+            && !iter.with_dependent_mut(|_, m| m.seek_upper_bound_cursor(key, seqno))?
         {
             return Ok(None);
         }

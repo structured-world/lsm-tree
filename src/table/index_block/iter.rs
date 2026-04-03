@@ -3,14 +3,14 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    SeqNo,
     comparator::SharedComparator,
     double_ended_peekable::{DoubleEndedPeekable, DoubleEndedPeekableExt},
     table::{
-        KeyedBlockHandle,
         block::{Decoder, ParsedItem},
         index_block::IndexBlockParsedItem,
+        KeyedBlockHandle,
     },
+    SeqNo,
 };
 
 pub struct Iter<'a> {
@@ -179,11 +179,30 @@ impl<'a> Iter<'a> {
         }
     }
 
-    pub(crate) fn seek_lower_bound_cursor(&mut self, needle: &[u8], seqno: SeqNo) -> bool {
-        self.seek_with_cache_resets(needle, seqno, true, false)
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "API plumbing: inner seek_with_cache_resets will become fallible \
+                  when Decoder binary-index parsing surfaces errors"
+    )]
+    pub(crate) fn seek_lower_bound_cursor(
+        &mut self,
+        needle: &[u8],
+        seqno: SeqNo,
+    ) -> crate::Result<bool> {
+        Ok(self.seek_with_cache_resets(needle, seqno, true, false))
     }
 
-    pub(crate) fn seek_upper_bound_cursor(&mut self, needle: &[u8], _seqno: SeqNo) -> bool {
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "API plumbing: inner seek_upper_impl will become fallible \
+                  when Decoder fill_stack / advance_upper_restart_interval \
+                  surface corruption as errors"
+    )]
+    pub(crate) fn seek_upper_bound_cursor(
+        &mut self,
+        needle: &[u8],
+        _seqno: SeqNo,
+    ) -> crate::Result<bool> {
         // Keep the front cache intact: lower-bound cursor seeks intentionally
         // seed the first candidate via `peek()`. Clearing front cache here
         // would skip that candidate because the underlying decoder has already
@@ -194,7 +213,7 @@ impl<'a> Iter<'a> {
         // end_key >= lo_needle, and seek_upper positions hi at the first block with
         // end_key > hi_needle. Since lo_needle <= hi_needle, front_peeked is always
         // within the bounded window.
-        self.seek_upper_impl(needle, false, true, false)
+        Ok(self.seek_upper_impl(needle, false, true, false))
     }
 }
 
@@ -226,13 +245,13 @@ impl DoubleEndedIterator for Iter<'_> {
 mod tests {
     use super::*;
     use crate::{
-        Checksum,
         coding::Decode,
         comparator::default_comparator,
         table::{
-            Block, BlockHandle, BlockOffset, IndexBlock, KeyedBlockHandle,
             block::{BlockType, Header, ParsedItem, Trailer},
+            Block, BlockHandle, BlockOffset, IndexBlock, KeyedBlockHandle,
         },
+        Checksum,
     };
     use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
     use std::io::Cursor;
@@ -474,7 +493,9 @@ mod tests {
         let index = make_index_block(8);
         let mut iter = index.iter(default_comparator());
 
-        assert!(iter.seek_upper_bound_cursor(b"adj:out:vertex-0001:edge-0007z", SeqNo::MAX));
+        assert!(iter
+            .seek_upper_bound_cursor(b"adj:out:vertex-0001:edge-0007z", SeqNo::MAX)
+            .unwrap());
 
         let keys: Vec<Vec<u8>> = iter
             .map(|item| item.materialize(index.as_slice()).end_key().to_vec())
