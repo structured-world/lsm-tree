@@ -5,8 +5,8 @@
 use super::{Block, BlockHandle, DataBlock};
 use crate::fs::FsFile;
 use crate::{
-    CompressionType, KeyRange, SeqNo, TableId, checksum::ChecksumType, coding::Decode,
-    comparator::default_comparator, table::block::BlockType,
+    checksum::ChecksumType, coding::Decode, comparator::default_comparator,
+    table::block::BlockType, CompressionType, KeyRange, SeqNo, TableId,
 };
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::ops::Deref;
@@ -326,5 +326,142 @@ mod tests {
     fn validated_restart_interval_index_zero_returns_error() {
         let err = validated_restart_interval_index(0).unwrap_err();
         assert!(matches!(err, crate::Error::Io(e) if e.kind() == std::io::ErrorKind::InvalidData));
+    }
+
+    // ---------------------------------------------------------------
+    // Regression tests for #201: ParsedMeta panics on corrupted meta
+    // ---------------------------------------------------------------
+
+    use crate::{coding::Encode, InternalValue};
+
+    fn meta(key: &str, value: &[u8]) -> InternalValue {
+        InternalValue::from_components(key, value, 0, crate::ValueType::Value)
+    }
+
+    /// Build a complete set of valid meta items (same keys as table writer).
+    fn valid_meta_items() -> Vec<InternalValue> {
+        vec![
+            meta("block_count#data", &1u64.to_le_bytes()),
+            meta("block_count#filter", &0u64.to_le_bytes()),
+            meta("block_count#index", &1u64.to_le_bytes()),
+            meta("checksum_type", &[u8::from(ChecksumType::Xxh3)]),
+            meta("compression#data", &CompressionType::None.encode_into_vec()),
+            meta(
+                "compression#index",
+                &CompressionType::None.encode_into_vec(),
+            ),
+            meta("crate_version", env!("CARGO_PKG_VERSION").as_bytes()),
+            meta("created_at", &1_000_000u128.to_le_bytes()),
+            meta("data_block_hash_ratio", &0.0f64.to_le_bytes()),
+            meta("file_size", &4096u64.to_le_bytes()),
+            meta("filter_hash_type", &[u8::from(ChecksumType::Xxh3)]),
+            meta("index_keys_have_seqno", &[0x1]),
+            meta("initial_level", &[0]),
+            meta("item_count", &10u64.to_le_bytes()),
+            meta("key#max", b"z"),
+            meta("key#min", b"a"),
+            meta("key_count", &10u64.to_le_bytes()),
+            meta("prefix_truncation#data", &[1]),
+            meta("prefix_truncation#index", &[1]),
+            meta("range_tombstone_count", &0u64.to_le_bytes()),
+            meta("restart_interval#data", &[16]),
+            meta("restart_interval#index", &[4]),
+            meta("seqno#kv_max", &5u64.to_le_bytes()),
+            meta("seqno#max", &10u64.to_le_bytes()),
+            meta("seqno#min", &1u64.to_le_bytes()),
+            meta("table_id", &42u64.to_le_bytes()),
+            meta("table_version", &[3u8]),
+            meta("tombstone_count", &0u64.to_le_bytes()),
+            meta("user_data_size", &1024u64.to_le_bytes()),
+            meta("weak_tombstone_count", &0u64.to_le_bytes()),
+            meta("weak_tombstone_reclaimable", &0u64.to_le_bytes()),
+        ]
+    }
+
+    /// Write a meta block from given items to a temp file and call
+    /// `ParsedMeta::load_with_handle`, returning the result.
+    fn load_meta_from_items(items: &[InternalValue]) -> crate::Result<ParsedMeta> {
+        use std::io::Write;
+
+        let encoded = DataBlock::encode_into_vec(items, 1, 0.0).unwrap();
+
+        let mut buf = Vec::new();
+        let _header = Block::write_into(
+            &mut buf,
+            &encoded,
+            BlockType::Meta,
+            CompressionType::None,
+            None,
+            #[cfg(zstd_any)]
+            None,
+        )
+        .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta.block");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(&buf).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let file = std::fs::File::open(&path).unwrap();
+        let handle = BlockHandle::new(crate::table::BlockOffset(0), buf.len() as u32);
+        ParsedMeta::load_with_handle(&file, &handle, None)
+    }
+
+    /// Sanity check: valid meta items produce a successful parse.
+    #[test]
+    fn load_with_handle_valid_meta_succeeds() {
+        let items = valid_meta_items();
+        let result = load_meta_from_items(&items);
+        assert!(result.is_ok(), "valid meta must parse: {result:?}");
+    }
+
+    /// BUG(#201): missing `table_version` panics instead of returning Err.
+    #[test]
+    #[should_panic(expected = "Table version should exist")]
+    fn load_with_handle_missing_table_version_panics() {
+        let items: Vec<_> = valid_meta_items()
+            .into_iter()
+            .filter(|iv| &*iv.key.user_key != b"table_version")
+            .collect();
+        let _ = load_meta_from_items(&items);
+    }
+
+    /// BUG(#201): wrong table_version value panics via assert_eq!
+    #[test]
+    #[should_panic(expected = "unspported table version")]
+    fn load_with_handle_wrong_table_version_panics() {
+        let mut items = valid_meta_items();
+        if let Some(item) = items
+            .iter_mut()
+            .find(|iv| &*iv.key.user_key == b"table_version")
+        {
+            *item = meta("table_version", &[99u8]);
+        }
+        let _ = load_meta_from_items(&items);
+    }
+
+    /// BUG(#201): missing `key#min` panics instead of returning Err.
+    #[test]
+    #[should_panic(expected = "key min should exist")]
+    fn load_with_handle_missing_key_min_panics() {
+        let items: Vec<_> = valid_meta_items()
+            .into_iter()
+            .filter(|iv| &*iv.key.user_key != b"key#min")
+            .collect();
+        let _ = load_meta_from_items(&items);
+    }
+
+    /// BUG(#201): missing `compression#data` panics instead of returning Err.
+    #[test]
+    #[should_panic(expected = "size should exist")]
+    fn load_with_handle_missing_compression_data_panics() {
+        let items: Vec<_> = valid_meta_items()
+            .into_iter()
+            .filter(|iv| &*iv.key.user_key != b"compression#data")
+            .collect();
+        let _ = load_meta_from_items(&items);
     }
 }

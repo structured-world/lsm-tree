@@ -3,17 +3,16 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    CompressionType, InternalValue, KeyRange, SeqNo, Slice,
     checksum::ChecksumType,
     coding::{Decode, Encode},
     comparator::default_comparator,
     table::{Block, DataBlock},
     vlog::BlobFileId,
+    CompressionType, InternalValue, KeyRange, SeqNo, Slice,
 };
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{Read, Write};
 
-// TODO(#195): add corruption regression test for this error path
 macro_rules! read_u64 {
     ($block:expr, $name:expr, $cmp:expr) => {{
         let bytes = $block
@@ -262,6 +261,41 @@ mod tests {
         assert!(
             matches!(result, Err(crate::Error::InvalidHeader("BlobFileMeta"))),
             "expected Err(InvalidHeader(\"BlobFileMeta\")), got {result:?}",
+        );
+    }
+
+    /// Regression test for #195: corrupt the block trailer (last bytes) of a
+    /// valid blob file metadata block.  `from_slice` must return `Err` (the
+    /// checksum catches the corruption), not panic.
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn test_blob_file_meta_corrupted_trailer_returns_err() {
+        let meta = Metadata {
+            id: 0,
+            version: 4,
+            created_at: 1_234_567_890,
+            compression: CompressionType::None,
+            item_count: 100,
+            total_compressed_bytes: 1024,
+            total_uncompressed_bytes: 2048,
+            key_range: KeyRange::new((b"a".into(), b"z".into())),
+        };
+
+        let mut buf = Vec::new();
+        meta.encode_into(&mut buf).unwrap();
+
+        // Corrupt the last 4 bytes of the block (trailer region).
+        let len = buf.len();
+        assert!(len >= 4, "buffer too small for corruption");
+        for b in &mut buf[len - 4..] {
+            *b ^= 0xFF;
+        }
+
+        let buf = Slice::from(buf);
+        let result = Metadata::from_slice(&buf);
+        assert!(
+            result.is_err(),
+            "corrupted trailer must produce Err, got {result:?}",
         );
     }
 
