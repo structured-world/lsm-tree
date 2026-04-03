@@ -7,21 +7,20 @@ pub mod blob_file;
 mod handle;
 
 pub use {
-    accessor::Accessor, blob_file::BlobFile,
-    blob_file::merge::MergeScanner as BlobFileMergeScanner,
+    accessor::Accessor, blob_file::merge::MergeScanner as BlobFileMergeScanner,
     blob_file::multi_writer::MultiWriter as BlobFileWriter,
-    blob_file::scanner::Scanner as BlobFileScanner, handle::ValueHandle,
+    blob_file::scanner::Scanner as BlobFileScanner, blob_file::BlobFile, handle::ValueHandle,
 };
 
 use crate::{
-    Checksum, DescriptorTable, TreeId,
     file_accessor::FileAccessor,
     fs::Fs,
     vlog::blob_file::{Inner as BlobFileInner, Metadata},
+    Checksum, DescriptorTable, TreeId,
 };
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
 };
 
 pub fn recover_blob_files(
@@ -109,6 +108,10 @@ pub fn recover_blob_files(
             };
 
             let file_accessor = if let Some(dt) = descriptor_table.cloned() {
+                // Pre-populate the FD cache with the handle we already opened
+                // so the first read doesn't need to reopen.
+                let global_id = (tree_id, blob_file_id).into();
+                dt.insert_for_blob_file(global_id, Arc::from(file));
                 FileAccessor::DescriptorTable {
                     table: dt,
                     fs: fs.clone(),

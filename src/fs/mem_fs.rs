@@ -246,6 +246,15 @@ impl Fs for MemFs {
         }
 
         let exists = state.files.contains_key(&path);
+        let is_dir = state.dirs.contains(&path);
+
+        // Reject creating a file at a path that is already a directory.
+        if is_dir && (opts.create || opts.create_new) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("path is a directory: {}", path.display()),
+            ));
+        }
 
         if opts.create_new {
             if exists {
@@ -311,6 +320,13 @@ impl Fs for MemFs {
         let mut state = write_state(&self.state)?;
         let mut current = path.to_path_buf();
         loop {
+            // Fail if an ancestor is already a regular file.
+            if state.files.contains_key(&current) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("ancestor is a file: {}", current.display()),
+                ));
+            }
             state.dirs.insert(current.clone());
             if !current.pop() || current.as_os_str().is_empty() {
                 break;
