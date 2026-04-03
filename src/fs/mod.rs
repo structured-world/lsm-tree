@@ -276,6 +276,10 @@ pub trait Fs: Send + Sync + 'static {
 
     /// Renames a file or directory from `from` to `to`.
     ///
+    /// If `to` already exists as a regular file, it is atomically replaced.
+    /// This is required by [`rewrite_atomic`](crate::file::rewrite_atomic)
+    /// for crash-safe version pointer updates.
+    ///
     /// # Errors
     ///
     /// Returns an I/O error if the rename fails.

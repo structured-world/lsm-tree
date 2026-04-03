@@ -152,21 +152,39 @@ pub fn recover_blob_files(
 pub type BlobFileId = u64;
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
     use test_log::test;
 
     #[test]
-    fn vlog_recovery_missing_blob_file() {
-        assert!(matches!(
-            recover_blob_files(
-                Path::new("."),
-                &[(0, Checksum::from_raw(0))],
-                0,
-                None,
-                &(Arc::new(crate::fs::StdFs) as Arc<dyn crate::fs::Fs>)
-            ),
-            Err(crate::Error::Unrecoverable),
-        ));
+    fn vlog_recovery_missing_blob_file_returns_unrecoverable() {
+        // Manifest says blob id=0 exists, but the blobs folder is empty.
+        // Recovery should fail with Unrecoverable because blob_files.len() < ids.len().
+        let dir = tempfile::tempdir().unwrap();
+        let result = recover_blob_files(
+            dir.path(),
+            &[(0, Checksum::from_raw(0))],
+            0,
+            None,
+            &(Arc::new(crate::fs::StdFs) as Arc<dyn crate::fs::Fs>),
+        );
+        assert!(matches!(result, Err(crate::Error::Unrecoverable)));
+    }
+
+    #[test]
+    fn vlog_recovery_nonexistent_folder_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no_such_dir");
+        let (blob_files, orphans) = recover_blob_files(
+            &missing,
+            &[(0, Checksum::from_raw(0))],
+            0,
+            None,
+            &(Arc::new(crate::fs::StdFs) as Arc<dyn crate::fs::Fs>),
+        )
+        .unwrap();
+        assert!(blob_files.is_empty());
+        assert!(orphans.is_empty());
     }
 }

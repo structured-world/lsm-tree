@@ -318,19 +318,26 @@ impl Fs for MemFs {
 
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
         let mut state = write_state(&self.state)?;
+
+        // Collect all components first, then validate, then insert.
+        // This avoids partial insertion if an ancestor is a regular file.
+        let mut to_create = Vec::new();
         let mut current = path.to_path_buf();
         loop {
-            // Fail if an ancestor is already a regular file.
             if state.files.contains_key(&current) {
                 return Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
                     format!("ancestor is a file: {}", current.display()),
                 ));
             }
-            state.dirs.insert(current.clone());
+            to_create.push(current.clone());
             if !current.pop() || current.as_os_str().is_empty() {
                 break;
             }
+        }
+
+        for dir in to_create {
+            state.dirs.insert(dir);
         }
         Ok(())
     }
@@ -351,9 +358,20 @@ impl Fs for MemFs {
             if file_path.parent() == Some(path)
                 && let Some(name) = file_path.file_name()
             {
+                // Match StdFs contract: reject non-UTF-8 names with InvalidData.
+                let file_name = name.to_str().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "non-UTF-8 filename in directory {}: {}",
+                            path.display(),
+                            name.display()
+                        ),
+                    )
+                })?;
                 entries.push(FsDirEntry {
                     path: file_path.clone(),
-                    file_name: name.to_string_lossy().into_owned(),
+                    file_name: file_name.to_owned(),
                     is_dir: false,
                 });
             }
@@ -364,9 +382,19 @@ impl Fs for MemFs {
                 && dir_path != path
                 && let Some(name) = dir_path.file_name()
             {
+                let file_name = name.to_str().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "non-UTF-8 filename in directory {}: {}",
+                            path.display(),
+                            name.display()
+                        ),
+                    )
+                })?;
                 entries.push(FsDirEntry {
                     path: dir_path.clone(),
-                    file_name: name.to_string_lossy().into_owned(),
+                    file_name: file_name.to_owned(),
                     is_dir: true,
                 });
             }
