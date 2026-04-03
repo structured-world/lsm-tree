@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775157161094,
+  "lastUpdate": 1775175885558,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -4680,6 +4680,84 @@ window.BENCHMARK_DATA = {
             "value": 271257.4146247556,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 481150 ops/sec | factor: 0.564 | P50: 1.9us | P99: 5.0us | P99.9: 13.6us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=217874 rand_rd=904919 cpu=123 composite=40796.9"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fda0fb2068e48ea1330c03d2525c79b18a74c16d",
+          "message": "fix(table): two-level index scan stops prematurely on empty child partitions (#202)\n\n## Summary\n\n- Fix `TwoLevelBlockIndex::Iter` to skip empty child partitions instead\nof terminating the scan\n- When `from_block_with_bounds` returns `Ok(None)` (child partition\ntrimmed empty by lo/hi bounds), `next()` and `next_back()` now\n`continue` to the next TLI entry instead of `return None`\n- Add regression test exercising partitioned index iteration with\nforward, backward, and mixed bounds\n\n## Technical Details\n\nIn `next()` and `next_back()`, the TLI consumption block is wrapped in a\n`loop`. When a child index partition yields no entries after applying\nseek bounds, the iterator advances to the next TLI entry rather than\nstopping. The loop `break`s only when the TLI is exhausted, falling\nthrough to the opposite-side consumer (hi\\_consumer / lo\\_consumer) as\nbefore.\n\nThe empty-child scenario can occur when `seek_upper_bound_cursor`\nreturns false (e.g., restart\\_interval > 1 with coarse-grained trim) or\nwhen `seek_lower` overshoots all entries in a child block. While rare\nwith well-formed data and restart\\_interval=1, the fix is a necessary\ndefensive measure for correctness across all configurations.\n\n## Test Plan\n\n- [x] New test `two_level_index_scan_skips_empty_child_partition`\nvalidates forward, backward, and mixed iteration through a partitioned\nindex with bounds\n- [x] 1027/1027 tests pass (`cargo nextest run`)\n- [x] `cargo clippy --all-features -- -D warnings` clean\n- [x] `cargo fmt -- --check` clean\n\nCloses #194\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai\n-->\n## Summary by CodeRabbit\n\n* **Bug Fixes**\n* Iteration now skips empty child partitions and continues scanning\nacross partition boundaries instead of stopping prematurely, ensuring\ncomplete forward and reverse scans, correct exhaustion behavior, and\nreliable bounded seeks across two-level indexes.\n\n* **Tests**\n* Added a regression test validating full, bounded, and mixed\nforward/reverse iteration over partitioned two-level indexes to prevent\nregressions and ensure correctness.\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+          "timestamp": "2026-04-03T03:23:11+03:00",
+          "tree_id": "a056a276cec97d902d161cbc365e8594777748d7",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/fda0fb2068e48ea1330c03d2525c79b18a74c16d"
+        },
+        "date": 1775175884316,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 882380.3069233776,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1954739 ops/sec | factor: 0.451 | P50: 0.4us | P99: 1.8us | P99.9: 3.7us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
+          },
+          {
+            "name": "fillrandom",
+            "value": 464996.6756392288,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1030108 ops/sec | factor: 0.451 | P50: 0.8us | P99: 2.5us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.19s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
+          },
+          {
+            "name": "readrandom",
+            "value": 233884.95183375443,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 518126 ops/sec | factor: 0.451 | P50: 1.7us | P99: 5.7us | P99.9: 12.8us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
+          },
+          {
+            "name": "readseq",
+            "value": 1486068.0640643828,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 3292090 ops/sec | factor: 0.451 | P50: 0.2us | P99: 3.2us | P99.9: 5.6us\nthreads: 1 | elapsed: 0.06s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
+          },
+          {
+            "name": "seekrandom",
+            "value": 168487.21458570092,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 373250 ops/sec | factor: 0.451 | P50: 2.3us | P99: 5.3us | P99.9: 9.9us\nthreads: 1 | elapsed: 0.54s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
+          },
+          {
+            "name": "prefixscan",
+            "value": 98636.56806126462,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 218510 ops/sec | factor: 0.451 | P50: 4.2us | P99: 5.1us | P99.9: 11.5us\nthreads: 1 | elapsed: 0.92s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
+          },
+          {
+            "name": "overwrite",
+            "value": 475083.6992067352,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1052454 ops/sec | factor: 0.451 | P50: 0.8us | P99: 2.4us | P99.9: 5.8us\nthreads: 1 | elapsed: 0.19s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
+          },
+          {
+            "name": "mergerandom",
+            "value": 365883.19797661563,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 810542 ops/sec | factor: 0.451 | P50: 0.4us | P99: 1.6us | P99.9: 3.7us\nthreads: 1 | elapsed: 0.25s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 203663.77054191285,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 451177 ops/sec | factor: 0.451 | P50: 2.0us | P99: 6.1us | P99.9: 10.8us\nthreads: 1 | elapsed: 0.44s | num: 200000 | iterations: 3 | runner: seq_wr=363857 rand_rd=1118242 cpu=116 composite=50952.0"
           }
         ]
       }
