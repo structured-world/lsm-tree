@@ -72,19 +72,14 @@ fn memfs_tree_delete_and_range() -> lsm_tree::Result<()> {
 
     let items: Vec<_> = tree
         .iter(SeqNo::MAX, None)
-        .map(|guard| {
-            let (k, v) = guard.into_inner().unwrap();
-            (
-                String::from_utf8(k.to_vec()).unwrap(),
-                String::from_utf8(v.to_vec()).unwrap(),
-            )
-        })
-        .collect();
+        .map(|guard| guard.into_inner())
+        .collect::<lsm_tree::Result<Vec<_>>>()?;
 
-    assert_eq!(
-        items,
-        vec![("a".into(), "1".into()), ("c".into(), "3".into())]
-    );
+    assert_eq!(items.len(), 2);
+    assert_eq!(&*items[0].0, b"a");
+    assert_eq!(&*items[0].1, b"1");
+    assert_eq!(&*items[1].0, b"c");
+    assert_eq!(&*items[1].1, b"3");
 
     Ok(())
 }
@@ -129,14 +124,17 @@ fn memfs_tree_multiple_flushes() -> lsm_tree::Result<()> {
 
 #[test]
 fn memfs_shared_across_trees() -> lsm_tree::Result<()> {
-    let fs = MemFs::new();
+    use std::sync::Arc;
+
+    // Exercise Config::with_shared_fs(Arc<dyn Fs>) for shared backend reuse.
+    let fs: Arc<dyn lsm_tree::fs::Fs> = Arc::new(MemFs::new());
 
     let tree1 = Config::new(
         "/virtual/tree1",
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
-    .with_fs(fs.clone())
+    .with_shared_fs(Arc::clone(&fs))
     .open()?;
 
     let tree2 = Config::new(
@@ -144,7 +142,7 @@ fn memfs_shared_across_trees() -> lsm_tree::Result<()> {
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
-    .with_fs(fs)
+    .with_shared_fs(fs)
     .open()?;
 
     tree1.insert("from_tree1", "hello", 0);
