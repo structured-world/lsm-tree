@@ -2100,3 +2100,171 @@ fn bloom_may_contain_key_partitioned_filter() -> crate::Result<()> {
         }),
     )
 }
+
+/// Regression test for #194: two-level index scan stops prematurely when
+/// `from_block_with_bounds` returns `Ok(None)` for a child partition whose
+/// entries are all outside the requested `[lo, hi]` window.
+///
+/// We build a table with a partitioned (two-level) index containing multiple
+/// child partitions and then iterate through the block index with bounds that
+/// span several partitions. Both forward (`next`) and reverse (`next_back`)
+/// directions are verified to yield the correct block handle sequences.
+///
+/// NOTE: The `Ok(None)` child path cannot be triggered with well-formed
+/// block data regardless of `restart_interval` — `trim_back_to_upper_bound`
+/// always restores a covering entry when the stack empties, so
+/// `seek_upper_bound_cursor` returns `true`. The `Ok(None)` branch fires
+/// only when `fill_stack` or `advance_upper_restart_interval` encounters
+/// a corrupt/malformed block (empty stack after decode failure). The fix
+/// is therefore a defensive guard; this test validates overall iteration
+/// correctness through the two-level path.
+#[test]
+fn two_level_index_scan_skips_empty_child_partition() -> crate::Result<()> {
+    use crate::ValueType::Value;
+    use crate::table::block_index::{BlockIndex, BlockIndexIter};
+
+    // Eight distinct keys, each gets its own data block (block_size=1 byte).
+    // meta_partition_size=3 is a very small byte budget for partitioned index
+    // metadata, so the index writer splits child partitions aggressively
+    // (effectively on or before the first handle), yielding multiple child
+    // partitions for this test.
+    let items: Vec<InternalValue> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+        .iter()
+        .enumerate()
+        .map(|(i, k)| InternalValue::from_components(*k, format!("v{i}"), (i + 1) as u64, Value))
+        .collect();
+
+    let dir = tempfile::tempdir()?;
+    let file = dir.path().join("two_level_skip");
+
+    let mut writer = crate::table::Writer::new(file.clone(), 0, 0, Arc::new(StdFs))?
+        .use_partitioned_index()
+        .use_data_block_size(1)
+        .use_meta_partition_size(3);
+
+    for item in items.iter().cloned() {
+        writer.write(item)?;
+    }
+    writer.finish()?;
+
+    let table = crate::Table::recover(
+        file,
+        crate::Checksum::from_raw(0),
+        0,
+        0,
+        Arc::new(crate::Cache::with_capacity_bytes(0)),
+        Some(Arc::new(crate::DescriptorTable::new(10))),
+        true,
+        false,
+        None,
+        #[cfg(zstd_any)]
+        None,
+        crate::comparator::default_comparator(),
+        #[cfg(feature = "metrics")]
+        Arc::default(),
+    )?;
+
+    assert!(
+        table.regions.index.is_some(),
+        "table must use partitioned (two-level) index",
+    );
+    assert!(
+        table.metadata.index_block_count > 1,
+        "table must have >1 index partitions, got {}",
+        table.metadata.index_block_count,
+    );
+
+    // --- full scan without bounds: collect all block handles ---
+    let all_handles: Vec<_> = {
+        let it = table.block_index.iter();
+        it.collect::<Result<Vec<_>, _>>()?
+    };
+    assert_eq!(
+        all_handles.len(),
+        items.len(),
+        "full scan should yield one block handle per data block",
+    );
+
+    // --- forward scan with lo bound ---
+    // Seek past the first partition(s) to exercise the case where earlier
+    // child partitions are empty after applying bounds.
+    {
+        let mut it = table.block_index.iter();
+        assert!(it.seek_lower(b"d", u64::MAX));
+        let forward_keys: Vec<_> = it
+            .map(|r| r.map(|h| h.end_key().to_vec()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            forward_keys,
+            vec![
+                b"d".to_vec(),
+                b"e".to_vec(),
+                b"f".to_vec(),
+                b"g".to_vec(),
+                b"h".to_vec(),
+            ],
+            "forward scan from 'd' should yield exactly d..h",
+        );
+    }
+
+    // --- backward scan with hi bound ---
+    // seek_upper("e", 0) positions the back cursor at the first handle
+    // whose end_key > "e", which is "f". Reverse iteration starts from
+    // "f" and works down to "a".
+    {
+        let mut it = table.block_index.iter();
+        assert!(it.seek_upper(b"e", 0));
+        let mut backward_keys = Vec::new();
+        while let Some(res) = it.next_back() {
+            backward_keys.push(res?.end_key().to_vec());
+        }
+        assert_eq!(
+            backward_keys,
+            vec![
+                b"f".to_vec(),
+                b"e".to_vec(),
+                b"d".to_vec(),
+                b"c".to_vec(),
+                b"b".to_vec(),
+                b"a".to_vec(),
+            ],
+            "backward scan up to 'e' should yield f..a in reverse",
+        );
+    }
+
+    // --- mixed forward + backward with both bounds ---
+    {
+        let mut it = table.block_index.iter();
+        assert!(it.seek_lower(b"c", u64::MAX));
+        assert!(it.seek_upper(b"f", 0));
+
+        let mut forward_keys = vec![];
+        let mut backward_keys = vec![];
+
+        // Consume two from front
+        if let Some(res) = it.next() {
+            forward_keys.push(res?.end_key().to_vec());
+        }
+        if let Some(res) = it.next() {
+            forward_keys.push(res?.end_key().to_vec());
+        }
+
+        // Consume from back
+        while let Some(res) = it.next_back() {
+            backward_keys.push(res?.end_key().to_vec());
+        }
+
+        // The block index is a sparse index: seek_upper positions the back
+        // cursor at the first block whose end_key > hi, so next_back()
+        // starts from "g" (the first handle past "f"), then works down
+        // through "f" and "e" until the cursors meet.
+        assert_eq!(forward_keys, vec![b"c".to_vec(), b"d".to_vec()]);
+        assert_eq!(
+            backward_keys,
+            vec![b"g".to_vec(), b"f".to_vec(), b"e".to_vec()]
+        );
+        assert!(it.next().is_none(), "iterator should be exhausted");
+    }
+
+    Ok(())
+}
