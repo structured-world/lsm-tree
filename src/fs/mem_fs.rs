@@ -214,6 +214,9 @@ impl FsFile for MemFile {
         reason = "MemFs is a test/ephemeral backend — files never exceed usize::MAX"
     )]
     fn set_len(&self, size: u64) -> io::Result<()> {
+        if !self.writable {
+            return Err(io::Error::other("set_len requires write access"));
+        }
         lock(&self.data)?.resize(size as usize, 0);
         Ok(())
     }
@@ -223,6 +226,9 @@ impl FsFile for MemFile {
         reason = "MemFs is a test/ephemeral backend — files never exceed usize::MAX"
     )]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+        if !self.readable {
+            return Err(io::Error::other("read_at requires read access"));
+        }
         let data = lock(&self.data)?;
         Ok(copy_from_data(buf, &data, offset as usize))
     }
