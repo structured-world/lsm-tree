@@ -63,7 +63,7 @@ macro_rules! read_u8 {
     ($block:expr, $name:expr, $cmp:expr) => {{
         let bytes = $block
             .point_read($name, SeqNo::MAX, $cmp)?
-            .unwrap_or_else(|| panic!("meta property {:?} should exist", $name));
+            .ok_or(crate::Error::InvalidHeader("TableMeta"))?;
 
         let mut bytes = &bytes.value[..];
         bytes.read_u8()?
@@ -74,7 +74,7 @@ macro_rules! read_u64 {
     ($block:expr, $name:expr, $cmp:expr) => {{
         let bytes = $block
             .point_read($name, SeqNo::MAX, $cmp)?
-            .unwrap_or_else(|| panic!("meta property {:?} should exist", $name));
+            .ok_or(crate::Error::InvalidHeader("TableMeta"))?;
 
         let mut bytes = &bytes.value[..];
         bytes.read_u64::<LittleEndian>()?
@@ -108,7 +108,7 @@ fn validated_restart_interval_index(restart_interval: u8) -> crate::Result<u8> {
 }
 
 impl ParsedMeta {
-    #[expect(clippy::expect_used, clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     pub fn load_with_handle(
         file: &dyn FsFile,
         handle: &BlockHandle,
@@ -135,47 +135,37 @@ impl ParsedMeta {
         // Metadata keys are always lexicographic, so use the default comparator.
         let cmp = default_comparator();
 
-        #[expect(clippy::indexing_slicing)]
         {
             let table_version = block
                 .point_read(b"table_version", SeqNo::MAX, &cmp)?
-                .expect("Table version should exist")
+                .ok_or(crate::Error::InvalidHeader("TableMeta"))?
                 .value;
 
-            assert_eq!(
-                [3u8],
-                &*table_version,
-                "unspported table version {}",
-                table_version[0],
-            );
+            if *table_version != [3u8] {
+                return Err(crate::Error::InvalidHeader("TableMeta"));
+            }
         }
 
         {
             let hash_type = block
                 .point_read(b"filter_hash_type", SeqNo::MAX, &cmp)?
-                .expect("Filter hash type should exist")
+                .ok_or(crate::Error::InvalidHeader("TableMeta"))?
                 .value;
 
-            assert_eq!(
-                &[u8::from(ChecksumType::Xxh3)],
-                &*hash_type,
-                "invalid hash type: {:?}",
-                std::str::from_utf8(&hash_type),
-            );
+            if *hash_type != [u8::from(ChecksumType::Xxh3)] {
+                return Err(crate::Error::InvalidHeader("TableMeta"));
+            }
         }
 
         {
             let hash_type = block
                 .point_read(b"checksum_type", SeqNo::MAX, &cmp)?
-                .expect("Checksum type should exist")
+                .ok_or(crate::Error::InvalidHeader("TableMeta"))?
                 .value;
 
-            assert_eq!(
-                &[u8::from(ChecksumType::Xxh3)],
-                &*hash_type,
-                "invalid checksum type: {:?}",
-                std::str::from_utf8(&hash_type),
-            );
+            if *hash_type != [u8::from(ChecksumType::Xxh3)] {
+                return Err(crate::Error::InvalidHeader("TableMeta"));
+            }
         }
 
         let _index_block_restart_interval =
@@ -194,7 +184,7 @@ impl ParsedMeta {
         let created_at = {
             let bytes = block
                 .point_read(b"created_at", SeqNo::MAX, &cmp)?
-                .expect("created_at timestamp should exist");
+                .ok_or(crate::Error::InvalidHeader("TableMeta"))?;
 
             let mut bytes = &bytes.value[..];
             bytes.read_u128::<LittleEndian>()?.into()
@@ -203,11 +193,11 @@ impl ParsedMeta {
         let key_range = KeyRange::new((
             block
                 .point_read(b"key#min", SeqNo::MAX, &cmp)?
-                .expect("key min should exist")
+                .ok_or(crate::Error::InvalidHeader("TableMeta"))?
                 .value,
             block
                 .point_read(b"key#max", SeqNo::MAX, &cmp)?
-                .expect("key max should exist")
+                .ok_or(crate::Error::InvalidHeader("TableMeta"))?
                 .value,
         ));
 
@@ -215,7 +205,7 @@ impl ParsedMeta {
             let min = {
                 let bytes = block
                     .point_read(b"seqno#min", SeqNo::MAX, &cmp)?
-                    .expect("seqno min should exist")
+                    .ok_or(crate::Error::InvalidHeader("TableMeta"))?
                     .value;
                 let mut bytes = &bytes[..];
                 bytes.read_u64::<LittleEndian>()?
@@ -224,7 +214,7 @@ impl ParsedMeta {
             let max = {
                 let bytes = block
                     .point_read(b"seqno#max", SeqNo::MAX, &cmp)?
-                    .expect("seqno max should exist")
+                    .ok_or(crate::Error::InvalidHeader("TableMeta"))?
                     .value;
                 let mut bytes = &bytes[..];
                 bytes.read_u64::<LittleEndian>()?
@@ -251,7 +241,7 @@ impl ParsedMeta {
         let data_block_compression = {
             let bytes = block
                 .point_read(b"compression#data", SeqNo::MAX, &cmp)?
-                .expect("size should exist");
+                .ok_or(crate::Error::InvalidHeader("TableMeta"))?;
 
             let mut bytes = &bytes.value[..];
             CompressionType::decode_from(&mut bytes)?
@@ -260,7 +250,7 @@ impl ParsedMeta {
         let index_block_compression = {
             let bytes = block
                 .point_read(b"compression#index", SeqNo::MAX, &cmp)?
-                .expect("size should exist");
+                .ok_or(crate::Error::InvalidHeader("TableMeta"))?;
 
             let mut bytes = &bytes.value[..];
             CompressionType::decode_from(&mut bytes)?
@@ -406,6 +396,7 @@ mod tests {
         }
 
         let file = std::fs::File::open(&path).unwrap();
+        #[expect(clippy::cast_possible_truncation, reason = "test meta blocks are tiny")]
         let handle = BlockHandle::new(crate::table::BlockOffset(0), buf.len() as u32);
         ParsedMeta::load_with_handle(&file, &handle, None)
     }
@@ -418,21 +409,23 @@ mod tests {
         assert!(result.is_ok(), "valid meta must parse: {result:?}");
     }
 
-    /// BUG(#201): missing `table_version` panics instead of returning Err.
+    /// Missing `table_version` must return `Err(InvalidHeader)`, not panic.
     #[test]
-    #[should_panic(expected = "Table version should exist")]
-    fn load_with_handle_missing_table_version_panics() {
+    fn load_with_handle_missing_table_version_returns_err() {
         let items: Vec<_> = valid_meta_items()
             .into_iter()
             .filter(|iv| &*iv.key.user_key != b"table_version")
             .collect();
-        let _ = load_meta_from_items(&items);
+        let result = load_meta_from_items(&items);
+        assert!(
+            matches!(result, Err(crate::Error::InvalidHeader("TableMeta"))),
+            "expected InvalidHeader(\"TableMeta\"), got {result:?}",
+        );
     }
 
-    /// BUG(#201): wrong table_version value panics via assert_eq!
+    /// Wrong `table_version` value must return `Err(InvalidHeader)`, not panic.
     #[test]
-    #[should_panic(expected = "unspported table version")]
-    fn load_with_handle_wrong_table_version_panics() {
+    fn load_with_handle_wrong_table_version_returns_err() {
         let mut items = valid_meta_items();
         if let Some(item) = items
             .iter_mut()
@@ -440,28 +433,38 @@ mod tests {
         {
             *item = meta("table_version", &[99u8]);
         }
-        let _ = load_meta_from_items(&items);
+        let result = load_meta_from_items(&items);
+        assert!(
+            matches!(result, Err(crate::Error::InvalidHeader("TableMeta"))),
+            "expected InvalidHeader(\"TableMeta\"), got {result:?}",
+        );
     }
 
-    /// BUG(#201): missing `key#min` panics instead of returning Err.
+    /// Missing `key#min` must return `Err(InvalidHeader)`, not panic.
     #[test]
-    #[should_panic(expected = "key min should exist")]
-    fn load_with_handle_missing_key_min_panics() {
+    fn load_with_handle_missing_key_min_returns_err() {
         let items: Vec<_> = valid_meta_items()
             .into_iter()
             .filter(|iv| &*iv.key.user_key != b"key#min")
             .collect();
-        let _ = load_meta_from_items(&items);
+        let result = load_meta_from_items(&items);
+        assert!(
+            matches!(result, Err(crate::Error::InvalidHeader("TableMeta"))),
+            "expected InvalidHeader(\"TableMeta\"), got {result:?}",
+        );
     }
 
-    /// BUG(#201): missing `compression#data` panics instead of returning Err.
+    /// Missing `compression#data` must return `Err(InvalidHeader)`, not panic.
     #[test]
-    #[should_panic(expected = "size should exist")]
-    fn load_with_handle_missing_compression_data_panics() {
+    fn load_with_handle_missing_compression_data_returns_err() {
         let items: Vec<_> = valid_meta_items()
             .into_iter()
             .filter(|iv| &*iv.key.user_key != b"compression#data")
             .collect();
-        let _ = load_meta_from_items(&items);
+        let result = load_meta_from_items(&items);
+        assert!(
+            matches!(result, Err(crate::Error::InvalidHeader("TableMeta"))),
+            "expected InvalidHeader(\"TableMeta\"), got {result:?}",
+        );
     }
 }

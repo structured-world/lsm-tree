@@ -287,6 +287,7 @@ mod tests {
         // Corrupt the last 4 bytes of the block (trailer region).
         let len = buf.len();
         assert!(len >= 4, "buffer too small for corruption");
+        #[expect(clippy::indexing_slicing, reason = "length checked above")]
         for b in &mut buf[len - 4..] {
             *b ^= 0xFF;
         }
