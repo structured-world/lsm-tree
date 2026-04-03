@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775200729762,
+  "lastUpdate": 1775207225242,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -4914,6 +4914,84 @@ window.BENCHMARK_DATA = {
             "value": 268170.82974465756,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 482046 ops/sec | factor: 0.556 | P50: 1.8us | P99: 7.2us | P99.9: 14.5us\nthreads: 1 | elapsed: 0.41s | num: 200000 | iterations: 3 | runner: seq_wr=220417 rand_rd=927627 cpu=123 composite=41343.3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37f46dbc1811ed731784a2d633382a6b7ee5cfbe",
+          "message": "refactor(table): make index block bound-cursor helpers fallible (#205)\n\n## Summary\n\n- `seek_upper_impl` now returns `Result<bool>`: the poisoned/clamped\ncursor case (empty stack after `advance_upper_restart_interval` hit\ncorrupt data in a compressed index block) returns `Err(InvalidTrailer)`\ninstead of `false`\n- `seek_upper_bound_cursor` propagates the error via `?` — corruption in\nbounded scans is surfaced to callers instead of silently treated as\n\"empty range\" (`Ok(None)`)\n- `seek_lower_bound_cursor` returns `Result<bool>` as API plumbing\n(inner `seek_with_cache_resets` doesn't yet have a distinguishable\ncorruption path)\n- `from_block_with_bounds` propagates both via `?`, removing the\n`TODO(#196)` comment\n- `seek_upper` (public, returns `bool`) uses `unwrap_or(false)` for\nbackward compatibility\n\n## Test plan\n\n- [x] New: `seek_upper_bound_cursor_returns_err_on_poisoned_cursor` —\ncorrupt second interval triggers `Err(InvalidTrailer)`\n- [x] `cargo clippy --all-targets --all-features -- -D warnings` — clean\n- [x] `cargo nextest run --all-features` — 1137 passed, 0 failed\n- [x] `cargo test --doc` — 34 passed\n\nCloses #196\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai\n-->\n\n## Summary by CodeRabbit\n\n* **Bug Fixes**\n* Improved error handling for corrupted data in table indexes; errors\nfrom cursor operations now properly propagate as failures instead of\nbeing silently collapsed into empty range interpretations.\n* Added validation for poisoned cursors and invalid data trailers to\nprevent silent failures during index traversal.\n\n* **Tests**\n* Added test for detecting corrupted index blocks with invalid trailers.\n\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+          "timestamp": "2026-04-03T12:05:34+03:00",
+          "tree_id": "211c4a642170838dded7e47f2d759df541d5a876",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/37f46dbc1811ed731784a2d633382a6b7ee5cfbe"
+        },
+        "date": 1775207224036,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1189743.4929203328,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2124777 ops/sec | factor: 0.560 | P50: 0.3us | P99: 2.0us | P99.9: 4.9us\nthreads: 1 | elapsed: 0.09s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          },
+          {
+            "name": "fillrandom",
+            "value": 660573.280446794,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1179726 ops/sec | factor: 0.560 | P50: 0.7us | P99: 2.6us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          },
+          {
+            "name": "readrandom",
+            "value": 307250.9795774671,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 548723 ops/sec | factor: 0.560 | P50: 1.6us | P99: 5.1us | P99.9: 13.0us\nthreads: 1 | elapsed: 0.36s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          },
+          {
+            "name": "readseq",
+            "value": 1412975.0506888425,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2523449 ops/sec | factor: 0.560 | P50: 0.2us | P99: 3.8us | P99.9: 7.7us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          },
+          {
+            "name": "seekrandom",
+            "value": 208799.778474593,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 372898 ops/sec | factor: 0.560 | P50: 2.4us | P99: 5.9us | P99.9: 14.0us\nthreads: 1 | elapsed: 0.54s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          },
+          {
+            "name": "prefixscan",
+            "value": 102318.18733746017,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 182731 ops/sec | factor: 0.560 | P50: 5.1us | P99: 7.6us | P99.9: 17.6us\nthreads: 1 | elapsed: 1.09s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          },
+          {
+            "name": "overwrite",
+            "value": 664381.017897691,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1186526 ops/sec | factor: 0.560 | P50: 0.7us | P99: 2.4us | P99.9: 5.8us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          },
+          {
+            "name": "mergerandom",
+            "value": 392916.5303822096,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 701714 ops/sec | factor: 0.560 | P50: 0.3us | P99: 0.6us | P99.9: 2.9us\nthreads: 1 | elapsed: 0.29s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 269368.7885515463,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 481069 ops/sec | factor: 0.560 | P50: 1.9us | P99: 4.1us | P99.9: 13.7us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
           }
         ]
       }
