@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775207225242,
+  "lastUpdate": 1775209587783,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -4992,6 +4992,84 @@ window.BENCHMARK_DATA = {
             "value": 269368.7885515463,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 481069 ops/sec | factor: 0.560 | P50: 1.9us | P99: 4.1us | P99.9: 13.7us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=214253 rand_rd=931910 cpu=123 composite=41076.0"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7d1349ea6b86af418d42eb25c064eed031f7a1f2",
+          "message": "perf(table): add infallible OwnedIndexBlockIter constructor for pre-validated blocks (#206)\n\n## Summary\n\n- Add `OwnedIndexBlockIter::from_validated_block` — an infallible\nconstructor that skips trailer validation for callers that have already\nvalidated the block\n- Use it from `FullBlockIndex::iter()`, which validates the trailer at\nconstruction time, eliminating redundant work and the `expect` on the\nhot path\n\n## Test plan\n\n- [x] New test `from_validated_block_iterates_all_entries` verifies\ncorrectness\n- [x] All 1036 existing tests pass\n- [x] Clippy clean\n\nCloses #197\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai\n-->\n## Summary by CodeRabbit\n\n* **Refactor**\n* Improved block-index iteration by removing explicit panic paths and\nusing a validated construction path for safer, infallible iterator\ncreation.\n\n* **Tests**\n* Added a unit test that pre-validates blocks and verifies iteration\nyields all entries in order.\n\n* **Style**\n* Minor test/import reformatting and comment reflowing (no behavior\nchanges).\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+          "timestamp": "2026-04-03T12:45:06+03:00",
+          "tree_id": "c6e49c6a6257eb449edd5d05ea6318f2c3938652",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/7d1349ea6b86af418d42eb25c064eed031f7a1f2"
+        },
+        "date": 1775209586089,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1153151.9210478074,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2116620 ops/sec | factor: 0.545 | P50: 0.3us | P99: 1.9us | P99.9: 4.9us\nthreads: 1 | elapsed: 0.09s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          },
+          {
+            "name": "fillrandom",
+            "value": 653001.1792087426,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1198589 ops/sec | factor: 0.545 | P50: 0.7us | P99: 2.5us | P99.9: 5.7us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          },
+          {
+            "name": "readrandom",
+            "value": 306750.82456667925,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 563044 ops/sec | factor: 0.545 | P50: 1.6us | P99: 5.0us | P99.9: 12.8us\nthreads: 1 | elapsed: 0.36s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          },
+          {
+            "name": "readseq",
+            "value": 1356019.0143763567,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2488985 ops/sec | factor: 0.545 | P50: 0.2us | P99: 3.7us | P99.9: 7.4us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          },
+          {
+            "name": "seekrandom",
+            "value": 191994.42011819407,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 352407 ops/sec | factor: 0.545 | P50: 2.5us | P99: 6.1us | P99.9: 14.2us\nthreads: 1 | elapsed: 0.57s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          },
+          {
+            "name": "prefixscan",
+            "value": 98591.6388815067,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 180966 ops/sec | factor: 0.545 | P50: 5.2us | P99: 6.8us | P99.9: 17.6us\nthreads: 1 | elapsed: 1.11s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          },
+          {
+            "name": "overwrite",
+            "value": 667980.8595552227,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1226085 ops/sec | factor: 0.545 | P50: 0.7us | P99: 2.6us | P99.9: 5.8us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          },
+          {
+            "name": "mergerandom",
+            "value": 318989.12280811724,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 585507 ops/sec | factor: 0.545 | P50: 0.3us | P99: 1.9us | P99.9: 4.3us\nthreads: 1 | elapsed: 0.34s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 257154.28586125583,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 472009 ops/sec | factor: 0.545 | P50: 1.9us | P99: 4.1us | P99.9: 13.1us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
           }
         ]
       }
