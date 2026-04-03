@@ -3,14 +3,14 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
+    SeqNo,
     comparator::SharedComparator,
     double_ended_peekable::{DoubleEndedPeekable, DoubleEndedPeekableExt},
     table::{
+        KeyedBlockHandle,
         block::{Decoder, ParsedItem},
         index_block::IndexBlockParsedItem,
-        KeyedBlockHandle,
     },
-    SeqNo,
 };
 
 pub struct Iter<'a> {
@@ -245,13 +245,13 @@ impl DoubleEndedIterator for Iter<'_> {
 mod tests {
     use super::*;
     use crate::{
+        Checksum,
         coding::Decode,
         comparator::default_comparator,
         table::{
-            block::{BlockType, Header, ParsedItem, Trailer},
             Block, BlockHandle, BlockOffset, IndexBlock, KeyedBlockHandle,
+            block::{BlockType, Header, ParsedItem, Trailer},
         },
-        Checksum,
     };
     use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
     use std::io::Cursor;
@@ -493,9 +493,10 @@ mod tests {
         let index = make_index_block(8);
         let mut iter = index.iter(default_comparator());
 
-        assert!(iter
-            .seek_upper_bound_cursor(b"adj:out:vertex-0001:edge-0007z", SeqNo::MAX)
-            .unwrap());
+        assert!(
+            iter.seek_upper_bound_cursor(b"adj:out:vertex-0001:edge-0007z", SeqNo::MAX)
+                .unwrap()
+        );
 
         let keys: Vec<Vec<u8>> = iter
             .map(|item| item.materialize(index.as_slice()).end_key().to_vec())
