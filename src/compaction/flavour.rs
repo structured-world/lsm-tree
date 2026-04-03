@@ -2,11 +2,11 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-use crate::blob_tree::FragmentationMap;
 use crate::blob_tree::handle::BlobIndirection;
+use crate::blob_tree::FragmentationMap;
 use crate::coding::{Decode, Encode};
-use crate::compaction::Input as CompactionPayload;
 use crate::compaction::worker::Options;
+use crate::compaction::Input as CompactionPayload;
 use crate::range_tombstone::RangeTombstone;
 use crate::table::multi_writer::MultiWriter;
 use crate::version::{SuperVersions, Version};
@@ -386,6 +386,7 @@ impl StandardCompaction {
                     opts.tree_id,
                     opts.config.cache.clone(),
                     opts.config.descriptor_table.clone(),
+                    opts.config.fs.clone(),
                     pin_filter,
                     pin_index,
                     opts.config.encryption.clone(),
@@ -499,7 +500,7 @@ impl CompactionFlavour for StandardCompaction {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::{UserKey, UserValue, vlog::ValueHandle};
+    use crate::{vlog::ValueHandle, UserKey, UserValue};
 
     #[expect(clippy::unnecessary_wraps)]
     fn entry(

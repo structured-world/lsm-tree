@@ -3,8 +3,8 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    SeqNo, UserKey, UserValue, blob_tree::handle::BlobIndirection, file::BLOBS_FOLDER,
-    table::Table, tree::ingest::Ingestion as TableIngestion, vlog::BlobFileWriter,
+    blob_tree::handle::BlobIndirection, file::BLOBS_FOLDER, table::Table,
+    tree::ingest::Ingestion as TableIngestion, vlog::BlobFileWriter, SeqNo, UserKey, UserValue,
 };
 use std::cmp::Ordering;
 
@@ -227,6 +227,7 @@ impl<'a> BlobIngestion<'a> {
                     index.id,
                     index.config.cache.clone(),
                     index.config.descriptor_table.clone(),
+                    index.config.fs.clone(),
                     false,
                     false,
                     index.config.encryption.clone(),

@@ -4,8 +4,8 @@
 
 use super::Tree;
 use crate::{
-    BlobIndirection, SeqNo, UserKey, UserValue, config::FilterPolicyEntry,
-    table::multi_writer::MultiWriter,
+    config::FilterPolicyEntry, table::multi_writer::MultiWriter, BlobIndirection, SeqNo, UserKey,
+    UserValue,
 };
 use std::cmp::Ordering;
 use std::path::PathBuf;
@@ -311,6 +311,7 @@ impl<'a> Ingestion<'a> {
                     self.tree.id,
                     self.tree.config.cache.clone(),
                     self.tree.config.descriptor_table.clone(),
+                    self.tree.config.fs.clone(),
                     false,
                     false,
                     self.tree.config.encryption.clone(),

@@ -453,6 +453,7 @@ impl AbstractTree for Tree {
                     self.id,
                     self.config.cache.clone(),
                     self.config.descriptor_table.clone(),
+                    self.config.fs.clone(),
                     pin_filter,
                     pin_index,
                     self.config.encryption.clone(),
@@ -1444,7 +1445,6 @@ impl Tree {
     /// Creates a new LSM-tree in a directory.
     fn create_new(config: Config) -> crate::Result<Self> {
         use crate::file::fsync_directory;
-        use crate::fs::Fs;
 
         let path = config.path.clone();
         log::trace!("Creating LSM-tree at {}", path.display());
@@ -1488,7 +1488,7 @@ impl Tree {
         config: &Config,
         #[cfg(feature = "metrics")] metrics: &Arc<Metrics>,
     ) -> crate::Result<Version> {
-        use crate::{TableId, file::fsync_directory, fs::Fs};
+        use crate::{TableId, file::fsync_directory};
 
         let tree_path = tree_path.as_ref();
 
@@ -1598,6 +1598,7 @@ impl Tree {
                         tree_id,
                         config.cache.clone(),
                         config.descriptor_table.clone(),
+                        config.fs.clone(),
                         pin_filter,
                         pin_index,
                         config.encryption.clone(),
@@ -1680,6 +1681,7 @@ impl Tree {
             &recovery.blob_file_ids,
             tree_id,
             config.descriptor_table.as_ref(),
+            &config.fs,
         )?;
 
         let version = Version::from_recovery(recovery, &tables, &blob_files)?;

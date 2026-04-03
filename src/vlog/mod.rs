@@ -7,20 +7,20 @@ pub mod blob_file;
 mod handle;
 
 pub use {
-    accessor::Accessor, blob_file::BlobFile,
-    blob_file::merge::MergeScanner as BlobFileMergeScanner,
+    accessor::Accessor, blob_file::merge::MergeScanner as BlobFileMergeScanner,
     blob_file::multi_writer::MultiWriter as BlobFileWriter,
-    blob_file::scanner::Scanner as BlobFileScanner, handle::ValueHandle,
+    blob_file::scanner::Scanner as BlobFileScanner, blob_file::BlobFile, handle::ValueHandle,
 };
 
 use crate::{
-    Checksum, DescriptorTable, TreeId,
     file_accessor::FileAccessor,
+    fs::Fs,
     vlog::blob_file::{Inner as BlobFileInner, Metadata},
+    Checksum, DescriptorTable, TreeId,
 };
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc},
 };
 
 pub fn recover_blob_files(
@@ -28,6 +28,7 @@ pub fn recover_blob_files(
     ids: &[(BlobFileId, Checksum)],
     tree_id: TreeId,
     descriptor_table: Option<&Arc<DescriptorTable>>,
+    fs: &Arc<dyn Fs>,
 ) -> crate::Result<(Vec<BlobFile>, Vec<PathBuf>)> {
     if !folder.try_exists()? {
         return Ok((vec![], vec![]));
@@ -79,7 +80,7 @@ pub fn recover_blob_files(
                 blob_file_path.display(),
             );
 
-            let file = std::fs::File::open(&blob_file_path)?;
+            let file = fs.open(&blob_file_path, &crate::fs::FsOpenOptions::new().read(true))?;
 
             let meta = {
                 let reader = sfa::Reader::new(&blob_file_path)?;
@@ -94,15 +95,18 @@ pub fn recover_blob_files(
                 let metadata_len = usize::try_from(metadata_section.len())
                     .map_err(|_| crate::Error::Unrecoverable)?;
                 let metadata_slice =
-                    crate::file::read_exact(&file, metadata_section.pos(), metadata_len)?;
+                    crate::file::read_exact(&*file, metadata_section.pos(), metadata_len)?;
 
                 Metadata::from_slice(&metadata_slice)?
             };
 
             let file_accessor = if let Some(dt) = descriptor_table.cloned() {
-                FileAccessor::DescriptorTable(dt)
+                FileAccessor::DescriptorTable {
+                    table: dt,
+                    fs: fs.clone(),
+                }
             } else {
-                FileAccessor::File(Arc::new(file))
+                FileAccessor::File(Arc::from(file))
             };
 
             blob_files.push(BlobFile(Arc::new(BlobFileInner {
@@ -143,7 +147,13 @@ mod tests {
     #[test]
     fn vlog_recovery_missing_blob_file() {
         assert!(matches!(
-            recover_blob_files(Path::new("."), &[(0, Checksum::from_raw(0))], 0, None),
+            recover_blob_files(
+                Path::new("."),
+                &[(0, Checksum::from_raw(0))],
+                0,
+                None,
+                &(Arc::new(crate::fs::StdFs) as Arc<dyn crate::fs::Fs>)
+            ),
             Err(crate::Error::Unrecoverable),
         ));
     }

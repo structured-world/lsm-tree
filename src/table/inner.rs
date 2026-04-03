@@ -7,18 +7,19 @@ use crate::metrics::Metrics;
 
 use super::{block_index::BlockIndexImpl, meta::ParsedMeta, regions::ParsedRegions};
 use crate::{
-    Checksum, GlobalTableId, SeqNo,
     cache::Cache,
     comparator::SharedComparator,
     encryption::EncryptionProvider,
     file_accessor::FileAccessor,
+    fs::Fs,
     range_tombstone::RangeTombstone,
-    table::{IndexBlock, filter::block::FilterBlock},
+    table::{filter::block::FilterBlock, IndexBlock},
     tree::inner::TreeId,
+    Checksum, GlobalTableId, SeqNo,
 };
 use std::{
     path::PathBuf,
-    sync::{Arc, OnceLock, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc, OnceLock},
 };
 
 pub struct Inner {
@@ -28,6 +29,9 @@ pub struct Inner {
 
     #[doc(hidden)]
     pub(crate) file_accessor: FileAccessor,
+
+    /// Filesystem backend for file operations (open, remove, etc.).
+    pub(crate) fs: Arc<dyn Fs>,
 
     /// Parsed metadata
     #[doc(hidden)]
@@ -97,7 +101,7 @@ impl Drop for Inner {
         if self.is_deleted.load(std::sync::atomic::Ordering::Acquire) {
             log::trace!("Cleanup deleted table {global_id:?} at {:?}", self.path);
 
-            if let Err(e) = std::fs::remove_file(&*self.path) {
+            if let Err(e) = self.fs.remove_file(&self.path) {
                 log::warn!(
                     "Failed to cleanup deleted table {global_id:?} at {:?}: {e:?}",
                     self.path,

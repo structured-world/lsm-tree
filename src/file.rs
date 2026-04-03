@@ -3,8 +3,8 @@
 // (found in the LICENSE-* files in the repository)
 
 use crate::{
-    Slice,
     fs::{Fs, FsFile},
+    Slice,
 };
 use std::{io::Write, path::Path};
 
@@ -47,40 +47,37 @@ pub fn read_exact(file: &dyn FsFile, offset: u64, size: usize) -> std::io::Resul
     Ok(builder.freeze().into())
 }
 
-/// Atomically rewrites a file.
+/// Atomically rewrites a file via the [`Fs`] trait.
+///
+/// Writes `content` to a temporary file in the same directory, fsyncs it,
+/// then renames over `path`. This ensures readers never see a partial write.
 pub fn rewrite_atomic(path: &Path, content: &[u8], fs: &dyn Fs) -> std::io::Result<()> {
+    use crate::fs::FsOpenOptions;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
     #[expect(
         clippy::expect_used,
         reason = "every file should have a parent directory"
     )]
     let folder = path.parent().expect("should have a parent");
 
-    // NOTE: tempfile crate uses std::fs internally; migrating temp-file
-    // creation to Fs would require a custom implementation.
-    let mut temp_file = tempfile::NamedTempFile::new_in(folder)?;
-    temp_file.write_all(content)?;
-    temp_file.flush()?;
-    temp_file.as_file_mut().sync_all()?;
-    temp_file.persist(path)?;
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = folder.join(format!(".tmp_{seq}"));
 
-    // Suppress unused-variable warning on Windows where the post-persist
-    // sync block is skipped (directory fsync is unsupported).
-    let _ = &fs;
-
-    #[cfg(not(target_os = "windows"))]
     {
-        use crate::fs::FsOpenOptions;
-
-        let file = fs.open(path, &FsOpenOptions::new().read(true))?;
+        let mut file = fs.open(
+            &tmp_path,
+            &FsOpenOptions::new().write(true).create_new(true),
+        )?;
+        file.write_all(content)?;
+        file.flush()?;
         FsFile::sync_all(&*file)?;
-
-        #[expect(
-            clippy::expect_used,
-            reason = "files should always have a parent directory"
-        )]
-        let folder = path.parent().expect("should have parent folder");
-        fs.sync_directory(folder)?;
     }
+
+    fs.rename(&tmp_path, path)?;
+    fsync_directory(folder, fs)?;
 
     Ok(())
 }

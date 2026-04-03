@@ -23,11 +23,13 @@
 //! - **macOS / BSD**: no batched I/O API exists (`dispatch_io` and `kqueue`
 //!   do not help for storage I/O patterns); [`StdFs`] is the correct choice
 
+mod mem_fs;
 mod std_fs;
 
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 mod io_uring_fs;
 
+pub use mem_fs::MemFs;
 pub use std_fs::StdFs;
 
 #[cfg(all(target_os = "linux", feature = "io-uring"))]

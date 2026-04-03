@@ -3,15 +3,15 @@
     reason = "benchmark setup favors concise panic messages"
 )]
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use lsm_tree::{
-    Cache, Checksum, DefaultUserComparator, DescriptorTable, InternalValue, SeqNo,
-    SharedComparator, TableId, ValueType,
     fs::StdFs,
     table::{
-        BlockHandle, BlockOffset, IndexBlock, KeyedBlockHandle, Table, Writer,
-        filter::standard_bloom::Builder as BloomBuilder,
+        filter::standard_bloom::Builder as BloomBuilder, BlockHandle, BlockOffset, IndexBlock,
+        KeyedBlockHandle, Table, Writer,
     },
+    Cache, Checksum, DefaultUserComparator, DescriptorTable, InternalValue, SeqNo,
+    SharedComparator, TableId, ValueType,
 };
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -116,6 +116,7 @@ fn build_table_for_point_read(restart_interval: u8) -> BenchTable {
         0,
         Arc::new(Cache::with_capacity_bytes(1_000_000)),
         Some(Arc::new(DescriptorTable::new(8))),
+        Arc::new(lsm_tree::fs::StdFs),
         false,
         false,
         None,
