@@ -54,12 +54,10 @@ impl FullBlockIndex {
     }
 
     pub fn iter(&self) -> Iter {
-        // Invariant: trailer was validated in `new`, so `from_block` cannot fail.
-        #[expect(clippy::expect_used, reason = "trailer validated at construction")]
-        Iter(
-            OwnedIndexBlockIter::from_block(self.block.clone(), self.comparator.clone())
-                .expect("trailer validated at construction"),
-        )
+        Iter(OwnedIndexBlockIter::from_validated_block(
+            self.block.clone(),
+            self.comparator.clone(),
+        ))
     }
 }
 
