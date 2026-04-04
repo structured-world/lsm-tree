@@ -1111,8 +1111,8 @@ mod tests {
         // Try to create a file whose "parent" is actually a file.
         let err = fs
             .open(Path::new("/dir/file/child"), &opts)
-            .err()
-            .expect("open should fail");
+            .map(|_| ())
+            .unwrap_err();
         assert_ne!(err.kind(), io::ErrorKind::NotFound);
         Ok(())
     }
