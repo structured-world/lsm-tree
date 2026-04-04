@@ -158,7 +158,7 @@ fn memfs_shared_across_trees() -> lsm_tree::Result<()> {
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
-    .with_shared_fs(fs)
+    .with_shared_fs(Arc::clone(&fs))
     .open()?;
 
     tree1.insert("from_tree1", "hello", 0);
@@ -169,10 +169,32 @@ fn memfs_shared_across_trees() -> lsm_tree::Result<()> {
     tree1.flush_active_memtable(0)?;
     tree2.flush_active_memtable(0)?;
 
+    // Verify data isolation between trees on the shared backend.
     assert!(tree1.get("from_tree1", SeqNo::MAX)?.is_some());
     assert!(tree1.get("from_tree2", SeqNo::MAX)?.is_none());
     assert!(tree2.get("from_tree2", SeqNo::MAX)?.is_some());
     assert!(tree2.get("from_tree1", SeqNo::MAX)?.is_none());
+
+    // Prove the shared MemFs was actually used: tables directory exists
+    // in the virtual filesystem, not on the real host disk.
+    let tables1 = path1.join("tables");
+    let tables2 = path2.join("tables");
+    assert!(
+        fs.exists(&tables1)?,
+        "tables dir should exist in MemFs after flush"
+    );
+    assert!(
+        fs.exists(&tables2)?,
+        "tables dir should exist in MemFs after flush"
+    );
+    assert!(
+        !tables1.exists(),
+        "tables dir should NOT exist on host disk"
+    );
+    assert!(
+        !tables2.exists(),
+        "tables dir should NOT exist on host disk"
+    );
 
     Ok(())
 }

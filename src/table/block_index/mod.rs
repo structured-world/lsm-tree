@@ -92,6 +92,11 @@ pub enum BlockIndexImpl {
     Full(FullBlockIndex),
     VolatileFull(VolatileBlockIndex),
     TwoLevel(TwoLevelBlockIndex),
+
+    /// Sentinel used during [`Drop`] to release file handles before
+    /// deleting the underlying table file. Not constructed outside `Drop`.
+    #[doc(hidden)]
+    Closed,
 }
 
 impl BlockIndex for BlockIndexImpl {
@@ -118,6 +123,7 @@ impl BlockIndex for BlockIndexImpl {
                     None
                 }
             }
+            Self::Closed => None,
         }
     }
 
@@ -126,6 +132,8 @@ impl BlockIndex for BlockIndexImpl {
             Self::Full(index) => BlockIndexIterImpl::Full(index.iter()),
             Self::VolatileFull(index) => BlockIndexIterImpl::Volatile(index.iter()),
             Self::TwoLevel(index) => BlockIndexIterImpl::TwoLevel(index.iter()),
+            // Closed is only used during Drop — iter() is unreachable.
+            Self::Closed => unreachable!("iter() called on Closed block index"),
         }
     }
 }

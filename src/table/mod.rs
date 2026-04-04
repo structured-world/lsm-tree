@@ -179,7 +179,7 @@ impl Table {
     pub fn pinned_block_index_size(&self) -> usize {
         match &*self.block_index {
             BlockIndexImpl::Full(full_block_index) => full_block_index.inner().inner.size(),
-            BlockIndexImpl::VolatileFull(_) => 0,
+            BlockIndexImpl::VolatileFull(_) | BlockIndexImpl::Closed => 0,
             BlockIndexImpl::TwoLevel(two_level_block_index) => {
                 two_level_block_index.top_level_index.inner.size()
             }
