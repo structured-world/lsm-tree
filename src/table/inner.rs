@@ -101,16 +101,18 @@ impl Drop for Inner {
         if self.is_deleted.load(std::sync::atomic::Ordering::Acquire) {
             log::trace!("Cleanup deleted table {global_id:?} at {:?}", self.path);
 
+            // Evict cached FD before removing the file — on Windows,
+            // remove_file fails while a handle is open.
+            self.file_accessor.as_descriptor_table().inspect(|d| {
+                d.remove_for_table(&global_id);
+            });
+
             if let Err(e) = self.fs.remove_file(&self.path) {
                 log::warn!(
                     "Failed to cleanup deleted table {global_id:?} at {:?}: {e:?}",
                     self.path,
                 );
             }
-
-            self.file_accessor.as_descriptor_table().inspect(|d| {
-                d.remove_for_table(&global_id);
-            });
         }
     }
 }

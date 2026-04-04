@@ -58,6 +58,10 @@ pub fn recover_blob_files(
 
     let mut blob_files = Vec::with_capacity(ids.len());
     let mut orphaned_blob_files = vec![];
+    // Deferred cache inserts — only committed after all blobs parse
+    // successfully, so a partial recovery doesn't leak FDs in the
+    // descriptor table.
+    let mut pending_cache_inserts = Vec::new();
 
     for (idx, dirent) in entries.into_iter().enumerate() {
         let file_name = &dirent.file_name;
@@ -111,17 +115,16 @@ pub fn recover_blob_files(
                 Metadata::from_slice(&metadata_slice)?
             };
 
+            let file: Arc<dyn crate::fs::FsFile> = Arc::from(file);
             let file_accessor = if let Some(dt) = descriptor_table.cloned() {
-                // Pre-populate the FD cache with the handle we already opened
-                // so the first read doesn't need to reopen.
                 let global_id = (tree_id, blob_file_id).into();
-                dt.insert_for_blob_file(global_id, Arc::from(file));
+                pending_cache_inserts.push((dt.clone(), global_id, file.clone()));
                 FileAccessor::DescriptorTable {
                     table: dt,
                     fs: fs.clone(),
                 }
             } else {
-                FileAccessor::File(Arc::from(file))
+                FileAccessor::File(file)
             };
 
             blob_files.push(BlobFile(Arc::new(BlobFileInner {
@@ -144,6 +147,11 @@ pub fn recover_blob_files(
 
     if blob_files.len() < ids.len() {
         return Err(crate::Error::Unrecoverable);
+    }
+
+    // All blobs parsed successfully — commit FDs to the descriptor cache.
+    for (dt, global_id, file) in pending_cache_inserts {
+        dt.insert_for_blob_file(global_id, file);
     }
 
     log::debug!("Successfully recovered {} blob files", blob_files.len());
