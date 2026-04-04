@@ -251,7 +251,10 @@ impl FsFile for MemFile {
     reason = "RwLock guards are intentionally held for the duration of each method"
 )]
 impl Fs for MemFs {
-    #[expect(clippy::too_many_lines, reason = "open() validates many flag combinations")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "open() validates many flag combinations"
+    )]
     fn open(&self, path: &Path, opts: &FsOpenOptions) -> io::Result<Box<dyn FsFile>> {
         let mut state = write_state(&self.state)?;
         let path = path.to_path_buf();
