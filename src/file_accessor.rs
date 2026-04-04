@@ -89,12 +89,18 @@ impl FileAccessor {
         }
     }
 
+    /// Removes a table FD from the descriptor cache.
+    ///
+    /// No-op for pinned `Self::File` variant (no cache to evict from).
     pub fn remove_for_table(&self, table_id: &GlobalTableId) {
         if let Self::DescriptorTable { table, .. } = self {
             table.remove_for_table(table_id);
         }
     }
 
+    /// Removes a blob file FD from the descriptor cache.
+    ///
+    /// No-op for pinned `Self::File` variant (no cache to evict from).
     pub fn remove_for_blob_file(&self, table_id: &GlobalTableId) {
         if let Self::DescriptorTable { table, .. } = self {
             table.remove_for_blob_file(table_id);
