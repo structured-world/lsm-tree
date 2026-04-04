@@ -98,17 +98,18 @@ fn copy_from_data(buf: &mut [u8], data: &[u8], pos: usize) -> usize {
     n
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "MemFs is a test/ephemeral backend — files never exceed usize::MAX"
-)]
 impl Read for MemFile {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if !self.readable {
             return Err(io::Error::other("file not opened for reading"));
         }
         let data = lock(&self.data)?;
-        let pos = self.cursor as usize;
+        let pos = usize::try_from(self.cursor).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cursor exceeds addressable memory",
+            )
+        })?;
         let n = copy_from_data(buf, &data, pos);
         drop(data);
         self.cursor += n as u64;
@@ -116,10 +117,6 @@ impl Read for MemFile {
     }
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "MemFs is a test/ephemeral backend — files never exceed usize::MAX"
-)]
 impl Write for MemFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if !self.writable {
@@ -133,7 +130,12 @@ impl Write for MemFile {
         let pos = if self.is_append {
             data.len()
         } else {
-            self.cursor as usize
+            usize::try_from(self.cursor).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "write position exceeds addressable memory",
+                )
+            })?
         };
 
         let end = pos.checked_add(buf.len()).ok_or_else(|| {
@@ -214,28 +216,32 @@ impl FsFile for MemFile {
         })
     }
 
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "MemFs is a test/ephemeral backend — files never exceed usize::MAX"
-    )]
     fn set_len(&self, size: u64) -> io::Result<()> {
         if !self.writable {
             return Err(io::Error::other("set_len requires write access"));
         }
-        lock(&self.data)?.resize(size as usize, 0);
+        let new_len = usize::try_from(size).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "set_len size exceeds usize::MAX",
+            )
+        })?;
+        lock(&self.data)?.resize(new_len, 0);
         Ok(())
     }
 
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "MemFs is a test/ephemeral backend — files never exceed usize::MAX"
-    )]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
         if !self.readable {
             return Err(io::Error::other("read_at requires read access"));
         }
+        let offset = usize::try_from(offset).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "read_at offset exceeds usize::MAX",
+            )
+        })?;
         let data = lock(&self.data)?;
-        Ok(copy_from_data(buf, &data, offset as usize))
+        Ok(copy_from_data(buf, &data, offset))
     }
 
     /// No-op: in-memory files are not shared across processes. `MemFs` is a
