@@ -22,6 +22,7 @@ This is a **maintained fork** of [fjall-rs/lsm-tree](https://github.com/fjall-rs
 - **Error handling:** No `unwrap()` or `expect()` on I/O paths. Use `Result<T, E>` propagation. `expect()` is acceptable for programmer invariants (e.g., lock poisoning) with `#[expect(clippy::expect_used, reason = "...")]`.
 - **Clippy:** Code must pass `cargo clippy --all-features -- -D warnings`. Use `#[expect(...)]` (not `#[allow(...)]`) for justified suppressions — `#[expect]` warns if the suppression becomes unnecessary.
 - **Casts:** Prefer `TryFrom`/`TryInto` for fallible conversions. `as` casts are acceptable for infallible cases (e.g., `u32` to `u64`) with `#[expect(clippy::cast_possible_truncation)]` and a reason.
+- **Unsizing coercions:** `Arc::new(ConcreteType) as Arc<dyn Trait>` is valid Rust — the compiler performs an unsizing coercion from `Arc<T>` to `Arc<dyn Trait>` when `T: Trait`. This is NOT an invalid cast. Do not flag it as a compile error.
 - **Feature gates:** Code behind `#[cfg(feature = "...")]` must compile with any combination of features. Variables used only in feature-gated branches must also be feature-gated.
 - **Definite initialization:** `let x: T;` without a default value is valid Rust — the compiler tracks initialization per control-flow path and does not drop uninitialized bindings; do not flag this as a bug when the variable is only used in paths that initialize it.
 
