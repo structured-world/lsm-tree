@@ -599,9 +599,15 @@ impl Fs for MemFs {
         // Durability is a no-op, but validate the path is an existing directory.
         let state = read_state(&self.state)?;
         if !state.dirs.contains(path) {
+            if state.files.contains_key(path) {
+                return Err(io::Error::other(format!(
+                    "sync_directory: not a directory: {}",
+                    path.display()
+                )));
+            }
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("sync_directory: not a directory: {}", path.display()),
+                format!("sync_directory: path not found: {}", path.display()),
             ));
         }
         Ok(())
@@ -1055,6 +1061,115 @@ mod tests {
         assert!(fs2.exists(path)?);
         let meta = fs2.metadata(path)?;
         assert_eq!(meta.len, 11);
+        Ok(())
+    }
+
+    // ── Wrong-type error-path tests ─────────────────────────────────────
+
+    #[test]
+    fn read_dir_on_file_returns_not_a_directory() -> io::Result<()> {
+        let fs = MemFs::new();
+        fs.create_dir_all(Path::new("/dir"))?;
+        let opts = FsOpenOptions::new().write(true).create(true);
+        fs.open(Path::new("/dir/file"), &opts)?;
+
+        let err = fs.read_dir(Path::new("/dir/file")).unwrap_err();
+        // Must NOT be NotFound — the path exists but is a file.
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+        Ok(())
+    }
+
+    #[test]
+    fn remove_file_on_dir_returns_error() -> io::Result<()> {
+        let fs = MemFs::new();
+        fs.create_dir_all(Path::new("/somedir"))?;
+
+        let err = fs.remove_file(Path::new("/somedir")).unwrap_err();
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+        Ok(())
+    }
+
+    #[test]
+    fn sync_directory_on_file_returns_not_a_directory() -> io::Result<()> {
+        let fs = MemFs::new();
+        fs.create_dir_all(Path::new("/dir"))?;
+        let opts = FsOpenOptions::new().write(true).create(true);
+        fs.open(Path::new("/dir/file"), &opts)?;
+
+        let err = fs.sync_directory(Path::new("/dir/file")).unwrap_err();
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+        Ok(())
+    }
+
+    #[test]
+    fn open_with_parent_as_file_returns_error() -> io::Result<()> {
+        let fs = MemFs::new();
+        fs.create_dir_all(Path::new("/dir"))?;
+        let opts = FsOpenOptions::new().write(true).create(true);
+        fs.open(Path::new("/dir/file"), &opts)?;
+
+        // Try to create a file whose "parent" is actually a file.
+        let err = fs
+            .open(Path::new("/dir/file/child"), &opts)
+            .err()
+            .expect("open should fail");
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+        Ok(())
+    }
+
+    #[test]
+    fn rename_directory_returns_invalid_input() -> io::Result<()> {
+        let fs = MemFs::new();
+        fs.create_dir_all(Path::new("/src_dir"))?;
+        fs.create_dir_all(Path::new("/dst_parent"))?;
+
+        let err = fs
+            .rename(Path::new("/src_dir"), Path::new("/dst_parent/moved"))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        Ok(())
+    }
+
+    #[test]
+    fn rename_onto_directory_returns_invalid_input() -> io::Result<()> {
+        let fs = MemFs::new();
+        fs.create_dir_all(Path::new("/dir"))?;
+        let opts = FsOpenOptions::new().write(true).create(true);
+        fs.open(Path::new("/dir/file"), &opts)?;
+        fs.create_dir_all(Path::new("/dir/dst_dir"))?;
+
+        let err = fs
+            .rename(Path::new("/dir/file"), Path::new("/dir/dst_dir"))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        Ok(())
+    }
+
+    #[test]
+    fn rename_with_file_as_dest_parent_returns_error() -> io::Result<()> {
+        let fs = MemFs::new();
+        fs.create_dir_all(Path::new("/dir"))?;
+        let opts = FsOpenOptions::new().write(true).create(true);
+        fs.open(Path::new("/dir/src"), &opts)?;
+        fs.open(Path::new("/dir/blocker"), &opts)?;
+
+        // /dir/blocker is a file, not a directory — cannot be parent of dst.
+        let err = fs
+            .rename(Path::new("/dir/src"), Path::new("/dir/blocker/child"))
+            .unwrap_err();
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+        Ok(())
+    }
+
+    #[test]
+    fn remove_dir_all_on_file_returns_invalid_input() -> io::Result<()> {
+        let fs = MemFs::new();
+        fs.create_dir_all(Path::new("/dir"))?;
+        let opts = FsOpenOptions::new().write(true).create(true);
+        fs.open(Path::new("/dir/file"), &opts)?;
+
+        let err = fs.remove_dir_all(Path::new("/dir/file")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         Ok(())
     }
 }

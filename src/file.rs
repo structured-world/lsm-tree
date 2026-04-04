@@ -160,4 +160,34 @@ mod tests {
 
         Ok(())
     }
+
+    /// Verifies that `StdFs::rename` atomically replaces an existing
+    /// destination file — the contract required by `rewrite_atomic`.
+    #[test]
+    fn std_fs_rename_replaces_existing_file() -> crate::Result<()> {
+        use crate::fs::{Fs, FsOpenOptions};
+
+        let dir = tempfile::tempdir()?;
+        let src = dir.path().join("src.txt");
+        let dst = dir.path().join("dst.txt");
+
+        // Create both files via Fs trait.
+        let opts = FsOpenOptions::new().write(true).create(true);
+        let mut f = StdFs.open(&src, &opts)?;
+        f.write_all(b"new")?;
+        drop(f);
+
+        let mut f = StdFs.open(&dst, &opts)?;
+        f.write_all(b"old")?;
+        drop(f);
+
+        StdFs.rename(&src, &dst)?;
+
+        // dst now has src content, src is gone.
+        let content = std::fs::read_to_string(&dst)?;
+        assert_eq!("new", content);
+        assert!(!src.exists());
+
+        Ok(())
+    }
 }
