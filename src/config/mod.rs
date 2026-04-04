@@ -225,6 +225,10 @@ pub struct Config {
     ///
     /// Defaults to [`StdFs`]. Use [`Config::with_fs`] to plug in an
     /// alternative backend such as [`MemFs`](crate::fs::MemFs).
+    ///
+    /// **Note:** `Tree::open` still probes `CURRENT` via `std::fs`, so
+    /// reopening an existing tree on a non-`StdFs` backend is not yet
+    /// supported. Fresh tree creation works. Tracked in #209.
     #[doc(hidden)]
     pub fs: Arc<dyn Fs>,
 
@@ -447,6 +451,8 @@ impl Config {
     /// Defaults to [`StdFs`]. Use [`MemFs`](crate::fs::MemFs) for
     /// in-memory trees (testing, ephemeral indexes).
     ///
+    /// See [`Config::fs`] for the reopen limitation on non-`StdFs` backends.
+    ///
     /// # Example
     ///
     /// ```
@@ -474,6 +480,8 @@ impl Config {
     ///
     /// Useful when multiple configs should reuse the same backend
     /// instance, including trait objects and backends that are not `Clone`.
+    ///
+    /// See [`Config::fs`] for the reopen limitation on non-`StdFs` backends.
     #[must_use]
     pub fn with_shared_fs(mut self, fs: Arc<dyn Fs>) -> Self {
         self.fs = fs;

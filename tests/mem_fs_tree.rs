@@ -3,10 +3,20 @@ use lsm_tree::fs::MemFs;
 use lsm_tree::{AbstractTree, Config, Guard, SeqNo, SequenceNumberCounter};
 use test_log::test;
 
+/// Returns a unique virtual path for each test to avoid host-path collisions.
+/// `Tree::open` probes `CURRENT` via `std::fs`; using `tempfile::tempdir`
+/// ensures no leftover on-disk state can trigger the unsupported reopen path.
+fn test_path(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(name);
+    (dir, path)
+}
+
 #[test]
 fn open_tree_with_memfs() -> lsm_tree::Result<()> {
+    let (_dir, path) = test_path("tree");
     let tree = Config::new(
-        "/virtual/tree",
+        &path,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
@@ -29,8 +39,9 @@ fn open_tree_with_memfs() -> lsm_tree::Result<()> {
 
 #[test]
 fn memfs_tree_flush_and_read() -> lsm_tree::Result<()> {
+    let (_dir, path) = test_path("flush");
     let tree = Config::new(
-        "/virtual/flush",
+        &path,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
@@ -57,8 +68,9 @@ fn memfs_tree_flush_and_read() -> lsm_tree::Result<()> {
 
 #[test]
 fn memfs_tree_delete_and_range() -> lsm_tree::Result<()> {
+    let (_dir, path) = test_path("range");
     let tree = Config::new(
-        "/virtual/range",
+        &path,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
@@ -86,8 +98,9 @@ fn memfs_tree_delete_and_range() -> lsm_tree::Result<()> {
 
 #[test]
 fn memfs_tree_multiple_flushes() -> lsm_tree::Result<()> {
+    let (_dir, path) = test_path("multi_flush");
     let tree = Config::new(
-        "/virtual/multi_flush",
+        &path,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
@@ -126,11 +139,14 @@ fn memfs_tree_multiple_flushes() -> lsm_tree::Result<()> {
 fn memfs_shared_across_trees() -> lsm_tree::Result<()> {
     use std::sync::Arc;
 
+    let (_dir1, path1) = test_path("shared_tree1");
+    let (_dir2, path2) = test_path("shared_tree2");
+
     // Exercise Config::with_shared_fs(Arc<dyn Fs>) for shared backend reuse.
     let fs: Arc<dyn lsm_tree::fs::Fs> = Arc::new(MemFs::new());
 
     let tree1 = Config::new(
-        "/virtual/tree1",
+        &path1,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
@@ -138,7 +154,7 @@ fn memfs_shared_across_trees() -> lsm_tree::Result<()> {
     .open()?;
 
     let tree2 = Config::new(
-        "/virtual/tree2",
+        &path2,
         SequenceNumberCounter::default(),
         SequenceNumberCounter::default(),
     )
@@ -147,6 +163,11 @@ fn memfs_shared_across_trees() -> lsm_tree::Result<()> {
 
     tree1.insert("from_tree1", "hello", 0);
     tree2.insert("from_tree2", "world", 0);
+
+    // Flush to backend so assertions hit the shared Fs, not just
+    // each tree's private memtable.
+    tree1.flush_active_memtable(0)?;
+    tree2.flush_active_memtable(0)?;
 
     assert!(tree1.get("from_tree1", SeqNo::MAX)?.is_some());
     assert!(tree1.get("from_tree2", SeqNo::MAX)?.is_none());
