@@ -101,11 +101,17 @@ impl Drop for Inner {
         if self.is_deleted.load(std::sync::atomic::Ordering::Acquire) {
             log::trace!("Cleanup deleted table {global_id:?} at {:?}", self.path);
 
-            // Evict cached FD before removing the file — on Windows,
-            // remove_file fails while a handle is open.
-            self.file_accessor.as_descriptor_table().inspect(|d| {
+            // Move the accessor out so any pinned file handle is closed
+            // before attempting deletion on Windows.
+            let file_accessor = std::mem::replace(&mut self.file_accessor, FileAccessor::Closed);
+
+            // Evict cached FD from the descriptor table.
+            file_accessor.as_descriptor_table().inspect(|d| {
                 d.remove_for_table(&global_id);
             });
+
+            // Drop the accessor (and its Arc<dyn FsFile>) before remove.
+            drop(file_accessor);
 
             if let Err(e) = self.fs.remove_file(&self.path) {
                 log::warn!(

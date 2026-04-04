@@ -24,6 +24,11 @@ pub enum FileAccessor {
         /// Filesystem backend for opening files on cache miss.
         fs: Arc<dyn Fs>,
     },
+
+    /// Sentinel used during [`Drop`] to move ownership of the file handle
+    /// before deleting the underlying file. Not constructed outside `Drop`.
+    #[doc(hidden)]
+    Closed,
 }
 
 impl FileAccessor {
@@ -31,7 +36,7 @@ impl FileAccessor {
     pub fn as_descriptor_table(&self) -> Option<&DescriptorTable> {
         match self {
             Self::DescriptorTable { table, .. } => Some(table),
-            Self::File(_) => None,
+            Self::File(_) | Self::Closed => None,
         }
     }
 
@@ -56,6 +61,7 @@ impl FileAccessor {
                 table.insert_for_table(*table_id, fd.clone());
                 Ok((fd, Some(false)))
             }
+            Self::Closed => Err(std::io::Error::other("file accessor closed")),
         }
     }
 
@@ -79,6 +85,7 @@ impl FileAccessor {
                 table.insert_for_blob_file(*table_id, fd.clone());
                 Ok((fd, Some(false)))
             }
+            Self::Closed => Err(std::io::Error::other("file accessor closed")),
         }
     }
 
@@ -115,6 +122,7 @@ impl std::fmt::Debug for FileAccessor {
             Self::DescriptorTable { .. } => {
                 write!(f, "FileAccessor::DescriptorTable")
             }
+            Self::Closed => write!(f, "FileAccessor::Closed"),
         }
     }
 }
