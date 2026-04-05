@@ -235,6 +235,8 @@ impl Memtable {
         self.highest_seqno
             .fetch_max(max_seqno, std::sync::atomic::Ordering::AcqRel);
 
+        // fetch_add returns value BEFORE the add, so size_before + total_size
+        // = value AFTER add = new memtable size. Same pattern as Memtable::insert().
         (total_size, size_before + total_size)
     }
 

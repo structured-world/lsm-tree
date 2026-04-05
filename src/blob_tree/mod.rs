@@ -694,14 +694,14 @@ impl AbstractTree for BlobTree {
         keys: impl IntoIterator<Item = K>,
         seqno: SeqNo,
     ) -> crate::Result<Vec<Option<crate::UserValue>>> {
-        let super_version = self.index.get_version_for_snapshot(seqno);
-        let comparator = self.index.config.comparator.as_ref();
-
         let keys: Vec<_> = keys.into_iter().collect();
         let n = keys.len();
         if n == 0 {
             return Ok(Vec::new());
         }
+
+        let super_version = self.index.get_version_for_snapshot(seqno);
+        let comparator = self.index.config.comparator.as_ref();
 
         // For small batches, use the simple per-key path
         if n <= 2 {
