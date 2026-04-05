@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775395133399,
+  "lastUpdate": 1775395681699,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -5226,6 +5226,84 @@ window.BENCHMARK_DATA = {
             "value": 261563.26267758454,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 478073 ops/sec | factor: 0.547 | P50: 1.9us | P99: 5.0us | P99.9: 14.0us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=227142 rand_rd=945580 cpu=123 composite=42038.3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "255865126+sw-release-bot[bot]@users.noreply.github.com",
+            "name": "sw-release-bot[bot]",
+            "username": "sw-release-bot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cf5d5bd429a166afbca85ce7580603ae5ddd80ce",
+          "message": "chore: release v4.3.0 (#200)\n\n## 🤖 New release\n\n* `coordinode-lsm-tree`: 4.2.0 -> 4.3.0\n\n<details><summary><i><b>Changelog</b></i></summary><p>\n\n<blockquote>\n\n##\n[4.3.0](https://github.com/structured-world/coordinode-lsm-tree/compare/v4.2.0...v4.3.0)\n- 2026-04-05\n\n### Added\n\n- *(fs)* MemFs — in-memory Fs implementation for testing and in-memory\ntrees\n([#211](https://github.com/structured-world/coordinode-lsm-tree/pull/211))\n\n### Fixed\n\n- *(table)* validate block type on cache-hit path\n([#203](https://github.com/structured-world/coordinode-lsm-tree/pull/203))\n- *(table)* two-level index scan stops prematurely on empty child\npartitions\n([#202](https://github.com/structured-world/coordinode-lsm-tree/pull/202))\n\n### Performance\n\n- *(table)* add infallible OwnedIndexBlockIter constructor for\npre-validated blocks\n([#206](https://github.com/structured-world/coordinode-lsm-tree/pull/206))\n\n### Refactored\n\n- *(fs)* migrate Tree::open recovery path to Fs trait\n([#212](https://github.com/structured-world/coordinode-lsm-tree/pull/212))\n- *(table)* make index block bound-cursor helpers fallible\n([#205](https://github.com/structured-world/coordinode-lsm-tree/pull/205))\n- *(table)* make all meta/trailer reads fallible for truncated blocks\n([#204](https://github.com/structured-world/coordinode-lsm-tree/pull/204))\n- *(table)* make block decoder trailer validation fallible\n([#199](https://github.com/structured-world/coordinode-lsm-tree/pull/199))\n</blockquote>\n\n\n</p></details>\n\n---\nThis PR was generated with\n[release-plz](https://github.com/release-plz/release-plz/).\n\nCo-authored-by: sw-release-bot[bot] <255865126+sw-release-bot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-04-05T16:26:42+03:00",
+          "tree_id": "6df4c9e005b45c62b38f505941003b0649d647ca",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/cf5d5bd429a166afbca85ce7580603ae5ddd80ce"
+        },
+        "date": 1775395680240,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1148537.5894635925,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2072805 ops/sec | factor: 0.554 | P50: 0.3us | P99: 2.0us | P99.9: 5.0us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
+          },
+          {
+            "name": "fillrandom",
+            "value": 663695.9309610558,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1197795 ops/sec | factor: 0.554 | P50: 0.7us | P99: 2.5us | P99.9: 5.8us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
+          },
+          {
+            "name": "readrandom",
+            "value": 311914.1436192461,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 562922 ops/sec | factor: 0.554 | P50: 1.6us | P99: 5.1us | P99.9: 12.6us\nthreads: 1 | elapsed: 0.36s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
+          },
+          {
+            "name": "readseq",
+            "value": 1336633.087199844,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2412267 ops/sec | factor: 0.554 | P50: 0.3us | P99: 3.7us | P99.9: 7.9us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
+          },
+          {
+            "name": "seekrandom",
+            "value": 212174.6412340675,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 382919 ops/sec | factor: 0.554 | P50: 2.3us | P99: 5.9us | P99.9: 13.7us\nthreads: 1 | elapsed: 0.52s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
+          },
+          {
+            "name": "prefixscan",
+            "value": 99465.51964255307,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 179509 ops/sec | factor: 0.554 | P50: 5.2us | P99: 7.7us | P99.9: 17.2us\nthreads: 1 | elapsed: 1.11s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
+          },
+          {
+            "name": "overwrite",
+            "value": 687074.7425792207,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1239987 ops/sec | factor: 0.554 | P50: 0.7us | P99: 2.4us | P99.9: 5.7us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
+          },
+          {
+            "name": "mergerandom",
+            "value": 414073.5132640846,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 747293 ops/sec | factor: 0.554 | P50: 0.3us | P99: 0.5us | P99.9: 3.1us\nthreads: 1 | elapsed: 0.27s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 283433.1104358807,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 511521 ops/sec | factor: 0.554 | P50: 1.8us | P99: 4.9us | P99.9: 12.9us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3 | runner: seq_wr=230615 rand_rd=905921 cpu=122 composite=41508.9"
           }
         ]
       }
