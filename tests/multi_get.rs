@@ -1,6 +1,7 @@
 use lsm_tree::{
     AbstractTree, Config, KvSeparationOptions, SeqNo, SequenceNumberCounter, get_tmp_folder,
 };
+use std::sync::Arc;
 use test_log::test;
 
 #[test]
@@ -232,6 +233,155 @@ fn multi_get_unsorted_and_duplicate_keys() -> lsm_tree::Result<()> {
     assert_eq!(results[2].as_deref(), Some(b"val_b".as_slice()));
     assert_eq!(results[3].as_deref(), Some(b"val_a".as_slice())); // duplicate
     assert_eq!(results[4], None);
+
+    Ok(())
+}
+
+#[test]
+fn multi_get_with_range_tombstones() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    tree.insert("a", "val_a", 0);
+    tree.insert("b", "val_b", 1);
+    tree.insert("c", "val_c", 2);
+    tree.insert("d", "val_d", 3);
+    tree.remove_range("b", "d", 4); // deletes [b, d)
+
+    let results = tree.multi_get(["a", "b", "c", "d"], 5)?;
+    assert_eq!(results[0].as_deref(), Some(b"val_a".as_slice()));
+    assert_eq!(results[1], None); // range tombstoned
+    assert_eq!(results[2], None); // range tombstoned
+    assert_eq!(results[3].as_deref(), Some(b"val_d".as_slice())); // end is exclusive
+
+    Ok(())
+}
+
+#[test]
+fn multi_get_spanning_multiple_levels() -> lsm_tree::Result<()> {
+    use lsm_tree::compaction::Leveled;
+
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    // Write batch 1 → flush → compact to L1
+    for i in 0..10u32 {
+        tree.insert(format!("key_{i:04}"), format!("batch1_{i}"), u64::from(i));
+    }
+    tree.flush_active_memtable(0)?;
+    tree.compact(Arc::new(Leveled::default()), SeqNo::MAX)?;
+
+    // Write batch 2 → flush (stays in L0)
+    for i in 5..15u32 {
+        tree.insert(
+            format!("key_{i:04}"),
+            format!("batch2_{i}"),
+            u64::from(i + 100),
+        );
+    }
+    tree.flush_active_memtable(0)?;
+
+    // Write batch 3 → memtable only
+    for i in 10..20u32 {
+        tree.insert(
+            format!("key_{i:04}"),
+            format!("batch3_{i}"),
+            u64::from(i + 200),
+        );
+    }
+
+    // multi_get with keys spanning memtable (10-19), L0 (5-14), L1 (0-9)
+    let keys: Vec<String> = (0..25u32).map(|i| format!("key_{i:04}")).collect();
+    let results = tree.multi_get(&keys, SeqNo::MAX)?;
+
+    assert_eq!(results.len(), 25);
+
+    // 0-4: from L1 only (batch1)
+    for i in 0..5u32 {
+        assert_eq!(
+            results[i as usize].as_deref(),
+            Some(format!("batch1_{i}").as_bytes()),
+            "key_{i:04} should come from L1",
+        );
+    }
+
+    // 5-9: from L0 (batch2 shadows batch1 in L1)
+    for i in 5..10u32 {
+        assert_eq!(
+            results[i as usize].as_deref(),
+            Some(format!("batch2_{i}").as_bytes()),
+            "key_{i:04} should come from L0 (shadowing L1)",
+        );
+    }
+
+    // 10-14: from memtable (batch3 shadows batch2 in L0)
+    for i in 10..15u32 {
+        assert_eq!(
+            results[i as usize].as_deref(),
+            Some(format!("batch3_{i}").as_bytes()),
+            "key_{i:04} should come from memtable (shadowing L0)",
+        );
+    }
+
+    // 15-19: from memtable (batch3, no shadowing)
+    for i in 15..20u32 {
+        assert_eq!(
+            results[i as usize].as_deref(),
+            Some(format!("batch3_{i}").as_bytes()),
+            "key_{i:04} should come from memtable",
+        );
+    }
+
+    // 20-24: missing
+    for i in 20..25u32 {
+        assert_eq!(results[i as usize], None, "key_{i:04} should not exist");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn multi_get_large_batch_all_from_disk() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    // Write 500 keys and flush to disk
+    for i in 0..500u64 {
+        tree.insert(format!("key_{i:05}"), format!("value_{i}"), i);
+    }
+    tree.flush_active_memtable(0)?;
+
+    // Batch get all 500 in reverse order (exercises sorting)
+    let keys: Vec<String> = (0..500u64).rev().map(|i| format!("key_{i:05}")).collect();
+    let results = tree.multi_get(&keys, SeqNo::MAX)?;
+
+    assert_eq!(results.len(), 500);
+    for (result_idx, i) in (0..500u64).rev().enumerate() {
+        let expected = format!("value_{i}");
+        assert_eq!(
+            results[result_idx].as_deref(),
+            Some(expected.as_bytes()),
+            "mismatch at result index {result_idx} (key_{i:05})",
+        );
+    }
 
     Ok(())
 }

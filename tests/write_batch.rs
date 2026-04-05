@@ -1,4 +1,8 @@
-use lsm_tree::{AbstractTree, Config, SequenceNumberCounter, WriteBatch, get_tmp_folder};
+use lsm_tree::{
+    AbstractTree, Config, KvSeparationOptions, MergeOperator, SeqNo, SequenceNumberCounter,
+    UserValue, WriteBatch, get_tmp_folder,
+};
+use std::sync::Arc;
 use test_log::test;
 
 #[test]
@@ -141,6 +145,153 @@ fn write_batch_survives_flush() -> lsm_tree::Result<()> {
             Some(expected.as_bytes()),
             "mismatch at key {i} after flush",
         );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn write_batch_blob_tree_kv_separation() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_kv_separation(Some(KvSeparationOptions {
+        separation_threshold: 1,
+        ..Default::default()
+    }))
+    .open()?;
+
+    let big_val = b"x".repeat(1000);
+
+    let mut batch = WriteBatch::new();
+    batch.insert("k1", big_val.as_slice());
+    batch.insert("k2", big_val.as_slice());
+    batch.remove("k3"); // tombstone for non-existent key
+    tree.apply_batch(batch, 0);
+
+    tree.flush_active_memtable(0)?;
+    assert!(tree.blob_file_count() > 0);
+
+    assert_eq!(
+        tree.get("k1", SeqNo::MAX)?.as_deref(),
+        Some(big_val.as_slice())
+    );
+    assert_eq!(
+        tree.get("k2", SeqNo::MAX)?.as_deref(),
+        Some(big_val.as_slice())
+    );
+    assert_eq!(tree.get("k3", SeqNo::MAX)?, None);
+
+    Ok(())
+}
+
+struct ConcatMerge;
+
+impl MergeOperator for ConcatMerge {
+    fn merge(
+        &self,
+        _key: &[u8],
+        base: Option<&[u8]>,
+        operands: &[&[u8]],
+    ) -> lsm_tree::Result<UserValue> {
+        let mut result = base.unwrap_or_default().to_vec();
+        for op in operands {
+            result.extend_from_slice(op);
+        }
+        Ok(result.into())
+    }
+}
+
+#[test]
+fn write_batch_with_merge_operand() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_merge_operator(Some(Arc::new(ConcatMerge)))
+    .open()?;
+
+    // Base value
+    tree.insert("counter", "A", 0);
+
+    // Batch with merge operands
+    let mut batch = WriteBatch::new();
+    batch.merge("counter", "B");
+    batch.merge("counter", "C");
+    tree.apply_batch(batch, 1);
+
+    let result = tree.get("counter", 2)?;
+    assert_eq!(result.as_deref(), Some(b"ABC".as_slice()));
+
+    Ok(())
+}
+
+#[test]
+fn write_batch_remove_weak() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    tree.insert("a", "val", 0);
+
+    let mut batch = WriteBatch::new();
+    batch.remove_weak("a");
+    tree.apply_batch(batch, 1);
+
+    assert_eq!(tree.get("a", 2)?, None);
+
+    Ok(())
+}
+
+#[test]
+fn write_batch_multi_get_after_batch() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    let mut batch = WriteBatch::new();
+    for i in 0..20u32 {
+        batch.insert(format!("key_{i:04}"), format!("val_{i}"));
+    }
+    tree.apply_batch(batch, 0);
+
+    // Flush half, keep half in memtable
+    tree.flush_active_memtable(0)?;
+
+    let mut batch2 = WriteBatch::new();
+    for i in 20..40u32 {
+        batch2.insert(format!("key_{i:04}"), format!("val_{i}"));
+    }
+    tree.apply_batch(batch2, 1);
+
+    // multi_get spanning disk (0-19) + memtable (20-39) + missing (40-44)
+    let keys: Vec<String> = (0..45u32).map(|i| format!("key_{i:04}")).collect();
+    let results = tree.multi_get(&keys, SeqNo::MAX)?;
+
+    assert_eq!(results.len(), 45);
+    for i in 0..40u32 {
+        let expected = format!("val_{i}");
+        assert_eq!(
+            results[i as usize].as_deref(),
+            Some(expected.as_bytes()),
+            "mismatch at key_{i:04}",
+        );
+    }
+    for i in 40..45u32 {
+        assert_eq!(results[i as usize], None, "key_{i:04} should not exist");
     }
 
     Ok(())
