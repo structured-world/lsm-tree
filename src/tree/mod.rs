@@ -1393,6 +1393,10 @@ impl Tree {
         comparator: &dyn crate::comparator::UserComparator,
         results: &mut [Option<InternalValue>],
     ) -> crate::Result<()> {
+        debug_assert_eq!(keys.len(), key_hashes.len());
+        debug_assert_eq!(keys.len(), results.len());
+        debug_assert!(remaining_sorted.iter().all(|&i| i < keys.len()));
+
         // Track which keys still need to be found
         let mut still_remaining: Vec<usize> = remaining_sorted.to_vec();
 
