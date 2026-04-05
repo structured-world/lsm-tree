@@ -39,16 +39,19 @@ enum WriteBatchEntry {
 
 /// Batch of write operations applied with a shared seqno.
 ///
-/// **Duplicate keys:** all entries receive the same seqno. If the batch
-/// contains multiple operations on the same user key, their relative order is
-/// **not** guaranteed after insertion into the memtable's skiplist, because
-/// the effective ordering for these entries is `(user_key, seqno)` (that is,
-/// `value_type` does not break ties). As a result, duplicate operations in a
-/// single batch are especially subtle: two ops for the same key in the same
-/// batch compare equal on ordering fields, so concurrent inserts/readers may
-/// observe either one first while the batch is being materialized into the
-/// memtable. Callers should avoid duplicate keys within a single batch, or
-/// canonicalize them beforehand into the final intended operation per key.
+/// **Duplicate keys:** all entries receive the same seqno. The memtable
+/// skiplist orders by `(user_key, Reverse(seqno))` — `value_type` does NOT
+/// break ties. Two entries with the same `(user_key, seqno)` compare equal
+/// regardless of operation type, so one may silently overwrite the other.
+///
+/// - **Repeated `merge()` on the same key:** safe. All merge operands are
+///   collected during reads regardless of skiplist position.
+/// - **Mixed ops on the same key** (e.g. `insert` + `remove`): **unsafe** —
+///   one operation will be lost. Callers must canonicalize mixed-op
+///   duplicates into a single final operation before batching.
+///
+/// In debug builds, `materialize()` asserts that no user key appears with
+/// differing `value_type`s to catch accidental mixed-op batches early.
 ///
 /// # Examples
 ///
@@ -140,6 +143,31 @@ impl WriteBatch {
     #[doc(hidden)]
     #[must_use]
     pub(crate) fn materialize(self, seqno: crate::SeqNo) -> Vec<InternalValue> {
+        // In debug builds, detect mixed-op duplicates (e.g. insert + remove on same key)
+        // that would silently overwrite each other in the skiplist.
+        #[cfg(debug_assertions)]
+        {
+            let mut seen: crate::HashMap<crate::UserKey, ValueType> = crate::HashMap::default();
+            for entry in &self.entries {
+                let (key, vtype) = match entry {
+                    WriteBatchEntry::Insert { key, .. } => (key, ValueType::Value),
+                    WriteBatchEntry::Remove { key } => (key, ValueType::Tombstone),
+                    WriteBatchEntry::RemoveWeak { key } => (key, ValueType::WeakTombstone),
+                    WriteBatchEntry::Merge { key, .. } => (key, ValueType::MergeOperand),
+                };
+                if let Some(&prev_type) = seen.get(key) {
+                    debug_assert!(
+                        prev_type == vtype,
+                        "WriteBatch contains mixed operation types for the same key {key:?}: \
+                         {prev_type:?} and {vtype:?}. This will cause one operation to be \
+                         lost in the skiplist. Canonicalize duplicates before batching.",
+                    );
+                } else {
+                    seen.insert(key.clone(), vtype);
+                }
+            }
+        }
+
         self.entries
             .into_iter()
             .map(|entry| match entry {
