@@ -31,9 +31,12 @@ fn tree_reopen_rejects_non_utf8_filename_in_data_dir() {
     // Phase 2: inject a file with invalid UTF-8 bytes in its name.
     let bad_name = OsStr::from_bytes(&[b'v', 0xFF, 0xFE]);
     let bad_path = path.join(bad_name);
+    // Filesystems may reject non-UTF-8 filenames with various error kinds:
+    // APFS returns EILSEQ (os error 92, maps to ErrorKind::Other), overlayfs
+    // returns InvalidInput. Any write failure means the test precondition
+    // cannot be met — the OS enforces UTF-8 names, so the Fs::read_dir
+    // guard is academic on this platform.
     if std::fs::write(&bad_path, b"corrupt").is_err() {
-        // Filesystem rejected the non-UTF-8 filename (e.g., overlay or
-        // restrictive mount options) — skip gracefully.
         return;
     }
 
