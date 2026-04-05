@@ -990,6 +990,47 @@ impl Tree {
         }
     }
 
+    /// Shared post-lookup resolution for `get_pinned`: tombstone filter,
+    /// range-tombstone suppression, merge operand resolution. Returns `None`
+    /// if entry is tombstoned or suppressed, `Some(PinnableSlice)` otherwise.
+    fn resolve_pinned_entry(
+        super_version: &SuperVersion,
+        key: &[u8],
+        entry: InternalValue,
+        seqno: SeqNo,
+        merge_operator: Option<&Arc<dyn crate::merge_operator::MergeOperator>>,
+        comparator: &dyn crate::comparator::UserComparator,
+        wrap: impl FnOnce(UserValue) -> crate::PinnableSlice,
+    ) -> crate::Result<Option<crate::PinnableSlice>> {
+        use crate::PinnableSlice;
+
+        let Some(entry) = ignore_tombstone_value(entry) else {
+            return Ok(None);
+        };
+        if Self::is_suppressed_by_range_tombstones(
+            super_version,
+            key,
+            entry.key.seqno,
+            seqno,
+            comparator,
+        ) {
+            return Ok(None);
+        }
+        if entry.key.value_type == ValueType::MergeOperand
+            && let Some(merge_op) = merge_operator
+        {
+            // Merge resolution always produces Owned (pipeline result).
+            return Self::resolve_merge_via_pipeline(
+                super_version.clone(),
+                key,
+                seqno,
+                Arc::clone(merge_op),
+            )
+            .map(|opt| opt.map(PinnableSlice::owned));
+        }
+        Ok(Some(wrap(entry.value)))
+    }
+
     /// Like [`Tree::resolve_or_passthrough`], but returns a [`PinnableSlice`]
     /// that may pin a block cache entry.
     fn resolve_or_passthrough_pinned(
@@ -1003,63 +1044,33 @@ impl Tree {
 
         // Check memtables first — always Owned
         if let Some(entry) = super_version.active_memtable.get(key, seqno) {
-            let Some(entry) = ignore_tombstone_value(entry) else {
-                return Ok(None);
-            };
-            if Self::is_suppressed_by_range_tombstones(
+            return Self::resolve_pinned_entry(
                 super_version,
                 key,
-                entry.key.seqno,
+                entry,
                 seqno,
+                merge_operator,
                 comparator,
-            ) {
-                return Ok(None);
-            }
-            if entry.key.value_type == ValueType::MergeOperand
-                && let Some(merge_op) = merge_operator
-            {
-                return Self::resolve_merge_via_pipeline(
-                    super_version.clone(),
-                    key,
-                    seqno,
-                    Arc::clone(merge_op),
-                )
-                .map(|opt| opt.map(PinnableSlice::owned));
-            }
-            return Ok(Some(PinnableSlice::owned(entry.value)));
+                PinnableSlice::owned,
+            );
         }
 
         // Sealed memtables — always Owned
         if let Some(entry) =
             Self::get_internal_entry_from_sealed_memtables(super_version, key, seqno)
         {
-            let Some(entry) = ignore_tombstone_value(entry) else {
-                return Ok(None);
-            };
-            if Self::is_suppressed_by_range_tombstones(
+            return Self::resolve_pinned_entry(
                 super_version,
                 key,
-                entry.key.seqno,
+                entry,
                 seqno,
+                merge_operator,
                 comparator,
-            ) {
-                return Ok(None);
-            }
-            if entry.key.value_type == ValueType::MergeOperand
-                && let Some(merge_op) = merge_operator
-            {
-                return Self::resolve_merge_via_pipeline(
-                    super_version.clone(),
-                    key,
-                    seqno,
-                    Arc::clone(merge_op),
-                )
-                .map(|opt| opt.map(PinnableSlice::owned));
-            }
-            return Ok(Some(PinnableSlice::owned(entry.value)));
+                PinnableSlice::owned,
+            );
         }
 
-        // Tables — can be Pinned (value from block cache)
+        // Tables — Pinned (value shares decompressed block buffer)
         let key_hash = crate::table::filter::standard_bloom::Builder::get_hash(key);
 
         if let Some((entry, block)) = Self::get_internal_entry_with_block_from_tables(
@@ -1069,34 +1080,15 @@ impl Tree {
             key_hash,
             comparator,
         )? {
-            let Some(entry) = ignore_tombstone_value(entry) else {
-                return Ok(None);
-            };
-            if Self::is_suppressed_by_range_tombstones(
+            return Self::resolve_pinned_entry(
                 super_version,
                 key,
-                entry.key.seqno,
+                entry,
                 seqno,
+                merge_operator,
                 comparator,
-            ) {
-                return Ok(None);
-            }
-            if entry.key.value_type == ValueType::MergeOperand
-                && let Some(merge_op) = merge_operator
-            {
-                return Self::resolve_merge_via_pipeline(
-                    super_version.clone(),
-                    key,
-                    seqno,
-                    Arc::clone(merge_op),
-                )
-                .map(|opt| opt.map(PinnableSlice::owned));
-            }
-            // Pinned/Owned reflects backing storage, not value semantics.
-            // Unresolved merge operands from disk are Pinned (block-backed),
-            // from memtable are Owned — this is intentional and consistent
-            // with the PinnableSlice contract.
-            return Ok(Some(PinnableSlice::pinned(block, entry.value)));
+                |value| PinnableSlice::pinned(block, value),
+            );
         }
 
         Ok(None)
