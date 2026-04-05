@@ -12,6 +12,7 @@ use crate::{
     comparator::SharedComparator,
     encryption::EncryptionProvider,
     file_accessor::FileAccessor,
+    fs::Fs,
     range_tombstone::RangeTombstone,
     table::{IndexBlock, filter::block::FilterBlock},
     tree::inner::TreeId,
@@ -28,6 +29,9 @@ pub struct Inner {
 
     #[doc(hidden)]
     pub(crate) file_accessor: FileAccessor,
+
+    /// Filesystem backend for file operations (open, remove, etc.).
+    pub(crate) fs: Arc<dyn Fs>,
 
     /// Parsed metadata
     #[doc(hidden)]
@@ -97,16 +101,29 @@ impl Drop for Inner {
         if self.is_deleted.load(std::sync::atomic::Ordering::Acquire) {
             log::trace!("Cleanup deleted table {global_id:?} at {:?}", self.path);
 
-            if let Err(e) = std::fs::remove_file(&*self.path) {
+            // Move the accessor and block index out so all file handles
+            // (including clones held by the block index) are closed before
+            // attempting deletion. On Windows, remove_file fails while any
+            // handle is open.
+            let file_accessor = std::mem::replace(&mut self.file_accessor, FileAccessor::Closed);
+            let block_index =
+                std::mem::replace(&mut self.block_index, Arc::new(BlockIndexImpl::Closed));
+
+            // Evict cached FD from the descriptor table.
+            file_accessor.as_descriptor_table().inspect(|d| {
+                d.remove_for_table(&global_id);
+            });
+
+            // Drop the accessor and block index (releases all Arc<dyn FsFile>).
+            drop(file_accessor);
+            drop(block_index);
+
+            if let Err(e) = self.fs.remove_file(&self.path) {
                 log::warn!(
                     "Failed to cleanup deleted table {global_id:?} at {:?}: {e:?}",
                     self.path,
                 );
             }
-
-            self.file_accessor.as_descriptor_table().inspect(|d| {
-                d.remove_for_table(&global_id);
-            });
         }
     }
 }
