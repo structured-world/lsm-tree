@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775209587783,
+  "lastUpdate": 1775347479991,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -5070,6 +5070,84 @@ window.BENCHMARK_DATA = {
             "value": 257154.28586125583,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 472009 ops/sec | factor: 0.545 | P50: 1.9us | P99: 4.1us | P99.9: 13.1us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=231769 rand_rd=943197 cpu=122 composite=42216.7"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea4c28f4ce1a2c19e77200d4ba2cfd207c58e025",
+          "message": "feat(fs): MemFs — in-memory Fs implementation for testing and in-memory trees (#211)\n\n## Summary\n\n- Implement `MemFs` + `MemFile` — `HashMap<PathBuf,\nArc<Mutex<Vec<u8>>>>`-backed virtual filesystem implementing the `Fs`\ntrait\n- De-generify `Config<F: Fs>` → `Config` with `Arc<dyn Fs>` field; add\n`with_fs()` and `with_shared_fs()` builders\n- Rewrite `rewrite_atomic` to use `Fs` trait (PID+seq temp naming, retry\non `AlreadyExists`, best-effort cleanup)\n- Pipe `Arc<dyn Fs>` through `Table::recover`, `FileAccessor`,\n`load_block`, and vlog paths\n- Wire correct level-routed `Fs` to all `Table::recover` call sites\n- `FileAccessor::Closed` sentinel for safe handle release in\n`Inner::Drop` (Windows safety)\n- Restore `table_file_opened_cached`/`uncached` metrics via\n`Option<bool>` return from `FileAccessor`\n- Harden blob recovery: fail-fast on missing blobs folder when manifest\nreferences blob files; defer descriptor-table inserts until recovery\ncommits\n- Replace all unchecked `as usize` casts with `usize::try_from` in\n`MemFile`\n- Bump `rust-toolchain.toml` 1.94.0 → 1.94.1\n\n## Design Notes\n\n- **Blob recovery `NotFound` handling:** `recover_blob_files` returns\n`Ok([], [])` when the blobs folder doesn't exist **and** `ids` is empty\n(standard non-blob trees). When `ids` is non-empty (manifest references\nblob files), a missing folder is unrecoverable corruption and returns\n`Err(Unrecoverable)`.\n- **`lock_exclusive` no-op in MemFs:** In-memory files are not shared\nacross processes — cross-process exclusivity is not meaningful.\n- **`fs` field:** Default filesystem backend for levels without an\nexplicit route. Per-level routing is separate.\n\n## Known Limitations\n\n- **Tree reopen**: `Tree::open` uses `try_exists()` and `std::fs`-based\nrecovery, bypassing the `Fs` trait. New trees work; reopening in-memory\ntrees is not supported. Tracked in #209.\n- **Version GC**: `SuperVersions::gc` uses `std::fs` directly. Tracked\nin #209.\n- **Compaction**: Some finalization code paths still bypass the `Fs`\ntrait.\n\n## Test Plan\n\n- [x] 30 MemFs unit tests (all Fs/FsFile methods, wrong-type errors,\npermission guards, empty paths, rename-replace)\n- [x] 7 integration tests (tree open, flush+read, delete+range, multiple\nflushes, shared MemFs, vlog recovery)\n- [x] StdFs rename-replace contract test\n- [x] 1081 tests pass (0 regressions)\n- [x] Clippy clean, `cargo fmt -- --check` clean\n\nCloses #187\nCloses #188\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai\n-->\n## Summary by CodeRabbit\n\n* **New Features**\n  * In-memory filesystem backend for ephemeral trees and testing.\n  * Config builder APIs to supply a custom or shared filesystem backend.\n\n* **Improvements**\n* More reliable atomic file writes (temp-write + fsync + replace) and\nconsistent directory fsync behavior.\n* Unified filesystem handling across recovery, flush, ingest and read\npaths; safer table deletion ordering.\n  * Improved file-open/cache metrics and cache semantics.\n\n* **Bug Fixes**\n  * Prevent partial descriptor-cache population during recovery.\n  * Stricter handling of missing blob folders during recovery.\n\n* **Tests**\n  * Expanded MemFs, recovery, and end-to-end tests.\n\n* **Chores**\n  * Rust toolchain bumped to 1.94.1.\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+          "timestamp": "2026-04-05T03:03:19+03:00",
+          "tree_id": "f0e43db0b1f424b824361bc47220bfb484b57790",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/ea4c28f4ce1a2c19e77200d4ba2cfd207c58e025"
+        },
+        "date": 1775347479050,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1104010.2287566632,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2039875 ops/sec | factor: 0.541 | P50: 0.4us | P99: 2.0us | P99.9: 5.0us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
+          },
+          {
+            "name": "fillrandom",
+            "value": 660312.8617661444,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1220057 ops/sec | factor: 0.541 | P50: 0.7us | P99: 2.4us | P99.9: 5.6us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
+          },
+          {
+            "name": "readrandom",
+            "value": 299956.0730026213,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 554228 ops/sec | factor: 0.541 | P50: 1.6us | P99: 5.3us | P99.9: 13.2us\nthreads: 1 | elapsed: 0.36s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
+          },
+          {
+            "name": "readseq",
+            "value": 1329586.289860147,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2456671 ops/sec | factor: 0.541 | P50: 0.3us | P99: 3.8us | P99.9: 7.4us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
+          },
+          {
+            "name": "seekrandom",
+            "value": 205072.39741126183,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 378911 ops/sec | factor: 0.541 | P50: 2.3us | P99: 6.1us | P99.9: 13.8us\nthreads: 1 | elapsed: 0.53s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
+          },
+          {
+            "name": "prefixscan",
+            "value": 98166.34774632522,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 181382 ops/sec | factor: 0.541 | P50: 5.1us | P99: 6.7us | P99.9: 16.8us\nthreads: 1 | elapsed: 1.10s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
+          },
+          {
+            "name": "overwrite",
+            "value": 674990.56487895,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1247177 ops/sec | factor: 0.541 | P50: 0.6us | P99: 2.4us | P99.9: 5.7us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
+          },
+          {
+            "name": "mergerandom",
+            "value": 359729.11247182876,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 664670 ops/sec | factor: 0.541 | P50: 0.3us | P99: 1.8us | P99.9: 2.8us\nthreads: 1 | elapsed: 0.30s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 272114.0208921818,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 502784 ops/sec | factor: 0.541 | P50: 1.8us | P99: 4.0us | P99.9: 13.0us\nthreads: 1 | elapsed: 0.40s | num: 200000 | iterations: 3 | runner: seq_wr=237500 rand_rd=939197 cpu=123 composite=42497.0"
           }
         ]
       }
