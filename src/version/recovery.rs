@@ -19,9 +19,7 @@ use std::path::Path;
 /// (25 bytes total, written atomically by `rewrite_atomic`).
 ///
 /// Returns the version ID after verifying the checksum type tag is valid.
-/// The checksum itself is not validated here — it is the hash of the version
-/// *file* content, which is validated after the file is fully read in
-/// [`recover()`].
+/// The checksum field is read from disk but is not validated here.
 pub fn get_current_version(folder: &Path, fs: &dyn Fs) -> crate::Result<VersionId> {
     use byteorder::{LittleEndian, ReadBytesExt};
 
