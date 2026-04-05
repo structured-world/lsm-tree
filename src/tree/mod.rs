@@ -1358,6 +1358,9 @@ impl Tree {
 
     /// Resolves a single internal entry into a user value, handling tombstones,
     /// range tombstone suppression, and merge operand resolution.
+    /// Resolves an entry for `multi_get`: tombstone filter, RT suppression,
+    /// merge operand resolution. Delegates to [`resolve_pinned_entry`] with
+    /// `Owned` wrapping, then extracts the value.
     fn resolve_entry(
         super_version: &SuperVersion,
         key: &[u8],
@@ -1369,33 +1372,16 @@ impl Tree {
         let Some(entry) = entry else {
             return Ok(None);
         };
-
-        let Some(entry) = ignore_tombstone_value(entry) else {
-            return Ok(None);
-        };
-
-        if Self::is_suppressed_by_range_tombstones(
+        Self::resolve_pinned_entry(
             super_version,
             key,
-            entry.key.seqno,
+            entry,
             seqno,
+            merge_operator,
             comparator,
-        ) {
-            return Ok(None);
-        }
-
-        if entry.key.value_type == ValueType::MergeOperand
-            && let Some(merge_op) = merge_operator
-        {
-            return Self::resolve_merge_via_pipeline(
-                super_version.clone(),
-                key,
-                seqno,
-                Arc::clone(merge_op),
-            );
-        }
-
-        Ok(Some(entry.value))
+            crate::PinnableSlice::owned,
+        )
+        .map(|opt| opt.map(crate::PinnableSlice::into_value))
     }
 
     /// Batch-queries tables for multiple keys in sorted order.
