@@ -1111,7 +1111,7 @@ impl Tree {
     ///
     /// Bloom pre-filtering can reject many disk tables at the filter level,
     /// which typically improves point-read performance on deep LSM trees.
-    fn resolve_merge_via_pipeline(
+    pub(crate) fn resolve_merge_via_pipeline(
         version: SuperVersion,
         key: &[u8],
         seqno: SeqNo,

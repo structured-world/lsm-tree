@@ -766,10 +766,17 @@ impl AbstractTree for BlobTree {
                 ) {
                     continue;
                 }
-                // Merge operand resolution — delegate to resolve_key which handles
-                // the full pipeline (merge + blob indirection) via Tree internals.
+                // Merge operand resolution — use pipeline directly with the
+                // already-acquired super_version (no redundant lookup).
                 if item.key.value_type.is_merge_operand() {
-                    results[idx] = self.resolve_key(&super_version, keys[idx].as_ref(), seqno)?;
+                    if let Some(merge_op) = &self.index.config.merge_operator {
+                        results[idx] = crate::Tree::resolve_merge_via_pipeline(
+                            super_version.clone(),
+                            keys[idx].as_ref(),
+                            seqno,
+                            Arc::clone(merge_op),
+                        )?;
+                    }
                     continue;
                 }
                 let (_, v) = resolve_value_handle(
