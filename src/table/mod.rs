@@ -406,11 +406,14 @@ impl Table {
         Ok(result)
     }
 
-    // TODO: maybe we can skip Fuse costs of the user key
-    // TODO: because we just want to return the value
-    // TODO: we would need to return something like ValueType + Value
-    // TODO: so the caller can decide whether to return the value or not
-    fn point_read(&self, key: &[u8], seqno: SeqNo) -> crate::Result<Option<InternalValue>> {
+    /// Shared block-index walk for point reads. Returns the matching entry
+    /// together with the [`DataBlock`] it was found in, so callers that need
+    /// the block (e.g. for [`PinnableSlice`]) can keep it alive.
+    fn point_read_inner(
+        &self,
+        key: &[u8],
+        seqno: SeqNo,
+    ) -> crate::Result<Option<(InternalValue, DataBlock)>> {
         let Some(iter) = self.block_index.forward_reader(key, seqno) else {
             return Ok(None);
         };
@@ -418,10 +421,10 @@ impl Table {
         for block_handle in iter {
             let block_handle = block_handle?;
 
-            let block = self.load_data_block(block_handle.as_ref())?;
+            let data_block = self.load_data_block(block_handle.as_ref())?;
 
-            if let Some(item) = block.point_read(key, seqno, &self.comparator)? {
-                return Ok(Some(item));
+            if let Some(item) = data_block.point_read(key, seqno, &self.comparator)? {
+                return Ok(Some((item, data_block)));
             }
 
             // NOTE: If the last block key is higher than ours,
@@ -434,7 +437,12 @@ impl Table {
         Ok(None)
     }
 
-    /// Like [`Table::point_read`], but also returns the [`Block`] that contains the value.
+    fn point_read(&self, key: &[u8], seqno: SeqNo) -> crate::Result<Option<InternalValue>> {
+        self.point_read_inner(key, seqno)
+            .map(|opt| opt.map(|(iv, _)| iv))
+    }
+
+    /// Like [`Table::point_read`], but also returns the underlying [`Block`].
     ///
     /// Holding on to the returned [`Block`] (e.g. for [`PinnableSlice`]) keeps the
     /// block data alive while the value is in use, but does not guarantee that the
@@ -444,25 +452,8 @@ impl Table {
         key: &[u8],
         seqno: SeqNo,
     ) -> crate::Result<Option<(InternalValue, Block)>> {
-        let Some(iter) = self.block_index.forward_reader(key, seqno) else {
-            return Ok(None);
-        };
-
-        for block_handle in iter {
-            let block_handle = block_handle?;
-
-            let data_block = self.load_data_block(block_handle.as_ref())?;
-
-            if let Some(item) = data_block.point_read(key, seqno, &self.comparator)? {
-                return Ok(Some((item, data_block.inner)));
-            }
-
-            if self.comparator.compare(block_handle.end_key(), key) == std::cmp::Ordering::Greater {
-                return Ok(None);
-            }
-        }
-
-        Ok(None)
+        self.point_read_inner(key, seqno)
+            .map(|opt| opt.map(|(iv, db)| (iv, db.inner)))
     }
 
     /// Creates a scanner over the `Table`.
