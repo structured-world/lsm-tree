@@ -569,7 +569,7 @@ pub trait AbstractTree: sealed::Sealed {
     /// # let folder = tempfile::tempdir()?;
     /// use lsm_tree::{AbstractTree, Config, Tree};
     ///
-    /// let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    /// let tree = Config::new(&folder, Default::default(), Default::default()).open()?;
     /// tree.insert("a", "my_value", 0);
     ///
     /// let item = tree.get_pinned("a", 1)?;
@@ -708,7 +708,7 @@ pub trait AbstractTree: sealed::Sealed {
     /// # let folder = tempfile::tempdir()?;
     /// use lsm_tree::{AbstractTree, Config, Tree, WriteBatch};
     ///
-    /// let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    /// let tree = Config::new(&folder, Default::default(), Default::default()).open()?;
     ///
     /// let mut batch = WriteBatch::new();
     /// batch.insert("key1", "value1");

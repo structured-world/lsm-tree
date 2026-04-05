@@ -238,13 +238,16 @@ impl Table {
     ///
     /// Returns `Ok(false)` if the bloom filter says the key is definitely absent,
     /// `Ok(true)` if point read should proceed.
-    fn check_bloom(&self, key: &[u8], seqno: SeqNo, key_hash: u64) -> crate::Result<(bool, bool)> {
+    fn check_bloom(&self, key: &[u8], key_hash: u64) -> crate::Result<(bool, bool)> {
         // Returns (should_proceed, has_filter)
         let filter_block = if let Some(block) = &self.pinned_filter_block {
             Some(Cow::Borrowed(block))
         } else if let Some(filter_idx) = &self.pinned_filter_index {
             let mut iter = filter_idx.iter(self.comparator.clone());
-            iter.seek(key, seqno);
+            // Filter partitions are written with seqno=0, making the seqno
+            // parameter irrelevant to partition selection. Use MAX_SEQNO
+            // consistently to match the index-block seek in Table::range().
+            iter.seek(key, crate::seqno::MAX_SEQNO);
 
             if let Some(filter_block_handle) = iter.next() {
                 let filter_block_handle = filter_block_handle.materialize(filter_idx.as_slice());
@@ -298,7 +301,7 @@ impl Table {
             return Ok(None);
         }
 
-        let (proceed, has_filter) = self.check_bloom(key, seqno, key_hash)?;
+        let (proceed, has_filter) = self.check_bloom(key, key_hash)?;
         if !proceed {
             #[cfg(feature = "metrics")]
             {
@@ -346,7 +349,7 @@ impl Table {
             return Ok(None);
         }
 
-        let (proceed, has_filter) = self.check_bloom(key, seqno, key_hash)?;
+        let (proceed, has_filter) = self.check_bloom(key, key_hash)?;
         if !proceed {
             #[cfg(feature = "metrics")]
             {
@@ -405,8 +408,9 @@ impl Table {
 
     /// Like [`Table::point_read`], but also returns the [`Block`] that contains the value.
     ///
-    /// This allows the caller to pin the block (e.g. for [`PinnableSlice`]) to
-    /// prevent cache eviction while the value is in use.
+    /// Holding on to the returned [`Block`] (e.g. for [`PinnableSlice`]) keeps the
+    /// block data alive while the value is in use, but does not guarantee that the
+    /// cache will retain its own entry for that block.
     fn point_read_with_block(
         &self,
         key: &[u8],

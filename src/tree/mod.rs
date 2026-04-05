@@ -1053,6 +1053,11 @@ impl Tree {
                         match &best {
                             Some((current, _)) if current.key.seqno >= item.key.seqno => {}
                             _ => {
+                                // Short-circuit: mirrors get_internal_entry_from_tables.
+                                // Table::get translates the seqno, so item.key.seqno is
+                                // table-local. This comparison is valid: if the returned
+                                // seqno equals the (translated) read horizon, no other
+                                // run can have a higher one.
                                 if item.key.seqno == seqno {
                                     return Ok(ignore_tombstone_value(item).map(|iv| (iv, block)));
                                 }
@@ -1731,17 +1736,16 @@ impl Tree {
     #[doc(hidden)]
     #[must_use]
     pub fn append_batch(&self, items: Vec<InternalValue>) -> (u64, u64) {
+        // Hold the read guard for the entire insert to prevent rotate_memtable()
+        // from sealing this memtable mid-batch (which could cause data loss if
+        // a concurrent flush persists only a prefix of the batch).
         #[expect(clippy::expect_used, reason = "lock is expected to not be poisoned")]
-        let memtable = Arc::clone(
-            &self
-                .version_history
-                .read()
-                .expect("lock is poisoned")
-                .latest_version()
-                .active_memtable,
-        );
-        // Lock dropped here — insert_batch runs without holding version_history
-        memtable.insert_batch(items)
+        self.version_history
+            .read()
+            .expect("lock is poisoned")
+            .latest_version()
+            .active_memtable
+            .insert_batch(items)
     }
 
     /// Recovers previous state, by loading the level manifest, tables and blob files.
