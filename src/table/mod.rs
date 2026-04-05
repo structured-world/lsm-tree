@@ -93,6 +93,28 @@ impl std::fmt::Debug for Table {
     }
 }
 
+/// Result of a bloom filter check.
+enum BloomResult {
+    /// Bloom says key is definitely absent — skip point read.
+    Skip,
+    /// Point read should proceed.
+    Proceed {
+        /// Whether a filter was present (used for metrics accounting).
+        has_filter: bool,
+    },
+}
+
+impl BloomResult {
+    fn should_skip(&self) -> bool {
+        matches!(self, Self::Skip)
+    }
+
+    #[cfg(feature = "metrics")]
+    fn has_filter(&self) -> bool {
+        matches!(self, Self::Proceed { has_filter: true })
+    }
+}
+
 impl Table {
     #[must_use]
     pub fn global_seqno(&self) -> SeqNo {
@@ -236,10 +258,9 @@ impl Table {
 
     /// Loads the filter block (if any) and checks the bloom filter.
     ///
-    /// Returns `Ok(false)` if the bloom filter says the key is definitely absent,
-    /// `Ok(true)` if point read should proceed.
-    fn check_bloom(&self, key: &[u8], key_hash: u64) -> crate::Result<(bool, bool)> {
-        // Returns (should_proceed, has_filter)
+    /// Returns `Ok(BloomResult::Skip)` if the bloom filter says the key is definitely absent
+    /// (and updates metrics accordingly), `Ok(BloomResult::Proceed { has_filter })` otherwise.
+    fn check_bloom(&self, key: &[u8], key_hash: u64) -> crate::Result<BloomResult> {
         let filter_block = if let Some(block) = &self.pinned_filter_block {
             Some(Cow::Borrowed(block))
         } else if let Some(filter_idx) = &self.pinned_filter_index {
@@ -262,7 +283,13 @@ impl Table {
                 Some(Cow::Owned(FilterBlock::new(block)))
             } else {
                 // Key sorts past the last filter partition — definite miss.
-                return Ok((false, true));
+                #[cfg(feature = "metrics")]
+                {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    self.metrics.filter_queries.fetch_add(1, Relaxed);
+                    self.metrics.io_skipped_by_filter.fetch_add(1, Relaxed);
+                }
+                return Ok(BloomResult::Skip);
             }
         } else if let Some(_filter_tli_handle) = &self.regions.filter_tli {
             unimplemented!("unpinned filter TLI not supported");
@@ -284,10 +311,16 @@ impl Table {
         if let Some(filter_block) = &filter_block
             && !filter_block.maybe_contains_hash(key_hash)?
         {
-            return Ok((false, has_filter));
+            #[cfg(feature = "metrics")]
+            {
+                use std::sync::atomic::Ordering::Relaxed;
+                self.metrics.filter_queries.fetch_add(1, Relaxed);
+                self.metrics.io_skipped_by_filter.fetch_add(1, Relaxed);
+            }
+            return Ok(BloomResult::Skip);
         }
 
-        Ok((true, has_filter))
+        Ok(BloomResult::Proceed { has_filter })
     }
 
     pub fn get(
@@ -302,14 +335,8 @@ impl Table {
             return Ok(None);
         }
 
-        let (proceed, has_filter) = self.check_bloom(key, key_hash)?;
-        if !proceed {
-            #[cfg(feature = "metrics")]
-            {
-                use std::sync::atomic::Ordering::Relaxed;
-                self.metrics.filter_queries.fetch_add(1, Relaxed);
-                self.metrics.io_skipped_by_filter.fetch_add(1, Relaxed);
-            }
+        let bloom = self.check_bloom(key, key_hash)?;
+        if bloom.should_skip() {
             return Ok(None);
         }
 
@@ -328,7 +355,7 @@ impl Table {
             // Otherwise, the filter efficiency decreases whenever an item is hit.
             // https://github.com/fjall-rs/lsm-tree/issues/246
             item.inspect(|maybe_kv| {
-                if maybe_kv.is_none() && has_filter {
+                if maybe_kv.is_none() && bloom.has_filter() {
                     self.metrics.filter_queries.fetch_add(1, Relaxed);
                 }
             })
@@ -350,14 +377,8 @@ impl Table {
             return Ok(None);
         }
 
-        let (proceed, has_filter) = self.check_bloom(key, key_hash)?;
-        if !proceed {
-            #[cfg(feature = "metrics")]
-            {
-                use std::sync::atomic::Ordering::Relaxed;
-                self.metrics.filter_queries.fetch_add(1, Relaxed);
-                self.metrics.io_skipped_by_filter.fetch_add(1, Relaxed);
-            }
+        let bloom = self.check_bloom(key, key_hash)?;
+        if bloom.should_skip() {
             return Ok(None);
         }
 
@@ -372,7 +393,7 @@ impl Table {
         {
             use std::sync::atomic::Ordering::Relaxed;
             item.inspect(|maybe_kv| {
-                if maybe_kv.is_none() && has_filter {
+                if maybe_kv.is_none() && bloom.has_filter() {
                     self.metrics.filter_queries.fetch_add(1, Relaxed);
                 }
             })

@@ -1,5 +1,6 @@
 use lsm_tree::{
-    AbstractTree, Config, KvSeparationOptions, SeqNo, SequenceNumberCounter, get_tmp_folder,
+    AbstractTree, Config, KvSeparationOptions, MergeOperator, SeqNo, SequenceNumberCounter,
+    UserValue, get_tmp_folder,
 };
 use std::sync::Arc;
 use test_log::test;
@@ -382,6 +383,108 @@ fn multi_get_large_batch_all_from_disk() -> lsm_tree::Result<()> {
             "mismatch at result index {result_idx} (key_{i:05})",
         );
     }
+
+    Ok(())
+}
+
+struct ConcatMerge;
+
+impl MergeOperator for ConcatMerge {
+    fn merge(
+        &self,
+        _key: &[u8],
+        base: Option<&[u8]>,
+        operands: &[&[u8]],
+    ) -> lsm_tree::Result<UserValue> {
+        let mut result = base.unwrap_or_default().to_vec();
+        for op in operands {
+            result.extend_from_slice(op);
+        }
+        Ok(result.into())
+    }
+}
+
+#[test]
+fn multi_get_with_merge_operands() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_merge_operator(Some(Arc::new(ConcatMerge)))
+    .open()?;
+
+    tree.insert("a", "base_a", 0);
+    tree.merge("a", "_merged", 1);
+    tree.insert("b", "val_b", 2);
+
+    // multi_get should resolve merge operand for "a" via pipeline
+    let results = tree.multi_get(["a", "b", "c"], 3)?;
+    assert_eq!(results[0].as_deref(), Some(b"base_a_merged".as_slice()));
+    assert_eq!(results[1].as_deref(), Some(b"val_b".as_slice()));
+    assert_eq!(results[2], None);
+
+    Ok(())
+}
+
+#[test]
+fn multi_get_with_merge_operands_on_disk() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_merge_operator(Some(Arc::new(ConcatMerge)))
+    .open()?;
+
+    tree.insert("k1", "A", 0);
+    tree.merge("k1", "B", 1);
+    tree.insert("k2", "plain", 2);
+    tree.flush_active_memtable(0)?;
+
+    let results = tree.multi_get(["k1", "k2"], SeqNo::MAX)?;
+    assert_eq!(results[0].as_deref(), Some(b"AB".as_slice()));
+    assert_eq!(results[1].as_deref(), Some(b"plain".as_slice()));
+
+    Ok(())
+}
+
+#[test]
+fn multi_get_tombstones_on_disk_with_l0() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    // Flush batch 1 to L0
+    for i in 0..5u32 {
+        tree.insert(format!("key_{i:04}"), format!("val_{i}"), u64::from(i));
+    }
+    tree.flush_active_memtable(0)?;
+
+    // Flush batch 2 to L0 with tombstones for some keys
+    tree.remove("key_0001", 10);
+    tree.remove("key_0003", 11);
+    tree.insert("key_0002", "updated", 12);
+    tree.flush_active_memtable(0)?;
+
+    // Multi-get: exercises L0 batch path with tombstones
+    let keys: Vec<String> = (0..5u32).map(|i| format!("key_{i:04}")).collect();
+    let results = tree.multi_get(&keys, SeqNo::MAX)?;
+
+    assert_eq!(results[0].as_deref(), Some(b"val_0".as_slice()));
+    assert_eq!(results[1], None); // tombstoned
+    assert_eq!(results[2].as_deref(), Some(b"updated".as_slice()));
+    assert_eq!(results[3], None); // tombstoned
+    assert_eq!(results[4].as_deref(), Some(b"val_4".as_slice()));
 
     Ok(())
 }

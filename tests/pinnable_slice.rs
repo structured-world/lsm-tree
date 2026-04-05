@@ -286,3 +286,291 @@ fn get_pinned_sealed_memtable_returns_owned() -> lsm_tree::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn get_pinned_disk_exercises_pinned_methods() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    tree.insert("a", "pinned_value", 0);
+    tree.flush_active_memtable(0)?;
+
+    let ps = tree.get_pinned("a", SeqNo::MAX)?.expect("should exist");
+    assert!(ps.is_pinned());
+
+    // Exercise len/is_empty/value on Pinned variant
+    assert_eq!(ps.len(), 12);
+    assert!(!ps.is_empty());
+    assert_eq!(ps.value(), b"pinned_value");
+
+    // Exercise AsRef<[u8]> on Pinned
+    let bytes: &[u8] = ps.as_ref();
+    assert_eq!(bytes, b"pinned_value");
+
+    // Exercise PartialEq<&[u8]> on Pinned
+    assert!(ps == b"pinned_value".as_slice());
+
+    // Exercise Debug on Pinned
+    let debug = format!("{ps:?}");
+    assert!(debug.contains("Pinned"));
+
+    // Exercise Clone on Pinned
+    let ps2 = ps.clone();
+    assert_eq!(ps2.value(), b"pinned_value");
+    assert!(ps2.is_pinned());
+
+    // Exercise into_value on Pinned
+    let uv: lsm_tree::UserValue = ps.into_value();
+    assert_eq!(&*uv, b"pinned_value");
+
+    // Exercise From<PinnableSlice> for UserValue on Pinned
+    let uv2: lsm_tree::UserValue = ps2.into();
+    assert_eq!(&*uv2, b"pinned_value");
+
+    Ok(())
+}
+
+#[test]
+fn get_pinned_empty_value_on_disk() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    // Insert with empty value
+    tree.insert("empty", "", 0);
+    tree.flush_active_memtable(0)?;
+
+    let ps = tree.get_pinned("empty", SeqNo::MAX)?.expect("should exist");
+    assert!(ps.is_pinned());
+    assert!(ps.is_empty());
+    assert_eq!(ps.len(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn get_pinned_tombstone_on_disk_returns_none() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    tree.insert("a", "value", 0);
+    tree.remove("a", 1);
+    tree.flush_active_memtable(0)?;
+
+    // Tombstone on disk — get_pinned should return None
+    let result = tree.get_pinned("a", SeqNo::MAX)?;
+    assert!(result.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn get_pinned_range_tombstone_on_disk_suppresses() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    tree.insert("a", "v1", 0);
+    tree.insert("b", "v2", 1);
+    tree.flush_active_memtable(0)?;
+
+    // Range tombstone in memtable suppresses disk values
+    tree.remove_range("a", "c", 2);
+
+    let result_a = tree.get_pinned("a", 3)?;
+    let result_b = tree.get_pinned("b", 3)?;
+    assert!(
+        result_a.is_none(),
+        "disk value should be suppressed by memtable RT"
+    );
+    assert!(
+        result_b.is_none(),
+        "disk value should be suppressed by memtable RT"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn get_pinned_with_merge_operator_in_memtable() -> lsm_tree::Result<()> {
+    use lsm_tree::{MergeOperator, UserValue};
+    use std::sync::Arc;
+
+    struct ConcatMerge;
+    impl MergeOperator for ConcatMerge {
+        fn merge(
+            &self,
+            _key: &[u8],
+            base: Option<&[u8]>,
+            operands: &[&[u8]],
+        ) -> lsm_tree::Result<UserValue> {
+            let mut result = base.unwrap_or_default().to_vec();
+            for op in operands {
+                result.extend_from_slice(op);
+            }
+            Ok(result.into())
+        }
+    }
+
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_merge_operator(Some(Arc::new(ConcatMerge)))
+    .open()?;
+
+    tree.insert("k", "A", 0);
+    tree.merge("k", "B", 1);
+
+    // Merge operand in active memtable → get_pinned resolves via pipeline → Owned
+    let ps = tree.get_pinned("k", 2)?.expect("should resolve merge");
+    assert!(!ps.is_pinned());
+    assert_eq!(ps.value(), b"AB");
+
+    Ok(())
+}
+
+#[test]
+fn get_pinned_with_merge_operator_in_sealed_memtable() -> lsm_tree::Result<()> {
+    use lsm_tree::{MergeOperator, UserValue};
+    use std::sync::Arc;
+
+    struct ConcatMerge;
+    impl MergeOperator for ConcatMerge {
+        fn merge(
+            &self,
+            _key: &[u8],
+            base: Option<&[u8]>,
+            operands: &[&[u8]],
+        ) -> lsm_tree::Result<UserValue> {
+            let mut result = base.unwrap_or_default().to_vec();
+            for op in operands {
+                result.extend_from_slice(op);
+            }
+            Ok(result.into())
+        }
+    }
+
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_merge_operator(Some(Arc::new(ConcatMerge)))
+    .open()?;
+
+    tree.insert("k", "X", 0);
+    tree.merge("k", "Y", 1);
+    tree.rotate_memtable();
+
+    // Merge operand in sealed memtable → resolves via pipeline → Owned
+    let ps = tree.get_pinned("k", 2)?.expect("should resolve merge");
+    assert!(!ps.is_pinned());
+    assert_eq!(ps.value(), b"XY");
+
+    Ok(())
+}
+
+#[test]
+fn get_pinned_with_merge_operator_on_disk() -> lsm_tree::Result<()> {
+    use lsm_tree::{MergeOperator, UserValue};
+    use std::sync::Arc;
+
+    struct ConcatMerge;
+    impl MergeOperator for ConcatMerge {
+        fn merge(
+            &self,
+            _key: &[u8],
+            base: Option<&[u8]>,
+            operands: &[&[u8]],
+        ) -> lsm_tree::Result<UserValue> {
+            let mut result = base.unwrap_or_default().to_vec();
+            for op in operands {
+                result.extend_from_slice(op);
+            }
+            Ok(result.into())
+        }
+    }
+
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_merge_operator(Some(Arc::new(ConcatMerge)))
+    .open()?;
+
+    tree.insert("k", "D", 0);
+    tree.merge("k", "E", 1);
+    tree.flush_active_memtable(0)?;
+
+    // Merge operand on disk → resolves via pipeline → Owned (merge result)
+    let ps = tree.get_pinned("k", 2)?.expect("should resolve merge");
+    assert!(!ps.is_pinned());
+    assert_eq!(ps.value(), b"DE");
+
+    Ok(())
+}
+
+#[test]
+fn get_pinned_sealed_memtable_tombstone_returns_none() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    tree.insert("a", "value", 0);
+    tree.remove("a", 1);
+    tree.rotate_memtable();
+
+    let result = tree.get_pinned("a", 2)?;
+    assert!(result.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn get_pinned_sealed_memtable_range_tombstone_suppresses() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+
+    tree.insert("b", "value", 0);
+    tree.remove_range("a", "c", 1);
+    tree.rotate_memtable();
+
+    // Value and RT both in sealed memtable
+    let result = tree.get_pinned("b", 2)?;
+    assert!(result.is_none(), "sealed memtable value suppressed by RT");
+
+    Ok(())
+}
