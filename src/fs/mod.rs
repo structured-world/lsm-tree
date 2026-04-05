@@ -262,6 +262,10 @@ pub trait Fs: Send + Sync + 'static {
 
     /// Removes a single file.
     ///
+    /// If the file does not exist, implementations must return
+    /// [`io::ErrorKind::NotFound`]. Callers such as version GC rely on
+    /// this to perform idempotent deletes.
+    ///
     /// # Errors
     ///
     /// Returns an I/O error if the file cannot be removed.

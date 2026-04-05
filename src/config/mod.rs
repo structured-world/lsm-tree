@@ -226,9 +226,8 @@ pub struct Config {
     /// Defaults to [`StdFs`]. Use [`Config::with_fs`] to plug in an
     /// alternative backend such as [`MemFs`](crate::fs::MemFs).
     ///
-    /// **Note:** `Tree::open` still probes `CURRENT` via `std::fs`, so
-    /// reopening an existing tree on a non-`StdFs` backend is not yet
-    /// supported. Fresh tree creation works. Tracked in #209.
+    /// Both fresh tree creation and reopening (recovery) are supported
+    /// for any backend that implements [`Fs`].
     #[doc(hidden)]
     pub fs: Arc<dyn Fs>,
 
