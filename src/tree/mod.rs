@@ -1708,6 +1708,16 @@ impl Tree {
         Ok(version)
     }
 
+    /// Removes stale version files left over from a crash during version swap.
+    ///
+    /// # Behavior change vs pre-Fs-trait code
+    ///
+    /// The previous implementation used `std::fs::read_dir` + `to_string_lossy()`,
+    /// which silently skipped non-UTF-8 filenames. `Fs::read_dir` returns
+    /// `InvalidData` for such entries instead (see [`FsDirEntry`] docs), so this
+    /// function now fails fast on non-UTF-8 names. This is intentional: version
+    /// files are always `v{u64}` — any non-UTF-8 entry indicates filesystem
+    /// corruption and should surface as an error rather than be silently ignored.
     fn cleanup_orphaned_version(
         path: &Path,
         latest_version_id: crate::version::VersionId,
