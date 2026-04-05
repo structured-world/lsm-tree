@@ -862,6 +862,11 @@ impl AbstractTree for Tree {
             remaining_sorted.push(idx);
         }
 
+        // NOTE: Cannot prune remaining keys by memtable range tombstones here
+        // because RT suppression depends on the entry's seqno (key_seqno < rt.seqno),
+        // which we don't know until after the SST lookup. Phase 3 handles RT suppression
+        // via resolve_entry after finding each entry.
+
         // Phase 2: Batch table lookups for remaining keys (sorted order → sequential I/O)
         if !remaining_sorted.is_empty() {
             Self::batch_get_from_tables(
@@ -1433,9 +1438,16 @@ impl Tree {
             }
 
             if level_idx == 0 {
-                // L0: must check ALL runs, keep highest seqno per key
+                // L0: must check ALL runs, keep highest seqno per key.
+                // Track keys at the seqno ceiling (seqno + 1 == read_seqno) —
+                // no other L0 run can beat them, so skip in subsequent runs.
+                let mut at_ceiling: crate::HashSet<usize> = crate::HashSet::default();
+
                 for run in level.iter() {
                     for &idx in &still_remaining {
+                        if at_ceiling.contains(&idx) {
+                            continue;
+                        }
                         let key = keys[idx].as_ref();
                         if let Some(table) = run.get_for_key_cmp(key, comparator)
                             && let Some(item) = table.get(key, seqno, key_hashes[idx])?
@@ -1443,6 +1455,9 @@ impl Tree {
                             match &results[idx] {
                                 Some(current) if current.key.seqno >= item.key.seqno => {}
                                 _ => {
+                                    if item.key.seqno.checked_add(1) == Some(seqno) {
+                                        at_ceiling.insert(idx);
+                                    }
                                     results[idx] = Some(item);
                                 }
                             }
