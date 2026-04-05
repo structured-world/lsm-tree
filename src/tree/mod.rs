@@ -897,11 +897,11 @@ impl AbstractTree for Tree {
         Ok(results)
     }
 
-    fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> (u64, u64) {
+    fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> crate::Result<(u64, u64)> {
         if batch.is_empty() {
-            return (0, self.active_memtable().size());
+            return Ok((0, self.active_memtable().size()));
         }
-        self.append_batch(batch.materialize(seqno))
+        Ok(self.append_batch(batch.materialize(seqno)?))
     }
 
     fn insert<K: Into<UserKey>, V: Into<UserValue>>(
@@ -990,9 +990,9 @@ impl Tree {
         }
     }
 
-    /// Shared post-lookup resolution for `get_pinned`: tombstone filter,
-    /// range-tombstone suppression, merge operand resolution. Returns `None`
-    /// if entry is tombstoned or suppressed, `Some(PinnableSlice)` otherwise.
+    /// Shared post-lookup resolution for `get_pinned` and `multi_get`:
+    /// tombstone filter, range-tombstone suppression, merge operand resolution.
+    /// Returns `None` if entry is tombstoned or suppressed.
     fn resolve_pinned_entry(
         super_version: &SuperVersion,
         key: &[u8],
@@ -1384,12 +1384,13 @@ impl Tree {
         .map(|opt| opt.map(crate::PinnableSlice::into_value))
     }
 
-    /// Batch-queries tables for multiple keys in sorted order.
+    /// Queries tables for multiple keys using sorted access order.
     ///
     /// `remaining_sorted` contains indices into `keys` for keys not yet found,
-    /// in comparator-sorted order. For each level, keys are checked against
-    /// tables with pre-computed bloom hashes, enabling sequential I/O within
-    /// each SST and batch bloom filter checks.
+    /// in comparator-sorted order. Keys are looked up individually via
+    /// `Table::get`, but sorted order improves I/O locality. Bloom hashes are
+    /// pre-computed once and reused across all tables. Per-SST batched bloom
+    /// checks and block walks are tracked in #223.
     #[expect(
         clippy::indexing_slicing,
         reason = "indices come from 0..n range and are always within keys/key_hashes/results bounds"

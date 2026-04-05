@@ -140,12 +140,16 @@ impl WriteBatch {
     }
 
     /// Materializes all entries into [`InternalValue`]s with the given seqno.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MixedOperationBatch`](crate::Error::MixedOperationBatch)
+    /// if any user key appears with differing operation types (e.g. insert + remove),
+    /// which would cause silent data loss in the skiplist.
     #[doc(hidden)]
-    #[must_use]
-    pub(crate) fn materialize(self, seqno: crate::SeqNo) -> Vec<InternalValue> {
-        // In debug builds, detect mixed-op duplicates (e.g. insert + remove on same key)
-        // that would silently overwrite each other in the skiplist.
-        #[cfg(debug_assertions)]
+    pub(crate) fn materialize(self, seqno: crate::SeqNo) -> crate::Result<Vec<InternalValue>> {
+        // Reject mixed-op duplicates unconditionally — in release builds these
+        // cause silent data loss (one entry overwrites the other in the skiplist).
         {
             let mut seen: crate::HashMap<crate::UserKey, ValueType> = crate::HashMap::default();
             for entry in &self.entries {
@@ -156,19 +160,17 @@ impl WriteBatch {
                     WriteBatchEntry::Merge { key, .. } => (key, ValueType::MergeOperand),
                 };
                 if let Some(&prev_type) = seen.get(key) {
-                    debug_assert!(
-                        prev_type == vtype,
-                        "WriteBatch contains mixed operation types for the same key {key:?}: \
-                         {prev_type:?} and {vtype:?}. This will cause one operation to be \
-                         lost in the skiplist. Canonicalize duplicates before batching.",
-                    );
+                    if prev_type != vtype {
+                        return Err(crate::Error::MixedOperationBatch);
+                    }
                 } else {
                     seen.insert(key.clone(), vtype);
                 }
             }
         }
 
-        self.entries
+        Ok(self
+            .entries
             .into_iter()
             .map(|entry| match entry {
                 WriteBatchEntry::Insert { key, value } => {
@@ -182,6 +184,6 @@ impl WriteBatch {
                     InternalValue::new_merge_operand(key, value, seqno)
                 }
             })
-            .collect()
+            .collect())
     }
 }

@@ -719,12 +719,17 @@ pub trait AbstractTree: sealed::Sealed {
     /// batch.insert("key2", "value2");
     /// batch.remove("key3");
     ///
-    /// let (bytes_added, memtable_size) = tree.apply_batch(batch, 0);
+    /// let (bytes_added, memtable_size) = tree.apply_batch(batch, 0)?;
     /// assert!(bytes_added > 0);
     /// #
     /// # Ok::<(), lsm_tree::Error>(())
     /// ```
-    fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> (u64, u64);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MixedOperationBatch`](crate::Error::MixedOperationBatch)
+    /// if the batch contains mixed operation types for the same user key.
+    fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> crate::Result<(u64, u64)>;
 
     /// Inserts a key-value pair into the tree.
     ///

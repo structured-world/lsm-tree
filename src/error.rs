@@ -107,6 +107,11 @@ pub enum Error {
         offset: u64,
     },
 
+    /// A [`WriteBatch`](crate::WriteBatch) contains mixed operation types
+    /// (e.g. insert + remove) for the same user key, which would cause silent
+    /// data loss in the skiplist.
+    MixedOperationBatch,
+
     /// Route-compatibility mismatch on reopen.
     ///
     /// Recovery found fewer tables on disk than the manifest expects, and all

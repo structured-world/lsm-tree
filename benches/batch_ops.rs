@@ -82,7 +82,7 @@ fn bench_write_batch(c: &mut Criterion) {
                     for i in 0..size {
                         batch.insert(format!("key_{seqno}_{i:04}"), format!("value_{i}"));
                     }
-                    tree.apply_batch(batch, seqno);
+                    tree.apply_batch(batch, seqno).unwrap();
                     seqno += 1;
                 });
             },

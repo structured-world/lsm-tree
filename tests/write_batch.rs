@@ -20,7 +20,7 @@ fn write_batch_insert_and_read() -> lsm_tree::Result<()> {
     batch.insert("b", "val_b");
     batch.insert("c", "val_c");
 
-    let (bytes_added, _memtable_size) = tree.apply_batch(batch, 0);
+    let (bytes_added, _memtable_size) = tree.apply_batch(batch, 0)?;
     assert!(bytes_added > 0);
 
     assert_eq!(tree.get("a", 1)?.as_deref(), Some(b"val_a".as_slice()));
@@ -46,7 +46,7 @@ fn write_batch_mixed_operations() -> lsm_tree::Result<()> {
     let mut batch = WriteBatch::new();
     batch.insert("new_key", "new_value");
     batch.remove("existing");
-    tree.apply_batch(batch, 1);
+    tree.apply_batch(batch, 1)?;
 
     assert_eq!(
         tree.get("new_key", 2)?.as_deref(),
@@ -68,7 +68,7 @@ fn write_batch_empty_is_noop() -> lsm_tree::Result<()> {
     .open()?;
 
     let batch = WriteBatch::new();
-    let (bytes_added, _) = tree.apply_batch(batch, 0);
+    let (bytes_added, _) = tree.apply_batch(batch, 0)?;
     assert_eq!(bytes_added, 0);
 
     Ok(())
@@ -88,7 +88,7 @@ fn write_batch_shared_seqno_atomic_visibility() -> lsm_tree::Result<()> {
     batch.insert("x", "vx");
     batch.insert("y", "vy");
     batch.insert("z", "vz");
-    tree.apply_batch(batch, 5);
+    tree.apply_batch(batch, 5)?;
 
     // At seqno=5, none should be visible (memtable uses seqno-1 as upper bound)
     assert_eq!(tree.get("x", 5)?, None);
@@ -135,7 +135,7 @@ fn write_batch_survives_flush() -> lsm_tree::Result<()> {
     for i in 0..50u32 {
         batch.insert(format!("key_{i:04}"), format!("val_{i}"));
     }
-    tree.apply_batch(batch, 0);
+    tree.apply_batch(batch, 0)?;
     tree.flush_active_memtable(0)?;
 
     for i in 0..50u32 {
@@ -170,7 +170,7 @@ fn write_batch_blob_tree_kv_separation() -> lsm_tree::Result<()> {
     batch.insert("k1", big_val.as_slice());
     batch.insert("k2", big_val.as_slice());
     batch.remove("k3"); // tombstone for non-existent key
-    tree.apply_batch(batch, 0);
+    tree.apply_batch(batch, 0)?;
 
     tree.flush_active_memtable(0)?;
     assert!(tree.blob_file_count() > 0);
@@ -223,7 +223,7 @@ fn write_batch_with_merge_operand() -> lsm_tree::Result<()> {
     let mut batch = WriteBatch::new();
     batch.merge("counter", "B");
     batch.merge("counter", "C");
-    tree.apply_batch(batch, 1);
+    tree.apply_batch(batch, 1)?;
 
     let result = tree.get("counter", 2)?;
     assert_eq!(result.as_deref(), Some(b"ABC".as_slice()));
@@ -245,7 +245,7 @@ fn write_batch_remove_weak() -> lsm_tree::Result<()> {
 
     let mut batch = WriteBatch::new();
     batch.remove_weak("a");
-    tree.apply_batch(batch, 1);
+    tree.apply_batch(batch, 1)?;
 
     assert_eq!(tree.get("a", 2)?, None);
 
@@ -266,7 +266,7 @@ fn write_batch_multi_get_after_batch() -> lsm_tree::Result<()> {
     for i in 0..20u32 {
         batch.insert(format!("key_{i:04}"), format!("val_{i}"));
     }
-    tree.apply_batch(batch, 0);
+    tree.apply_batch(batch, 0)?;
 
     // Flush half, keep half in memtable
     tree.flush_active_memtable(0)?;
@@ -275,7 +275,7 @@ fn write_batch_multi_get_after_batch() -> lsm_tree::Result<()> {
     for i in 20..40u32 {
         batch2.insert(format!("key_{i:04}"), format!("val_{i}"));
     }
-    tree.apply_batch(batch2, 1);
+    tree.apply_batch(batch2, 1)?;
 
     // multi_get spanning disk (0-19) + memtable (20-39) + missing (40-44)
     let keys: Vec<String> = (0..45u32).map(|i| format!("key_{i:04}")).collect();
