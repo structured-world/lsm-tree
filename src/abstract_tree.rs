@@ -554,6 +554,43 @@ pub trait AbstractTree: sealed::Sealed {
     /// Will return `Err` if an IO error occurs.
     fn get<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<UserValue>>;
 
+    /// Retrieves an item from the tree as a [`PinnableSlice`].
+    ///
+    /// When the value is found in the block cache, the returned
+    /// [`PinnableSlice::Pinned`] variant holds a reference to the cached
+    /// block, avoiding a data copy. Memtable and blob-resolved values use
+    /// the [`PinnableSlice::Owned`] variant.
+    ///
+    /// The existing [`AbstractTree::get`] method is unaffected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # let folder = tempfile::tempdir()?;
+    /// use lsm_tree::{AbstractTree, Config, Tree};
+    ///
+    /// let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    /// tree.insert("a", "my_value", 0);
+    ///
+    /// let item = tree.get_pinned("a", 1)?;
+    /// assert_eq!(item.as_ref().map(|v| v.as_ref()), Some("my_value".as_bytes()));
+    /// #
+    /// # Ok::<(), lsm_tree::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if an IO error occurs.
+    fn get_pinned<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        seqno: SeqNo,
+    ) -> crate::Result<Option<crate::PinnableSlice>> {
+        // Default: delegate to get() and wrap as Owned
+        self.get(key, seqno)
+            .map(|opt| opt.map(crate::PinnableSlice::owned))
+    }
+
     /// Returns `true` if the tree contains the specified key.
     ///
     /// # Examples
@@ -655,6 +692,35 @@ pub trait AbstractTree: sealed::Sealed {
     ) -> crate::Result<Vec<Option<UserValue>>> {
         keys.into_iter().map(|key| self.get(key, seqno)).collect()
     }
+
+    /// Applies a [`WriteBatch`] atomically with the given sequence number.
+    ///
+    /// All entries in the batch share a single seqno, making them appear as
+    /// an atomic unit for MVCC reads. This is more efficient than individual
+    /// writes because the version-history lock and memtable size accounting
+    /// are performed only once for the entire batch.
+    ///
+    /// Returns the total bytes added and new size of the memtable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # let folder = tempfile::tempdir()?;
+    /// use lsm_tree::{AbstractTree, Config, Tree, WriteBatch};
+    ///
+    /// let tree = Config::new(folder, Default::default(), Default::default()).open()?;
+    ///
+    /// let mut batch = WriteBatch::new();
+    /// batch.insert("key1", "value1");
+    /// batch.insert("key2", "value2");
+    /// batch.remove("key3");
+    ///
+    /// let (bytes_added, memtable_size) = tree.apply_batch(batch, 0);
+    /// assert!(bytes_added > 0);
+    /// #
+    /// # Ok::<(), lsm_tree::Error>(())
+    /// ```
+    fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> (u64, u64);
 
     /// Inserts a key-value pair into the tree.
     ///

@@ -667,6 +667,10 @@ impl AbstractTree for BlobTree {
         self.index.get_highest_persisted_seqno()
     }
 
+    fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> (u64, u64) {
+        self.index.apply_batch(batch, seqno)
+    }
+
     fn insert<K: Into<UserKey>, V: Into<UserValue>>(
         &self,
         key: K,

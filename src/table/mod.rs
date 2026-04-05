@@ -322,6 +322,92 @@ impl Table {
         }
     }
 
+    /// Like [`Table::get`], but also returns the [`Block`] containing the value.
+    ///
+    /// Used by `get_pinned()` to construct `PinnableSlice::Pinned`.
+    pub(crate) fn get_with_block(
+        &self,
+        key: &[u8],
+        seqno: SeqNo,
+        key_hash: u64,
+    ) -> crate::Result<Option<(InternalValue, Block)>> {
+        #[cfg(feature = "metrics")]
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let seqno = seqno.saturating_sub(self.global_seqno());
+
+        if self.metadata.seqnos.0 >= seqno {
+            return Ok(None);
+        }
+
+        let filter_block = if let Some(block) = &self.pinned_filter_block {
+            Some(std::borrow::Cow::Borrowed(block))
+        } else if let Some(filter_idx) = &self.pinned_filter_index {
+            let mut iter = filter_idx.iter(self.comparator.clone());
+            iter.seek(key, seqno);
+
+            if let Some(filter_block_handle) = iter.next() {
+                let filter_block_handle = filter_block_handle.materialize(filter_idx.as_slice());
+
+                let block = self.load_block(
+                    &filter_block_handle.into_inner(),
+                    BlockType::Filter,
+                    CompressionType::None,
+                    #[cfg(zstd_any)]
+                    None,
+                )?;
+                let block = FilterBlock::new(block);
+
+                Some(std::borrow::Cow::Owned(block))
+            } else {
+                None
+            }
+        } else if let Some(_filter_tli_handle) = &self.regions.filter_tli {
+            unimplemented!("unpinned filter TLI not supported");
+        } else if let Some(filter_block_handle) = &self.regions.filter {
+            let block = self.load_block(
+                filter_block_handle,
+                BlockType::Filter,
+                CompressionType::None,
+                #[cfg(zstd_any)]
+                None,
+            )?;
+            let block = FilterBlock::new(block);
+
+            Some(std::borrow::Cow::Owned(block))
+        } else {
+            None
+        };
+
+        if let Some(filter_block) = &filter_block
+            && !filter_block.maybe_contains_hash(key_hash)?
+        {
+            #[cfg(feature = "metrics")]
+            {
+                self.metrics.filter_queries.fetch_add(1, Relaxed);
+                self.metrics.io_skipped_by_filter.fetch_add(1, Relaxed);
+            }
+
+            return Ok(None);
+        }
+
+        let item = self.point_read_with_block(key, seqno);
+
+        #[cfg(not(feature = "metrics"))]
+        {
+            item
+        }
+
+        #[cfg(feature = "metrics")]
+        {
+            item.inspect(|maybe_kv| {
+                if maybe_kv.is_none() && filter_block.is_some() {
+                    self.metrics.filter_queries.fetch_add(1, Relaxed);
+                }
+            })
+        }
+    }
+
     // TODO: maybe we can skip Fuse costs of the user key
     // TODO: because we just want to return the value
     // TODO: we would need to return something like ValueType + Value
@@ -342,6 +428,36 @@ impl Table {
 
             // NOTE: If the last block key is higher than ours,
             // our key cannot be in the next block
+            if self.comparator.compare(block_handle.end_key(), key) == std::cmp::Ordering::Greater {
+                return Ok(None);
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Like [`Table::point_read`], but also returns the [`Block`] that contains the value.
+    ///
+    /// This allows the caller to pin the block (e.g. for [`PinnableSlice`]) to
+    /// prevent cache eviction while the value is in use.
+    fn point_read_with_block(
+        &self,
+        key: &[u8],
+        seqno: SeqNo,
+    ) -> crate::Result<Option<(InternalValue, Block)>> {
+        let Some(iter) = self.block_index.forward_reader(key, seqno) else {
+            return Ok(None);
+        };
+
+        for block_handle in iter {
+            let block_handle = block_handle?;
+
+            let data_block = self.load_data_block(block_handle.as_ref())?;
+
+            if let Some(item) = data_block.point_read(key, seqno, &self.comparator)? {
+                return Ok(Some((item, data_block.inner)));
+            }
+
             if self.comparator.compare(block_handle.end_key(), key) == std::cmp::Ordering::Greater {
                 return Ok(None);
             }

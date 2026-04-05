@@ -710,24 +710,133 @@ impl AbstractTree for Tree {
         )
     }
 
+    fn get_pinned<K: AsRef<[u8]>>(
+        &self,
+        key: K,
+        seqno: SeqNo,
+    ) -> crate::Result<Option<crate::PinnableSlice>> {
+        let key = key.as_ref();
+
+        #[expect(clippy::expect_used, reason = "lock is expected to not be poisoned")]
+        let super_version = self
+            .version_history
+            .read()
+            .expect("lock is poisoned")
+            .get_version_for_snapshot(seqno);
+
+        Self::resolve_or_passthrough_pinned(
+            &super_version,
+            key,
+            seqno,
+            self.config.merge_operator.as_ref(),
+            self.config.comparator.as_ref(),
+        )
+    }
+
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indices are generated from 0..n range, always in bounds"
+    )]
     fn multi_get<K: AsRef<[u8]>>(
         &self,
         keys: impl IntoIterator<Item = K>,
         seqno: SeqNo,
     ) -> crate::Result<Vec<Option<UserValue>>> {
         let super_version = self.get_version_for_snapshot(seqno);
+        let comparator = self.config.comparator.as_ref();
+        let merge_operator = self.config.merge_operator.as_ref();
 
-        keys.into_iter()
-            .map(|key| {
-                Self::resolve_or_passthrough(
-                    &super_version,
-                    key.as_ref(),
-                    seqno,
-                    self.config.merge_operator.as_ref(),
-                    self.config.comparator.as_ref(),
-                )
-            })
-            .collect()
+        // Collect keys and pre-compute bloom hashes once
+        let keys: Vec<_> = keys.into_iter().collect();
+        let n = keys.len();
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+
+        // For small batches, use the simple per-key path
+        if n <= 2 {
+            return keys
+                .iter()
+                .map(|key| {
+                    Self::resolve_or_passthrough(
+                        &super_version,
+                        key.as_ref(),
+                        seqno,
+                        merge_operator,
+                        comparator,
+                    )
+                })
+                .collect();
+        }
+
+        // Sort indices by key for sequential I/O access patterns
+        let mut sorted_indices: Vec<usize> = (0..n).collect();
+        sorted_indices.sort_by(|&a, &b| comparator.compare(keys[a].as_ref(), keys[b].as_ref()));
+
+        let key_hashes: Vec<u64> = keys
+            .iter()
+            .map(|k| crate::table::filter::standard_bloom::Builder::get_hash(k.as_ref()))
+            .collect();
+
+        // Phase 1: Check active + sealed memtables (in sorted order for cache locality)
+        let mut internal_entries: Vec<Option<InternalValue>> = vec![None; n];
+        let mut remaining_sorted: Vec<usize> = Vec::with_capacity(n);
+
+        for &idx in &sorted_indices {
+            let key = keys[idx].as_ref();
+
+            // Active memtable
+            if let Some(entry) = super_version.active_memtable.get(key, seqno) {
+                internal_entries[idx] = Some(entry);
+                continue;
+            }
+
+            // Sealed memtables (newest first)
+            if let Some(entry) =
+                Self::get_internal_entry_from_sealed_memtables(&super_version, key, seqno)
+            {
+                internal_entries[idx] = Some(entry);
+                continue;
+            }
+
+            remaining_sorted.push(idx);
+        }
+
+        // Phase 2: Batch table lookups for remaining keys (sorted order → sequential I/O)
+        if !remaining_sorted.is_empty() {
+            Self::batch_get_from_tables(
+                &super_version.version,
+                &keys,
+                &key_hashes,
+                &remaining_sorted,
+                seqno,
+                comparator,
+                &mut internal_entries,
+            )?;
+        }
+
+        // Phase 3: Resolve entries (tombstones, RT suppression, merge operands)
+        let mut results = vec![None; n];
+        for idx in 0..n {
+            let entry = internal_entries[idx].take();
+            results[idx] = Self::resolve_entry(
+                &super_version,
+                keys[idx].as_ref(),
+                entry,
+                seqno,
+                merge_operator,
+                comparator,
+            )?;
+        }
+
+        Ok(results)
+    }
+
+    fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> (u64, u64) {
+        if batch.is_empty() {
+            return (0, self.active_memtable().size());
+        }
+        self.append_batch(batch.materialize(seqno))
     }
 
     fn insert<K: Into<UserKey>, V: Into<UserValue>>(
@@ -814,6 +923,160 @@ impl Tree {
             Some(entry) => Ok(Some(entry.value)),
             None => Ok(None),
         }
+    }
+
+    /// Like [`Tree::resolve_or_passthrough`], but returns a [`PinnableSlice`]
+    /// that may pin a block cache entry.
+    fn resolve_or_passthrough_pinned(
+        super_version: &SuperVersion,
+        key: &[u8],
+        seqno: SeqNo,
+        merge_operator: Option<&Arc<dyn crate::merge_operator::MergeOperator>>,
+        comparator: &dyn crate::comparator::UserComparator,
+    ) -> crate::Result<Option<crate::PinnableSlice>> {
+        use crate::PinnableSlice;
+
+        // Check memtables first — always Owned
+        if let Some(entry) = super_version.active_memtable.get(key, seqno) {
+            let Some(entry) = ignore_tombstone_value(entry) else {
+                return Ok(None);
+            };
+            if Self::is_suppressed_by_range_tombstones(
+                super_version,
+                key,
+                entry.key.seqno,
+                seqno,
+                comparator,
+            ) {
+                return Ok(None);
+            }
+            if entry.key.value_type == ValueType::MergeOperand
+                && let Some(merge_op) = merge_operator
+            {
+                return Self::resolve_merge_via_pipeline(
+                    super_version.clone(),
+                    key,
+                    seqno,
+                    Arc::clone(merge_op),
+                )
+                .map(|opt| opt.map(PinnableSlice::owned));
+            }
+            return Ok(Some(PinnableSlice::owned(entry.value)));
+        }
+
+        // Sealed memtables — always Owned
+        if let Some(entry) =
+            Self::get_internal_entry_from_sealed_memtables(super_version, key, seqno)
+        {
+            let Some(entry) = ignore_tombstone_value(entry) else {
+                return Ok(None);
+            };
+            if Self::is_suppressed_by_range_tombstones(
+                super_version,
+                key,
+                entry.key.seqno,
+                seqno,
+                comparator,
+            ) {
+                return Ok(None);
+            }
+            if entry.key.value_type == ValueType::MergeOperand
+                && let Some(merge_op) = merge_operator
+            {
+                return Self::resolve_merge_via_pipeline(
+                    super_version.clone(),
+                    key,
+                    seqno,
+                    Arc::clone(merge_op),
+                )
+                .map(|opt| opt.map(PinnableSlice::owned));
+            }
+            return Ok(Some(PinnableSlice::owned(entry.value)));
+        }
+
+        // Tables — can be Pinned (value from block cache)
+        let key_hash = crate::table::filter::standard_bloom::Builder::get_hash(key);
+
+        if let Some((entry, block)) = Self::get_internal_entry_with_block_from_tables(
+            &super_version.version,
+            key,
+            seqno,
+            key_hash,
+            comparator,
+        )? {
+            let Some(entry) = ignore_tombstone_value(entry) else {
+                return Ok(None);
+            };
+            if Self::is_suppressed_by_range_tombstones(
+                super_version,
+                key,
+                entry.key.seqno,
+                seqno,
+                comparator,
+            ) {
+                return Ok(None);
+            }
+            if entry.key.value_type == ValueType::MergeOperand
+                && let Some(merge_op) = merge_operator
+            {
+                return Self::resolve_merge_via_pipeline(
+                    super_version.clone(),
+                    key,
+                    seqno,
+                    Arc::clone(merge_op),
+                )
+                .map(|opt| opt.map(PinnableSlice::owned));
+            }
+            return Ok(Some(PinnableSlice::pinned(block, entry.value)));
+        }
+
+        Ok(None)
+    }
+
+    /// Like [`Tree::get_internal_entry_from_tables`], but returns the block
+    /// along with the entry for pinned zero-copy access.
+    fn get_internal_entry_with_block_from_tables(
+        version: &Version,
+        key: &[u8],
+        seqno: SeqNo,
+        key_hash: u64,
+        comparator: &dyn crate::comparator::UserComparator,
+    ) -> crate::Result<Option<(InternalValue, crate::table::Block)>> {
+        for (level_idx, level) in version.iter_levels().enumerate() {
+            if level_idx == 0 {
+                let mut best: Option<(InternalValue, crate::table::Block)> = None;
+
+                for run in level.iter() {
+                    if let Some(table) = run.get_for_key_cmp(key, comparator)
+                        && let Some((item, block)) = table.get_with_block(key, seqno, key_hash)?
+                    {
+                        match &best {
+                            Some((current, _)) if current.key.seqno >= item.key.seqno => {}
+                            _ => {
+                                if item.key.seqno == seqno {
+                                    return Ok(ignore_tombstone_value(item).map(|iv| (iv, block)));
+                                }
+                                best = Some((item, block));
+                            }
+                        }
+                    }
+                }
+
+                if let Some((entry, block)) = best {
+                    return Ok(ignore_tombstone_value(entry).map(|iv| (iv, block)));
+                }
+            } else {
+                for run in level.iter() {
+                    if let Some(table) = run.get_for_key_cmp(key, comparator)
+                        && let Some((item, block)) = table.get_with_block(key, seqno, key_hash)?
+                    {
+                        return Ok(ignore_tombstone_value(item).map(|iv| (iv, block)));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Resolves merge operands for a point read via a bloom-filtered iterator pipeline.
@@ -1064,6 +1327,118 @@ impl Tree {
         }
 
         false
+    }
+
+    /// Resolves a single internal entry into a user value, handling tombstones,
+    /// range tombstone suppression, and merge operand resolution.
+    fn resolve_entry(
+        super_version: &SuperVersion,
+        key: &[u8],
+        entry: Option<InternalValue>,
+        seqno: SeqNo,
+        merge_operator: Option<&Arc<dyn crate::merge_operator::MergeOperator>>,
+        comparator: &dyn crate::comparator::UserComparator,
+    ) -> crate::Result<Option<UserValue>> {
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+
+        let Some(entry) = ignore_tombstone_value(entry) else {
+            return Ok(None);
+        };
+
+        if Self::is_suppressed_by_range_tombstones(
+            super_version,
+            key,
+            entry.key.seqno,
+            seqno,
+            comparator,
+        ) {
+            return Ok(None);
+        }
+
+        if entry.key.value_type == ValueType::MergeOperand
+            && let Some(merge_op) = merge_operator
+        {
+            return Self::resolve_merge_via_pipeline(
+                super_version.clone(),
+                key,
+                seqno,
+                Arc::clone(merge_op),
+            );
+        }
+
+        Ok(Some(entry.value))
+    }
+
+    /// Batch-queries tables for multiple keys in sorted order.
+    ///
+    /// `remaining_sorted` contains indices into `keys` for keys not yet found,
+    /// in comparator-sorted order. For each level, keys are checked against
+    /// tables with pre-computed bloom hashes, enabling sequential I/O within
+    /// each SST and batch bloom filter checks.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indices come from 0..n range and are always within keys/key_hashes/results bounds"
+    )]
+    fn batch_get_from_tables<K: AsRef<[u8]>>(
+        version: &Version,
+        keys: &[K],
+        key_hashes: &[u64],
+        remaining_sorted: &[usize],
+        seqno: SeqNo,
+        comparator: &dyn crate::comparator::UserComparator,
+        results: &mut [Option<InternalValue>],
+    ) -> crate::Result<()> {
+        // Track which keys still need to be found
+        let mut still_remaining: Vec<usize> = remaining_sorted.to_vec();
+
+        for (level_idx, level) in version.iter_levels().enumerate() {
+            if still_remaining.is_empty() {
+                break;
+            }
+
+            if level_idx == 0 {
+                // L0: must check ALL runs, keep highest seqno per key
+                for run in level.iter() {
+                    for &idx in &still_remaining {
+                        let key = keys[idx].as_ref();
+                        if let Some(table) = run.get_for_key_cmp(key, comparator)
+                            && let Some(item) = table.get(key, seqno, key_hashes[idx])?
+                        {
+                            match &results[idx] {
+                                Some(current) if current.key.seqno >= item.key.seqno => {}
+                                _ => {
+                                    results[idx] = Some(item);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Remove found keys (both values and tombstones)
+                still_remaining.retain(|&idx| results[idx].is_none());
+            } else {
+                // L1+: one disjoint run per level, keys are sorted, so we can process
+                // them sequentially against the sorted run.
+                for run in level.iter() {
+                    let mut new_remaining = Vec::with_capacity(still_remaining.len());
+                    for &idx in &still_remaining {
+                        let key = keys[idx].as_ref();
+                        if let Some(table) = run.get_for_key_cmp(key, comparator)
+                            && let Some(item) = table.get(key, seqno, key_hashes[idx])?
+                        {
+                            results[idx] = Some(item);
+                        } else {
+                            new_remaining.push(idx);
+                        }
+                    }
+                    still_remaining = new_remaining;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn get_internal_entry_from_tables(
@@ -1345,6 +1720,24 @@ impl Tree {
             .latest_version()
             .active_memtable
             .insert(value)
+    }
+
+    /// Adds multiple items to the active memtable in bulk.
+    ///
+    /// Acquires the version-history lock once and delegates to
+    /// [`Memtable::insert_batch`] for batch size accounting.
+    ///
+    /// Returns the total bytes added and new size of the memtable.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn append_batch(&self, items: Vec<InternalValue>) -> (u64, u64) {
+        #[expect(clippy::expect_used, reason = "lock is expected to not be poisoned")]
+        self.version_history
+            .read()
+            .expect("lock is poisoned")
+            .latest_version()
+            .active_memtable
+            .insert_batch(items)
     }
 
     /// Recovers previous state, by loading the level manifest, tables and blob files.
