@@ -106,8 +106,10 @@ impl SuperVersions {
                 );
 
                 let path = folder.join(format!("v{}", head.version.id()));
-                if fs.exists(&path)? {
-                    fs.remove_file(&path)?;
+                match fs.remove_file(&path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
                 }
 
                 self.versions.pop_front();
@@ -223,7 +225,7 @@ impl SuperVersions {
 mod tests {
     use super::*;
     use crate::comparator::default_comparator;
-    use crate::fs::StdFs;
+    use crate::fs::MemFs;
     use test_log::test;
 
     fn new_memtable(id: u64) -> Memtable {
@@ -260,7 +262,7 @@ mod tests {
             },
         ]);
 
-        history.maintenance(Path::new("."), 0, &StdFs)?;
+        history.maintenance(Path::new("."), 0, &MemFs::new())?;
 
         assert_eq!(history.free_list_len(), 2);
 
@@ -290,7 +292,7 @@ mod tests {
             },
         ]);
 
-        history.maintenance(Path::new("."), 3, &StdFs)?;
+        history.maintenance(Path::new("."), 3, &MemFs::new())?;
 
         assert_eq!(history.len(), 1);
 
@@ -326,7 +328,7 @@ mod tests {
             },
         ]);
 
-        history.maintenance(Path::new("."), 3, &StdFs)?;
+        history.maintenance(Path::new("."), 3, &MemFs::new())?;
 
         assert_eq!(history.len(), 2);
 
@@ -350,7 +352,7 @@ mod tests {
             },
         ]);
 
-        history.maintenance(Path::new("."), 3, &StdFs)?;
+        history.maintenance(Path::new("."), 3, &MemFs::new())?;
 
         assert_eq!(history.len(), 2);
 
@@ -374,7 +376,7 @@ mod tests {
             },
         ]);
 
-        history.maintenance(Path::new("."), 3, &StdFs)?;
+        history.maintenance(Path::new("."), 3, &MemFs::new())?;
 
         assert_eq!(history.len(), 1);
 

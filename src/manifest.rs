@@ -271,12 +271,13 @@ mod tests {
         use crate::fs::MemFs;
 
         let fs = MemFs::new();
-        let path = std::path::Path::new("/memfs/manifest_default");
-        fs.create_dir_all(path.parent().unwrap())?;
+        let dir = std::path::Path::new("/memfs");
+        fs.create_dir_all(dir)?;
+        let path = dir.join("manifest_default");
 
-        write_test_manifest(path, None, &fs)?;
+        write_test_manifest(&path, None, &fs)?;
 
-        let manifest = decode_manifest(path, &fs)?;
+        let manifest = decode_manifest(&path, &fs)?;
         assert_eq!(manifest.comparator_name, "default");
         assert_eq!(manifest.level_count, 7);
         assert!(matches!(manifest.version, FormatVersion::V4));
@@ -289,12 +290,13 @@ mod tests {
         use crate::fs::MemFs;
 
         let fs = MemFs::new();
-        let path = std::path::Path::new("/memfs/manifest_custom");
-        fs.create_dir_all(path.parent().unwrap())?;
+        let dir = std::path::Path::new("/memfs");
+        fs.create_dir_all(dir)?;
+        let path = dir.join("manifest_custom");
 
-        write_test_manifest(path, Some("u64-big-endian"), &fs)?;
+        write_test_manifest(&path, Some("u64-big-endian"), &fs)?;
 
-        let manifest = decode_manifest(path, &fs)?;
+        let manifest = decode_manifest(&path, &fs)?;
         assert_eq!(manifest.comparator_name, "u64-big-endian");
         Ok(())
     }
