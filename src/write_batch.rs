@@ -37,7 +37,7 @@ enum WriteBatchEntry {
     Merge { key: UserKey, value: UserValue },
 }
 
-/// Batch of write operations applied atomically with a shared seqno.
+/// Batch of write operations applied with a shared seqno.
 ///
 /// # Examples
 ///
