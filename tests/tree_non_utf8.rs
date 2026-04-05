@@ -19,12 +19,12 @@ fn is_filename_rejected(err: &std::io::Error) -> bool {
 /// `Fs::read_dir` returns `InvalidData` — this test locks that behavior.
 #[cfg(unix)]
 #[test]
-fn tree_reopen_rejects_non_utf8_filename_in_data_dir() {
+fn tree_reopen_rejects_non_utf8_filename_in_data_dir() -> lsm_tree::Result<()> {
     use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir()?;
     let path = dir.path().join("tree");
 
     // Phase 1: create a real tree with flushed data so recovery path is taken on reopen.
@@ -34,11 +34,10 @@ fn tree_reopen_rejects_non_utf8_filename_in_data_dir() {
             SequenceNumberCounter::default(),
             SequenceNumberCounter::default(),
         )
-        .open()
-        .unwrap();
+        .open()?;
 
         tree.insert("k", "v", 0);
-        tree.flush_active_memtable(0).unwrap();
+        tree.flush_active_memtable(0)?;
     }
 
     // Phase 2: inject a file with invalid UTF-8 bytes in its name.
@@ -48,7 +47,7 @@ fn tree_reopen_rejects_non_utf8_filename_in_data_dir() {
         Ok(()) => {}
         Err(err) if is_filename_rejected(&err) => {
             // Filesystem rejected the non-UTF-8 filename — skip gracefully.
-            return;
+            return Ok(());
         }
         Err(err) => panic!("failed to create non-UTF-8 filename test fixture: {err}"),
     }
@@ -76,4 +75,6 @@ fn tree_reopen_rejects_non_utf8_filename_in_data_dir() {
         }
         other => panic!("expected Io(InvalidData), got: {other:?}"),
     }
+
+    Ok(())
 }
