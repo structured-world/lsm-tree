@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775479618109,
+  "lastUpdate": 1775486882421,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -5382,6 +5382,84 @@ window.BENCHMARK_DATA = {
             "value": 291324.2625736475,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 453648 ops/sec | factor: 0.642 | P50: 2.0us | P99: 5.9us | P99.9: 13.5us\nthreads: 1 | elapsed: 0.44s | num: 200000 | iterations: 3 | runner: seq_wr=221559 rand_rd=707347 cpu=108 composite=35815.4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ee6c7c84a2c6bc2ba61b1a6c959d4cb799648b6",
+          "message": "perf(compression): use numeric zstd levels in pure Rust backend (#226)\n\n## Summary\n\n- Wire `level` parameter through to `CompressionLevel::from_level()` in\nthe `zstd-pure` backend instead of hardcoding `Fastest`\n- Remove outdated \"Fastest only\" limitation from module docs and README\n- Fix pre-existing `dead_code` warning on `BloomResult::has_filter`\n(metrics-only field) with `cfg_attr(not(feature = \"metrics\"),\nexpect(dead_code))`\n\n## Context\n\nstructured-zstd 0.0.7 (already pinned in Cargo.toml) supports full\ncompression levels 1–22 via `CompressionLevel::from_level(i32)`. The\npure Rust backend was still ignoring the caller's level and hardcoding\n`Fastest` from when numeric levels weren't available.\n\n## Test plan\n\n- [x] `cargo clippy --all-features --all-targets -- -D warnings` — clean\n- [x] `cargo nextest run --features zstd-pure` — 1155 passed, 0 failed\n\nCloses #216\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai\n-->\n\n## Summary by CodeRabbit\n\n* **Bug Fixes**\n* Fixed compression level handling in zstd-pure backend—requested\ncompression levels are now properly applied instead of always using the\nfastest level.\n\n* **Documentation**\n* Updated documentation to clarify that zstd-pure supports compression\nlevels 1–22 without C dependencies, and noted that dictionary\ncompression is not yet supported.\n\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+          "timestamp": "2026-04-06T17:46:35+03:00",
+          "tree_id": "3ccfeb2207c705d03c9cf92b7c88a00de2d20026",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/7ee6c7c84a2c6bc2ba61b1a6c959d4cb799648b6"
+        },
+        "date": 1775486880303,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 863996.8053267363,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1964016 ops/sec | factor: 0.440 | P50: 0.4us | P99: 1.7us | P99.9: 3.6us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          },
+          {
+            "name": "fillrandom",
+            "value": 473282.4000628233,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1075854 ops/sec | factor: 0.440 | P50: 0.8us | P99: 2.4us | P99.9: 5.5us\nthreads: 1 | elapsed: 0.19s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          },
+          {
+            "name": "readrandom",
+            "value": 236559.3180850862,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 537741 ops/sec | factor: 0.440 | P50: 1.7us | P99: 4.6us | P99.9: 9.6us\nthreads: 1 | elapsed: 0.37s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          },
+          {
+            "name": "readseq",
+            "value": 1446035.9839884874,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 3287092 ops/sec | factor: 0.440 | P50: 0.2us | P99: 3.1us | P99.9: 5.7us\nthreads: 1 | elapsed: 0.06s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          },
+          {
+            "name": "seekrandom",
+            "value": 174784.9403220498,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 397317 ops/sec | factor: 0.440 | P50: 2.2us | P99: 5.2us | P99.9: 9.6us\nthreads: 1 | elapsed: 0.50s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          },
+          {
+            "name": "prefixscan",
+            "value": 95286.8825707479,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 216604 ops/sec | factor: 0.440 | P50: 4.3us | P99: 5.3us | P99.9: 10.9us\nthreads: 1 | elapsed: 0.92s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          },
+          {
+            "name": "overwrite",
+            "value": 491298.80878158857,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1116808 ops/sec | factor: 0.440 | P50: 0.7us | P99: 2.3us | P99.9: 5.0us\nthreads: 1 | elapsed: 0.18s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          },
+          {
+            "name": "mergerandom",
+            "value": 334166.14787585416,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 759618 ops/sec | factor: 0.440 | P50: 0.4us | P99: 1.5us | P99.9: 2.5us\nthreads: 1 | elapsed: 0.26s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 209384.02516292565,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 475966 ops/sec | factor: 0.440 | P50: 1.9us | P99: 4.5us | P99.9: 9.9us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
           }
         ]
       }
