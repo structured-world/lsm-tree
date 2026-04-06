@@ -112,10 +112,10 @@ pub enum Error {
     ///
     /// Mixed ops at the same logical version are rejected because the
     /// memtable/skiplist ordering ties on `(user_key, seqno)` and does not
-    /// include `value_type` as a tie-breaker. That would otherwise make the
-    /// outcome ambiguous and could silently shadow/overwrite one operation
-    /// with the other (effectively tie-break-dependent "last write wins"
-    /// semantics).
+    /// include `value_type` as a tie-breaker. That would otherwise make
+    /// equal-key entries with different operation types ambiguous to later
+    /// reads and merges, yielding tie-break-dependent "last write wins"
+    /// semantics.
     MixedOperationBatch,
 
     /// Route-compatibility mismatch on reopen.

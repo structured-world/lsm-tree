@@ -143,11 +143,13 @@ impl WriteBatch {
     ///
     /// Returns [`Error::MixedOperationBatch`](crate::Error::MixedOperationBatch)
     /// if any user key appears with differing operation types (e.g. insert + remove),
-    /// which would cause silent data loss in the skiplist.
+    /// which would make equal-key entries with different operation types ambiguous
+    /// to later reads and merges.
     #[doc(hidden)]
     pub(crate) fn materialize(self, seqno: crate::SeqNo) -> crate::Result<Vec<InternalValue>> {
-        // Reject mixed-op duplicates unconditionally — in release builds these
-        // cause silent data loss (one entry overwrites the other in the skiplist).
+        // Reject mixed-op duplicates unconditionally — `InternalKey` ordering
+        // ties on `(user_key, seqno)` without `value_type` as tie-breaker,
+        // making the read/compaction outcome ambiguous.
         {
             let mut seen: std::collections::HashMap<&[u8], ValueType, rustc_hash::FxBuildHasher> =
                 std::collections::HashMap::with_capacity_and_hasher(
