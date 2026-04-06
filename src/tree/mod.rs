@@ -1532,11 +1532,15 @@ impl Tree {
                     return Ok(entry.filter_tombstone());
                 }
             } else {
+                // L1+ runs have non-overlapping key ranges. Once we find the
+                // covering run (get_for_key_cmp returns Some), no other run in
+                // this level can contain the key — break regardless of hit/miss.
                 for run in level.iter() {
-                    if let Some(table) = run.get_for_key_cmp(key, comparator)
-                        && let Some(item) = T::lookup(table, key, seqno, key_hash)?
-                    {
-                        return Ok(item.filter_tombstone());
+                    if let Some(table) = run.get_for_key_cmp(key, comparator) {
+                        if let Some(item) = T::lookup(table, key, seqno, key_hash)? {
+                            return Ok(item.filter_tombstone());
+                        }
+                        break;
                     }
                 }
             }
