@@ -22,8 +22,8 @@ use std::sync::Arc;
 /// This trait abstracts the zstd implementation behind a compile-time
 /// selected backend. The C FFI backend (`zstd` feature) provides full
 /// compression levels 1–22 and dictionary support. The pure Rust backend
-/// (`zstd-pure` feature) provides portable compression with no C
-/// dependencies.
+/// (`zstd-pure` feature) provides compression levels 1–22 with no C
+/// dependencies (dictionary compression not yet supported).
 ///
 /// Both backends produce RFC 8878 compliant zstd frames, so data
 /// compressed by one can be decompressed by the other.
