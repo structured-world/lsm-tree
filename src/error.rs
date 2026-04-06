@@ -108,8 +108,11 @@ pub enum Error {
     },
 
     /// A [`WriteBatch`](crate::WriteBatch) contains mixed operation types
-    /// (e.g. insert + remove) for the same user key, which would cause silent
-    /// data loss in the skiplist.
+    /// (e.g. insert + remove) for the same user key.
+    ///
+    /// Mixed ops at the same logical version are rejected because they have
+    /// ambiguous, tie-break-dependent semantics in the memtable/skiplist and
+    /// are easy to misuse; this is not a duplicate-key data-loss issue.
     MixedOperationBatch,
 
     /// Route-compatibility mismatch on reopen.
