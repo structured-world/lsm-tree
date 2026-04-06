@@ -32,11 +32,14 @@ impl CompressionProvider for ZstdFfiProvider {
 
     fn decompress_with_dict(
         data: &[u8],
-        dict_raw: &[u8],
+        dict: &crate::compression::ZstdDictionary,
         capacity: usize,
     ) -> crate::Result<Vec<u8>> {
-        let mut decompressor = zstd::bulk::Decompressor::with_dictionary(dict_raw)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+        // `dict.decoder_dict()` returns a cached `ZSTD_DDict`, avoiding
+        // `ZSTD_createDDict` (which re-parses the raw bytes) on every call.
+        let mut decompressor =
+            zstd::bulk::Decompressor::with_prepared_dictionary(dict.decoder_dict())
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
         decompressor
             .decompress(data, capacity)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e)))

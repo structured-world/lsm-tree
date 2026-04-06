@@ -39,9 +39,14 @@ pub trait CompressionProvider {
     fn compress_with_dict(data: &[u8], level: i32, dict_raw: &[u8]) -> crate::Result<Vec<u8>>;
 
     /// Decompress a zstd frame that was compressed with a dictionary.
+    ///
+    /// `dict` exposes the raw dictionary bytes **and** a lazily-initialized
+    /// pre-compiled form (C FFI backend: `ZSTD_DDict`; pure Rust backend:
+    /// cached `FrameDecoder` in thread-local storage). Backends must use the
+    /// prepared form to avoid re-parsing the dictionary on every call.
     fn decompress_with_dict(
         data: &[u8],
-        dict_raw: &[u8],
+        dict: &ZstdDictionary,
         capacity: usize,
     ) -> crate::Result<Vec<u8>>;
 }
@@ -76,10 +81,33 @@ pub type ZstdBackend = zstd_pure::ZstdPureProvider;
 /// let dict = ZstdDictionary::new(samples);
 /// ```
 #[cfg(zstd_any)]
-#[derive(Clone)]
 pub struct ZstdDictionary {
     id: u32,
     raw: Arc<[u8]>,
+
+    /// Pre-compiled decompressor dictionary, lazily initialized on first use.
+    ///
+    /// Wrapped in `Arc<OnceLock<…>>` so all clones share the same compiled
+    /// instance — `ZSTD_DDict` is created exactly once per unique dictionary,
+    /// regardless of how many table readers hold a reference to it.
+    ///
+    /// Available only with the C FFI backend (`zstd` feature). The pure Rust
+    /// backend caches an equivalent `FrameDecoder` in thread-local storage
+    /// inside `decompress_with_dict` instead.
+    #[cfg(feature = "zstd")]
+    prepared: Arc<std::sync::OnceLock<zstd::dict::DecoderDictionary<'static>>>,
+}
+
+#[cfg(zstd_any)]
+impl Clone for ZstdDictionary {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            raw: Arc::clone(&self.raw),
+            #[cfg(feature = "zstd")]
+            prepared: Arc::clone(&self.prepared),
+        }
+    }
 }
 
 #[cfg(zstd_any)]
@@ -94,7 +122,26 @@ impl ZstdDictionary {
         Self {
             id: compute_dict_id(raw),
             raw: Arc::from(raw),
+            #[cfg(feature = "zstd")]
+            prepared: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Returns the lazily-initialized pre-compiled decompressor dictionary.
+    ///
+    /// On first call this copies the raw bytes into a `ZSTD_DDict` (C
+    /// library's opaque pre-parsed form) and caches the result inside this
+    /// `ZstdDictionary`. Subsequent calls — from any thread — return the
+    /// cached reference with no further allocation or parsing.
+    ///
+    /// Using this together with
+    /// [`zstd::bulk::Decompressor::with_prepared_dictionary`] eliminates the
+    /// per-block `ZSTD_createDDict` call that was previously paid on every
+    /// `decompress_with_dict` invocation.
+    #[cfg(feature = "zstd")]
+    pub(crate) fn decoder_dict(&self) -> &zstd::dict::DecoderDictionary<'static> {
+        self.prepared
+            .get_or_init(|| zstd::dict::DecoderDictionary::copy(&self.raw))
     }
 
     /// Returns the dictionary ID (truncated xxh3 hash of the raw bytes).
@@ -116,7 +163,7 @@ impl std::fmt::Debug for ZstdDictionary {
         f.debug_struct("ZstdDictionary")
             .field("id", &format_args!("{:#010x}", self.id))
             .field("size", &self.raw.len())
-            .finish()
+            .finish_non_exhaustive() // `prepared` cache omitted — implementation detail
     }
 }
 

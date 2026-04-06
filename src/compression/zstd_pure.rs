@@ -85,25 +85,121 @@ impl CompressionProvider for ZstdPureProvider {
 
     fn decompress_with_dict(
         data: &[u8],
-        dict_raw: &[u8],
+        dict: &crate::compression::ZstdDictionary,
         capacity: usize,
     ) -> crate::Result<Vec<u8>> {
-        // NOTE: Dictionary is re-parsed from raw bytes on every call.
-        // The C FFI backend has the same per-call overhead (Decompressor::with_dictionary
-        // also re-initializes). Caching would require adding precompiled dictionary
-        // state to the CompressionProvider trait, which is a Phase 2 optimization.
-        let dict = structured_zstd::decoding::Dictionary::decode_dict(dict_raw)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+        use structured_zstd::decoding::{Dictionary, FrameDecoder};
 
-        // FrameDecoder supports dictionaries (unlike StreamingDecoder).
-        let mut decoder = structured_zstd::decoding::FrameDecoder::new();
-        decoder
-            .add_dict(dict)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
-        decoder
-            .init(data)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+        // Thread-local `FrameDecoder` with the dictionary pre-loaded.
+        //
+        // Parsing a zstd dictionary involves building Huffman and FSE decoding
+        // tables — expensive relative to per-block decompression for the small
+        // 4–64 KiB blocks typical in LSM-trees. Caching the `FrameDecoder`
+        // instance across calls amortises this cost: the dictionary is parsed
+        // exactly once per thread, per distinct dictionary.
+        //
+        // Thread-local storage is appropriate because `FrameDecoder` is not
+        // `Send` and each thread decompresses independently; no mutex is
+        // needed. If the active dictionary changes (e.g. different table),
+        // the decoder is re-initialised transparently.
+        thread_local! {
+            static TLS_DECODER: std::cell::RefCell<Option<(u32, FrameDecoder)>> =
+                const { std::cell::RefCell::new(None) };
+        }
 
-        bounded_read(&mut decoder, capacity)
+        TLS_DECODER.with(|cell| {
+            let mut state = cell.borrow_mut();
+
+            // Re-initialise if this is the first call in this thread or if
+            // the dictionary has changed (different dict_id → different table).
+            if !matches!(&*state, Some((id, _)) if *id == dict.id()) {
+                let parsed = Dictionary::decode_dict(dict.raw())
+                    .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+                let mut decoder = FrameDecoder::new();
+                decoder
+                    .add_dict(parsed)
+                    .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+                *state = Some((dict.id(), decoder));
+            }
+
+            let Some((_, decoder)) = state.as_mut() else {
+                // Unreachable: the branch above always initialises `state`.
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "TLS_DECODER unexpectedly empty after initialisation",
+                )));
+            };
+
+            // `decode_all_to_vec` calls `init(&mut input)` internally — the
+            // mutable borrow advances the slice cursor past the frame header
+            // before block decoding begins, which is the correct usage of
+            // `FrameDecoder`. The dictionary stored in `decoder.dicts` is
+            // reused on every call without re-parsing.
+            let mut output = Vec::with_capacity(capacity);
+            decoder
+                .decode_all_to_vec(data, &mut output)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+
+            Ok(output)
+        })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+mod tests {
+    use super::*;
+    use crate::compression::ZstdDictionary;
+    use test_log::test;
+
+    // Pre-generated test vectors for pure-Rust dict decompression.
+    //
+    // Generated with the `zstd` C library (crate v0.13, `zdict_builder` feature):
+    //   - Training corpus: 100 samples × 32 bytes (cycling pattern 0..4)
+    //   - Plaintext: b"hello world hello world hello world"
+    //
+    // Reproducible with:
+    //   zstd::dict::from_continuous(&training_data, &sizes, 1024)
+    //   zstd::bulk::Compressor::with_dictionary(3, &dict).compress(plaintext)
+    const DICT: &[u8] = &[
+        55, 164, 48, 236, 98, 64, 12, 7, 42, 16, 120, 62, 7, 204, 192, 51, 240, 12, 60, 3, 207,
+        192, 51, 240, 12, 60, 3, 207, 192, 51, 24, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        128, 48, 165, 148, 2, 227, 76, 8, 33, 132, 16, 66, 136, 136, 136, 60, 84, 160, 64, 65, 65,
+        65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65,
+        193, 231, 162, 40, 138, 162, 40, 138, 162, 40, 165, 148, 82, 74, 169, 170, 234, 1, 100,
+        160, 170, 193, 96, 48, 24, 12, 6, 131, 193, 96, 48, 12, 195, 48, 12, 195, 48, 12, 195, 48,
+        198, 24, 99, 140, 153, 29, 1, 0, 0, 0, 4, 0, 0, 0, 8, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2,
+    ];
+
+    const COMPRESSED: &[u8] = &[
+        40, 181, 47, 253, 35, 98, 64, 12, 7, 35, 149, 0, 0, 96, 104, 101, 108, 108, 111, 32, 119,
+        111, 114, 108, 100, 32, 1, 0, 175, 75, 18,
+    ];
+
+    const PLAINTEXT: &[u8] = b"hello world hello world hello world";
+
+    #[test]
+    fn decompress_with_dict_returns_correct_plaintext() {
+        let dict = ZstdDictionary::new(DICT);
+        let result = ZstdPureProvider::decompress_with_dict(COMPRESSED, &dict, PLAINTEXT.len() + 1)
+            .expect("decompression should succeed");
+        assert_eq!(
+            result, PLAINTEXT,
+            "decompressed output must equal the original plaintext"
+        );
+    }
+
+    #[test]
+    fn decompress_with_dict_is_idempotent_across_repeated_calls() {
+        let dict = ZstdDictionary::new(DICT);
+        // Call three times to exercise the TLS caching path (second and third
+        // calls must reuse the cached FrameDecoder without re-parsing the dict).
+        for _ in 0..3 {
+            let result =
+                ZstdPureProvider::decompress_with_dict(COMPRESSED, &dict, PLAINTEXT.len() + 1)
+                    .expect("decompression should succeed on every call");
+            assert_eq!(result, PLAINTEXT);
+        }
     }
 }
