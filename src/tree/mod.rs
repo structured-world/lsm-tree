@@ -1032,7 +1032,7 @@ impl Tree {
     }
 
     /// Like [`Tree::resolve_or_passthrough`], but returns a [`PinnableSlice`]
-    /// that may pin a block cache entry.
+    /// that may keep the decompressed block buffer alive.
     fn resolve_or_passthrough_pinned(
         super_version: &SuperVersion,
         key: &[u8],
