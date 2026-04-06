@@ -9,8 +9,6 @@
 //!
 //! # Limitations
 //!
-//! - Compression uses the `Fastest` level regardless of the requested
-//!   level (higher levels are not yet implemented in structured-zstd).
 //! - Dictionary compression is not yet supported (returns an error).
 //! - Dictionary decompression is supported.
 //! - Decompression throughput is ~2–3.5x slower than the C reference.
@@ -63,12 +61,10 @@ fn bounded_read(reader: &mut impl Read, capacity: usize) -> crate::Result<Vec<u8
 pub struct ZstdPureProvider;
 
 impl CompressionProvider for ZstdPureProvider {
-    fn compress(data: &[u8], _level: i32) -> crate::Result<Vec<u8>> {
-        // structured-zstd currently only supports Fastest level;
-        // higher levels are accepted but silently map to Fastest.
+    fn compress(data: &[u8], level: i32) -> crate::Result<Vec<u8>> {
         let compressed = structured_zstd::encoding::compress_to_vec(
             std::io::Cursor::new(data),
-            structured_zstd::encoding::CompressionLevel::Fastest,
+            structured_zstd::encoding::CompressionLevel::from_level(level),
         );
         Ok(compressed)
     }

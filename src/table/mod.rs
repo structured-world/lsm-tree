@@ -100,6 +100,13 @@ enum BloomResult {
     /// Point read should proceed.
     Proceed {
         /// Whether a filter was present (used for metrics accounting).
+        #[cfg_attr(
+            not(feature = "metrics"),
+            expect(
+                dead_code,
+                reason = "read by BloomResult::has_filter under metrics feature"
+            )
+        )]
         has_filter: bool,
     },
 }
