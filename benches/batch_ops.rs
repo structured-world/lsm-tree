@@ -58,6 +58,18 @@ fn bench_get_pinned(c: &mut Criterion) {
     group.finish();
 }
 
+fn setup_empty_tree() -> (AnyTree, tempfile::TempDir) {
+    let folder = tempfile::tempdir().unwrap();
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()
+    .unwrap();
+    (tree, folder)
+}
+
 fn bench_write_batch(c: &mut Criterion) {
     let mut group = c.benchmark_group("write_batch");
 
@@ -66,17 +78,7 @@ fn bench_write_batch(c: &mut Criterion) {
             BenchmarkId::new("insert", batch_size),
             &batch_size,
             |b, &size| {
-                let folder = tempfile::tempdir().unwrap();
-                let tree = Config::new(
-                    &folder,
-                    SequenceNumberCounter::default(),
-                    SequenceNumberCounter::default(),
-                )
-                .open()
-                .unwrap();
-
-                // Pre-generate fixed keys — reuse across iterations so
-                // memtable doesn't grow unboundedly (overwrites, not appends).
+                let (tree, _folder) = setup_empty_tree();
                 let keys: Vec<String> = (0..size).map(|i| format!("key_{i:04}")).collect();
 
                 b.iter(|| {
@@ -97,15 +99,7 @@ fn bench_write_batch(c: &mut Criterion) {
             BenchmarkId::new("individual_inserts", batch_size),
             &batch_size,
             |b, &size| {
-                let folder = tempfile::tempdir().unwrap();
-                let tree = Config::new(
-                    &folder,
-                    SequenceNumberCounter::default(),
-                    SequenceNumberCounter::default(),
-                )
-                .open()
-                .unwrap();
-
+                let (tree, _folder) = setup_empty_tree();
                 let keys: Vec<String> = (0..size).map(|i| format!("key_{i:04}")).collect();
 
                 b.iter(|| {
