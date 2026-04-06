@@ -490,3 +490,143 @@ fn multi_get_tombstones_on_disk_with_l0() -> lsm_tree::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn multi_get_blob_tree_range_tombstone_suppresses() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_kv_separation(Some(KvSeparationOptions {
+        separation_threshold: 1,
+        ..Default::default()
+    }))
+    .open()?;
+
+    let val_a = b"a".repeat(100);
+    let val_b = b"b".repeat(100);
+    let val_c = b"c".repeat(100);
+    let val_d = b"d".repeat(100);
+
+    tree.insert("a", val_a.as_slice(), 0);
+    tree.insert("b", val_b.as_slice(), 1);
+    tree.insert("c", val_c.as_slice(), 2);
+    tree.insert("d", val_d.as_slice(), 3);
+    tree.flush_active_memtable(0)?;
+
+    // RT suppresses [b, d)
+    tree.remove_range("b", "d", 4);
+
+    // 4 keys → batch path (>2)
+    let results = tree.multi_get(["a", "b", "c", "d"], 5)?;
+    assert_eq!(results[0].as_deref(), Some(val_a.as_slice()));
+    assert_eq!(results[1], None, "b suppressed by RT");
+    assert_eq!(results[2], None, "c suppressed by RT");
+    assert_eq!(
+        results[3].as_deref(),
+        Some(val_d.as_slice()),
+        "d at exclusive end"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn multi_get_blob_tree_merge_operands() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_kv_separation(Some(KvSeparationOptions {
+        separation_threshold: 100,
+        ..Default::default()
+    }))
+    .with_merge_operator(Some(Arc::new(ConcatMerge)))
+    .open()?;
+
+    // Base insert (4 bytes) stays inline (< 100 threshold).
+    // Merge operands are always inline in BlobTree.
+    // k2 value (200 bytes) goes to blob.
+    tree.insert("k1", "BASE", 0);
+    tree.merge("k1", "_EXT", 1);
+    tree.insert("k2", b"x".repeat(200).as_slice(), 2);
+    tree.flush_active_memtable(0)?;
+
+    // 3 keys → batch path; k1 has merge operand on disk
+    let results = tree.multi_get(["k1", "k2", "k3"], SeqNo::MAX)?;
+
+    assert_eq!(results[0].as_deref(), Some(b"BASE_EXT".as_slice()));
+    assert_eq!(results[1].as_deref(), Some(b"x".repeat(200).as_slice()));
+    assert_eq!(results[2], None);
+
+    Ok(())
+}
+
+#[test]
+fn multi_get_blob_tree_memtable_hits_skip_sst() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_kv_separation(Some(KvSeparationOptions {
+        separation_threshold: 1,
+        ..Default::default()
+    }))
+    .open()?;
+
+    // Some keys on disk
+    tree.insert("a", b"disk_a".repeat(50).as_slice(), 0);
+    tree.insert("b", b"disk_b".repeat(50).as_slice(), 1);
+    tree.flush_active_memtable(0)?;
+
+    // Some keys in memtable (shadow disk)
+    tree.insert("a", b"mem_a".repeat(50).as_slice(), 2);
+    tree.insert("c", b"mem_c".repeat(50).as_slice(), 3);
+
+    // 4 keys → batch path; "a" from memtable, "b" from disk, "c" from memtable, "d" missing
+    let results = tree.multi_get(["a", "b", "c", "d"], SeqNo::MAX)?;
+    assert_eq!(results[0].as_deref(), Some(b"mem_a".repeat(50).as_slice()));
+    assert_eq!(results[1].as_deref(), Some(b"disk_b".repeat(50).as_slice()));
+    assert_eq!(results[2].as_deref(), Some(b"mem_c".repeat(50).as_slice()));
+    assert_eq!(results[3], None);
+
+    Ok(())
+}
+
+#[test]
+fn multi_get_blob_tree_merge_without_operator_returns_raw() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+
+    let tree = Config::new(
+        &folder,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .with_kv_separation(Some(KvSeparationOptions {
+        separation_threshold: 1,
+        ..Default::default()
+    }))
+    .open()?;
+
+    // No merge operator configured — merge operand should return raw value
+    tree.insert("k1", b"x".repeat(100).as_slice(), 0);
+    tree.merge("k2", "raw_operand", 1);
+    tree.insert("k3", b"y".repeat(100).as_slice(), 2);
+    tree.flush_active_memtable(0)?;
+
+    let results = tree.multi_get(["k1", "k2", "k3"], SeqNo::MAX)?;
+    assert_eq!(results[0].as_deref(), Some(b"x".repeat(100).as_slice()));
+    assert_eq!(results[1].as_deref(), Some(b"raw_operand".as_slice()));
+    assert_eq!(results[2].as_deref(), Some(b"y".repeat(100).as_slice()));
+
+    Ok(())
+}
