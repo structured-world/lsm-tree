@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775486882421,
+  "lastUpdate": 1775490445575,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -5460,6 +5460,84 @@ window.BENCHMARK_DATA = {
             "value": 209384.02516292565,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 475966 ops/sec | factor: 0.440 | P50: 1.9us | P99: 4.5us | P99.9: 9.9us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=380158 rand_rd=1146132 cpu=117 composite=52283.0"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "255865126+sw-release-bot[bot]@users.noreply.github.com",
+            "name": "sw-release-bot[bot]",
+            "username": "sw-release-bot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e0d4113bfdaa724003aff0a22b6e923e19757cb3",
+          "message": "chore: release v4.3.1 (#225)\n\n## 🤖 New release\n\n* `coordinode-lsm-tree`: 4.3.0 -> 4.3.1\n\n<details><summary><i><b>Changelog</b></i></summary><p>\n\n<blockquote>\n\n##\n[4.3.1](https://github.com/structured-world/coordinode-lsm-tree/compare/v4.3.0...v4.3.1)\n- 2026-04-06\n\n### Performance\n\n- *(compression)* use numeric zstd levels in pure Rust backend\n([#226](https://github.com/structured-world/coordinode-lsm-tree/pull/226))\n- batch multi_get + PinnableSlice + WriteBatch\n([#214](https://github.com/structured-world/coordinode-lsm-tree/pull/214))\n</blockquote>\n\n\n</p></details>\n\n---\nThis PR was generated with\n[release-plz](https://github.com/release-plz/release-plz/).\n\nCo-authored-by: sw-release-bot[bot] <255865126+sw-release-bot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-04-06T18:45:59+03:00",
+          "tree_id": "0e64f04d488c9ad5eb97251a94d5182124bb365d",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/e0d4113bfdaa724003aff0a22b6e923e19757cb3"
+        },
+        "date": 1775490443421,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1167267.3815699755,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2073184 ops/sec | factor: 0.563 | P50: 0.3us | P99: 1.9us | P99.9: 4.9us\nthreads: 1 | elapsed: 0.10s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 625567.1933690886,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1111070 ops/sec | factor: 0.563 | P50: 0.7us | P99: 2.6us | P99.9: 6.3us\nthreads: 1 | elapsed: 0.18s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
+          },
+          {
+            "name": "readrandom",
+            "value": 269355.70040009846,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 478403 ops/sec | factor: 0.563 | P50: 1.9us | P99: 5.4us | P99.9: 13.9us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
+          },
+          {
+            "name": "readseq",
+            "value": 1374811.324325964,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2441803 ops/sec | factor: 0.563 | P50: 0.3us | P99: 3.8us | P99.9: 8.4us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 195446.29516946906,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 347132 ops/sec | factor: 0.563 | P50: 2.5us | P99: 6.1us | P99.9: 14.8us\nthreads: 1 | elapsed: 0.58s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 102410.08907083406,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 181891 ops/sec | factor: 0.563 | P50: 5.1us | P99: 7.9us | P99.9: 18.5us\nthreads: 1 | elapsed: 1.10s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
+          },
+          {
+            "name": "overwrite",
+            "value": 662471.048279366,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1176615 ops/sec | factor: 0.563 | P50: 0.7us | P99: 2.6us | P99.9: 6.0us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 410763.02536520595,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 729556 ops/sec | factor: 0.563 | P50: 0.3us | P99: 0.5us | P99.9: 3.0us\nthreads: 1 | elapsed: 0.27s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 237371.20820738518,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 421595 ops/sec | factor: 0.563 | P50: 2.2us | P99: 4.5us | P99.9: 14.8us\nthreads: 1 | elapsed: 0.47s | num: 200000 | iterations: 3 | runner: seq_wr=227551 rand_rd=878991 cpu=123 composite=40850.3"
           }
         ]
       }
