@@ -860,18 +860,20 @@ impl AbstractTree for Tree {
         if !remaining.is_empty() {
             remaining.sort_by(|&a, &b| comparator.compare(keys[a].as_ref(), keys[b].as_ref()));
 
-            // Hash only keys that actually reach SST lookup (not all N keys).
-            let mut key_hashes = vec![0u64; n];
-            for &idx in &remaining {
-                key_hashes[idx] =
-                    crate::table::filter::standard_bloom::Builder::get_hash(keys[idx].as_ref());
-            }
+            // Build (idx, hash) pairs only for miss keys — O(remaining) not O(n).
+            let miss_keys: Vec<(usize, u64)> = remaining
+                .iter()
+                .map(|&idx| {
+                    let hash =
+                        crate::table::filter::standard_bloom::Builder::get_hash(keys[idx].as_ref());
+                    (idx, hash)
+                })
+                .collect();
 
             Self::batch_get_from_tables(
                 &super_version.version,
                 &keys,
-                &key_hashes,
-                &remaining,
+                &miss_keys,
                 seqno,
                 comparator,
                 &mut internal_entries,
@@ -1396,18 +1398,15 @@ impl Tree {
     pub(crate) fn batch_get_from_tables<K: AsRef<[u8]>>(
         version: &Version,
         keys: &[K],
-        key_hashes: &[u64],
-        remaining_sorted: &[usize],
+        miss_keys: &[(usize, u64)],
         seqno: SeqNo,
         comparator: &dyn crate::comparator::UserComparator,
         results: &mut [Option<InternalValue>],
     ) -> crate::Result<()> {
-        debug_assert_eq!(keys.len(), key_hashes.len());
-        debug_assert_eq!(keys.len(), results.len());
-        debug_assert!(remaining_sorted.iter().all(|&i| i < keys.len()));
+        debug_assert!(miss_keys.iter().all(|&(i, _)| i < keys.len()));
 
-        // Track which keys still need to be found
-        let mut still_remaining: Vec<usize> = remaining_sorted.to_vec();
+        // Track which (idx, hash) pairs still need to be found
+        let mut still_remaining: Vec<(usize, u64)> = miss_keys.to_vec();
 
         for (level_idx, level) in version.iter_levels().enumerate() {
             if still_remaining.is_empty() {
@@ -1418,18 +1417,17 @@ impl Tree {
                 // L0: must check ALL runs, keep highest seqno per key.
                 // Track keys at the seqno ceiling (seqno + 1 == read_seqno) —
                 // no other L0 run can beat them, so skip in subsequent runs.
-                // Bitmap: idx is always in 0..keys.len(), dense enough for Vec<bool>
-                // instead of HashSet to avoid hashing overhead in the L0 inner loop.
+                // Bitmap: idx is always in 0..keys.len(), dense enough for Vec<bool>.
                 let mut at_ceiling = vec![false; keys.len()];
 
                 for run in level.iter() {
-                    for &idx in &still_remaining {
+                    for &(idx, hash) in &still_remaining {
                         if at_ceiling[idx] {
                             continue;
                         }
                         let key = keys[idx].as_ref();
                         if let Some(table) = run.get_for_key_cmp(key, comparator)
-                            && let Some(item) = table.get(key, seqno, key_hashes[idx])?
+                            && let Some(item) = table.get(key, seqno, hash)?
                         {
                             match &results[idx] {
                                 Some(current) if current.key.seqno >= item.key.seqno => {}
@@ -1445,20 +1443,20 @@ impl Tree {
                 }
 
                 // Remove found keys (both values and tombstones)
-                still_remaining.retain(|&idx| results[idx].is_none());
+                still_remaining.retain(|&(idx, _)| results[idx].is_none());
             } else {
                 // L1+: one disjoint run per level, keys are sorted, so we can process
                 // them sequentially against the sorted run.
                 for run in level.iter() {
                     let mut new_remaining = Vec::with_capacity(still_remaining.len());
-                    for &idx in &still_remaining {
+                    for &(idx, hash) in &still_remaining {
                         let key = keys[idx].as_ref();
                         if let Some(table) = run.get_for_key_cmp(key, comparator)
-                            && let Some(item) = table.get(key, seqno, key_hashes[idx])?
+                            && let Some(item) = table.get(key, seqno, hash)?
                         {
                             results[idx] = Some(item);
                         } else {
-                            new_remaining.push(idx);
+                            new_remaining.push((idx, hash));
                         }
                     }
                     still_remaining = new_remaining;

@@ -734,17 +734,19 @@ impl AbstractTree for BlobTree {
         if !remaining.is_empty() {
             remaining.sort_by(|&a, &b| comparator.compare(keys[a].as_ref(), keys[b].as_ref()));
 
-            let mut key_hashes = vec![0u64; n];
-            for &idx in &remaining {
-                key_hashes[idx] =
-                    crate::table::filter::standard_bloom::Builder::get_hash(keys[idx].as_ref());
-            }
+            let miss_keys: Vec<(usize, u64)> = remaining
+                .iter()
+                .map(|&idx| {
+                    let hash =
+                        crate::table::filter::standard_bloom::Builder::get_hash(keys[idx].as_ref());
+                    (idx, hash)
+                })
+                .collect();
 
             crate::Tree::batch_get_from_tables(
                 &super_version.version,
                 &keys,
-                &key_hashes,
-                &remaining,
+                &miss_keys,
                 seqno,
                 comparator,
                 &mut internal_entries,
