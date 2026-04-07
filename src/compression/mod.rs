@@ -22,8 +22,8 @@ use std::sync::Arc;
 /// This trait abstracts the zstd implementation behind a compile-time
 /// selected backend. The C FFI backend (`zstd` feature) provides full
 /// compression levels 1–22 and dictionary support. The pure Rust backend
-/// (`zstd-pure` feature) provides compression levels 1–22 with no C
-/// dependencies (dictionary compression not yet supported).
+/// (`zstd-pure` feature) provides compression levels 1–22 and dictionary
+/// support with no C dependencies.
 ///
 /// Both backends produce RFC 8878 compliant zstd frames, so data
 /// compressed by one can be decompressed by the other.
@@ -35,7 +35,12 @@ pub trait CompressionProvider {
     /// Decompress a zstd frame, pre-allocating `capacity` bytes.
     fn decompress(data: &[u8], capacity: usize) -> crate::Result<Vec<u8>>;
 
-    /// Compress `data` using a pre-trained dictionary.
+    /// Compress `data` using a pre-trained, finalized zstd dictionary.
+    ///
+    /// `dict_raw` must be a finalized zstd dictionary (magic `0x37A430EC` header,
+    /// entropy tables, content) — the same format produced by `zstd --train` and
+    /// by [`ZstdDictionary::raw`]. Both the C FFI backend and the pure Rust backend
+    /// support this format.
     fn compress_with_dict(data: &[u8], level: i32, dict_raw: &[u8]) -> crate::Result<Vec<u8>>;
 
     /// Decompress a zstd frame that was compressed with a dictionary.

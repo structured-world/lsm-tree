@@ -262,3 +262,182 @@ mod zstd_dict {
         Ok(())
     }
 }
+
+// Integration tests for dictionary compression using the pure Rust zstd backend
+// (`structured-zstd`). These mirror the `zstd_dict` tests above to confirm that
+// `compress_with_dict` in the pure backend produces RFC 8878-compliant frames that
+// round-trip correctly through the full Tree API.
+#[cfg(all(feature = "zstd-pure", not(feature = "zstd")))]
+mod zstd_pure_dict {
+    use lsm_tree::{
+        AbstractTree, CompressionType, Config, Guard, SequenceNumberCounter, ZstdDictionary,
+        config::CompressionPolicy,
+    };
+    use std::sync::Arc;
+
+    /// Build a synthetic dictionary from repetitive sample data.
+    ///
+    /// Uses a training corpus similar to the C-backend tests so the dictionary
+    /// is meaningful (repeated key/value patterns) and exercises the entropy
+    /// table seeding path in `FrameCompressor::set_dictionary_from_bytes`.
+    fn make_test_dictionary() -> ZstdDictionary {
+        let mut samples = Vec::new();
+        for i in 0u32..500 {
+            let key = format!("key-{i:05}");
+            let val = format!("value-{i:05}-padding-to-make-it-longer");
+            samples.extend_from_slice(key.as_bytes());
+            samples.extend_from_slice(val.as_bytes());
+        }
+        ZstdDictionary::new(&samples)
+    }
+
+    fn make_config(dir: &std::path::Path) -> Config {
+        Config::new(
+            dir,
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+    }
+
+    #[test]
+    fn pure_tree_write_flush_read_zstd_dict() -> lsm_tree::Result<()> {
+        // Full round-trip via the Tree API: write → flush (compress with dict) →
+        // read (decompress with dict). This exercises the block writer/reader path
+        // end-to-end with the pure backend.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+
+        let tree = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(compression))
+            .zstd_dictionary(Some(Arc::new(dict)))
+            .open()?;
+
+        for i in 0u32..200 {
+            let key = format!("key-{i:05}");
+            let val = format!("value-{i:05}-padding-to-make-it-longer");
+            tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+        }
+
+        tree.flush_active_memtable(0)?;
+
+        for i in 0u32..200 {
+            let key = format!("key-{i:05}");
+            let expected = format!("value-{i:05}-padding-to-make-it-longer");
+            let got = tree
+                .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                .expect("key should exist");
+            assert_eq!(got.as_ref(), expected.as_bytes(), "mismatch at key {key}");
+        }
+
+        assert!(tree.get(b"nonexistent", lsm_tree::MAX_SEQNO)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn pure_tree_range_scan_with_zstd_dict() -> lsm_tree::Result<()> {
+        // Range scan must return correct key-value pairs when blocks were
+        // compressed with a dictionary by the pure backend.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+
+        let tree = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(compression))
+            .zstd_dictionary(Some(Arc::new(dict)))
+            .open()?;
+
+        for i in 0u32..100 {
+            let key = format!("key-{i:05}");
+            let val = format!("value-{i:05}");
+            tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+        }
+
+        tree.flush_active_memtable(0)?;
+
+        let items: Vec<_> = tree
+            .range(
+                "key-00010".as_bytes()..="key-00020".as_bytes(),
+                lsm_tree::MAX_SEQNO,
+                None,
+            )
+            .collect();
+        assert_eq!(
+            items.len(),
+            11,
+            "range scan should return 11 items (inclusive)"
+        );
+
+        let pairs: Vec<_> = items.into_iter().map(|g| g.into_inner().unwrap()).collect();
+        assert_eq!(pairs.first().unwrap().0.as_ref(), b"key-00010");
+        assert_eq!(pairs.last().unwrap().0.as_ref(), b"key-00020");
+
+        Ok(())
+    }
+
+    #[test]
+    fn pure_tree_reopen_with_dict_reads_back_correctly() -> lsm_tree::Result<()> {
+        // Data written and flushed in one session must be readable after the
+        // tree is closed and reopened with the same dictionary.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(compression))
+                .zstd_dictionary(Some(Arc::new(dict.clone())))
+                .open()?;
+
+            for i in 0u32..50 {
+                let key = format!("key-{i:05}");
+                let val = format!("value-{i:05}");
+                tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        // Reopen — the on-disk blocks were compressed by the pure backend and must
+        // decompress correctly via the same pure `decompress_with_dict` path.
+        let tree = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(CompressionType::zstd_dict(
+                3,
+                dict.id(),
+            )?))
+            .zstd_dictionary(Some(Arc::new(dict)))
+            .open()?;
+
+        for i in 0u32..50 {
+            let key = format!("key-{i:05}");
+            let expected = format!("value-{i:05}");
+            let got = tree
+                .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                .expect("key should exist after reopen");
+            assert_eq!(got.as_ref(), expected.as_bytes(), "mismatch at key {key}");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn pure_zstd_dict_missing_returns_error() -> lsm_tree::Result<()> {
+        // Config validation must reject `ZstdDict` compression without a dictionary.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+
+        let result = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(compression))
+            .open();
+
+        assert!(
+            matches!(
+                result,
+                Err(lsm_tree::Error::ZstdDictMismatch { got: None, .. })
+            ),
+            "expected ZstdDictMismatch with got=None",
+        );
+
+        Ok(())
+    }
+}

@@ -77,7 +77,6 @@ can be decompressed by the other. When both `zstd` and `zstd-pure` are enabled,
 the C FFI backend takes precedence.
 
 **Current limitations:**
-- Dictionary compression is not yet supported (dictionary decompression works)
 - Decompression throughput is ~2–3.5× slower than the C reference
 
 *Disabled by default.*

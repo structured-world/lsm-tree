@@ -7,9 +7,9 @@
 //! This backend requires no C compiler or system libraries — it compiles
 //! with `cargo build` alone.
 //!
-//! # Limitations
+//! # Notes
 //!
-//! - Dictionary compression is not yet supported (returns an error).
+//! - Dictionary compression is supported via [`FrameCompressor::set_dictionary_from_bytes`].
 //! - Dictionary decompression is supported.
 //! - Decompression throughput is ~2–3.5x slower than the C reference.
 
@@ -75,12 +75,62 @@ impl CompressionProvider for ZstdPureProvider {
         bounded_read(&mut decoder, capacity)
     }
 
-    fn compress_with_dict(_data: &[u8], _level: i32, _dict_raw: &[u8]) -> crate::Result<Vec<u8>> {
-        Err(crate::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "zstd dictionary compression is not yet supported by the pure Rust backend \
-             (structured-zstd); use the `zstd` feature for dictionary compression",
-        )))
+    fn compress_with_dict(data: &[u8], level: i32, dict_raw: &[u8]) -> crate::Result<Vec<u8>> {
+        use structured_zstd::decoding::Dictionary;
+        use structured_zstd::encoding::{CompressionLevel, FrameCompressor};
+
+        // `FrameCompressor::set_dictionary` accepts a parsed `Dictionary`.
+        //
+        // Two dictionary formats are supported:
+        //
+        // 1. **Finalized zstd dictionary** (magic `0x37A430EC` prefix): produced by
+        //    `zstd --train` / `zstd::dict::from_continuous` and the C zstd library.
+        //    Contains entropy tables (Huffman + FSE) that prime the compressor's
+        //    coding state for better ratios. Parsed via `Dictionary::decode_dict`.
+        //
+        // 2. **Raw content dictionary** (no magic): a bare byte sequence used as
+        //    LZ77 history to improve match distances on repetitive data. No entropy
+        //    table seeding. Parsed via `Dictionary::from_raw_content`.
+        //
+        // The C backend's `Compressor::with_dictionary` transparently handles both
+        // formats. We replicate this behaviour here so that `ZstdDictionary` values
+        // created from raw training corpora (without a finalized header) also work.
+        //
+        // ID derivation for raw content dictionaries:
+        //   - Use the lower 32 bits of the xxh3 hash of `dict_raw` (matching the
+        //     formula in `ZstdDictionary::id()`), clamped to at least 1 because
+        //     id=0 is rejected by `FrameCompressor::set_dictionary`.
+        //   - Both compress and decompress derive the same ID from the same bytes,
+        //     so the dict_id written into the frame header is consistent.
+        const DICT_MAGIC: [u8; 4] = [0x37, 0xA4, 0x30, 0xEC];
+
+        let dictionary = if dict_raw.starts_with(&DICT_MAGIC) {
+            Dictionary::decode_dict(dict_raw)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
+        } else {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "intentional: lower 32 bits of xxh3 as dict id"
+            )]
+            let id = {
+                let h = xxhash_rust::xxh3::xxh3_64(dict_raw) as u32;
+                h.max(1) // id=0 is invalid; collision probability is negligible
+            };
+            Dictionary::from_raw_content(id, dict_raw.to_vec())
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
+        };
+
+        let mut compressor = FrameCompressor::new(CompressionLevel::from_level(level));
+        compressor
+            .set_dictionary(dictionary)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+
+        let mut output = Vec::new();
+        compressor.set_source(std::io::Cursor::new(data));
+        compressor.set_drain(&mut output);
+        compressor.compress();
+
+        Ok(output)
     }
 
     fn decompress_with_dict(
@@ -117,8 +167,21 @@ impl CompressionProvider for ZstdPureProvider {
             // Re-initialise if this is the first call in this thread or if
             // the dictionary has changed (different id64 → different table).
             if !matches!(&*state, Some((id, _)) if *id == dict.id64()) {
-                let parsed = Dictionary::decode_dict(dict.raw())
-                    .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+                // Mirror the format-detection logic in `compress_with_dict`:
+                // finalized dictionaries (magic `0x37A430EC`) are parsed with
+                // `decode_dict`; raw content bytes use `from_raw_content` with
+                // the same ID formula so the dict_id in the frame header matches.
+                const DICT_MAGIC: [u8; 4] = [0x37, 0xA4, 0x30, 0xEC];
+                let parsed = if dict.raw().starts_with(&DICT_MAGIC) {
+                    Dictionary::decode_dict(dict.raw())
+                        .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
+                } else {
+                    // `dict.id()` already returns u32 (lower 32 bits of xxh3).
+                    // Clamp to 1 because id=0 is rejected by `add_dict`.
+                    let id = dict.id().max(1);
+                    Dictionary::from_raw_content(id, dict.raw().to_vec())
+                        .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
+                };
                 let mut decoder = FrameDecoder::new();
                 decoder
                     .add_dict(parsed)
@@ -189,7 +252,6 @@ impl CompressionProvider for ZstdPureProvider {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "test code")]
 #[expect(clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
@@ -258,8 +320,119 @@ mod tests {
         let result = ZstdPureProvider::decompress_with_dict(COMPRESSED, &dict, too_small);
         assert!(
             matches!(result, Err(crate::Error::DecompressedSizeTooLarge { .. })),
-            "expected DecompressedSizeTooLarge but got {:?}",
-            result
+            "expected DecompressedSizeTooLarge but got {result:?}",
+        );
+    }
+
+    // --- compress_with_dict tests ---
+
+    #[test]
+    fn compress_with_dict_roundtrip_pure_to_pure() {
+        // Verify the core contract: data compressed with the pure backend using
+        // a dictionary must decompress back to the original plaintext using the
+        // same pure backend.
+        let dict = ZstdDictionary::new(DICT);
+
+        let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, DICT)
+            .expect("compression with dict should succeed");
+
+        // The output must be a non-empty zstd frame.
+        assert!(
+            !compressed.is_empty(),
+            "compressed output must not be empty"
+        );
+
+        let decompressed =
+            ZstdPureProvider::decompress_with_dict(&compressed, &dict, PLAINTEXT.len() + 1)
+                .expect("decompression with dict should succeed");
+
+        assert_eq!(
+            decompressed, PLAINTEXT,
+            "round-tripped output must equal the original plaintext"
+        );
+    }
+
+    #[test]
+    fn compress_with_dict_produces_zstd_magic() {
+        // zstd frames always start with the little-endian magic number 0xFD2FB528
+        // (bytes: 0x28, 0xB5, 0x2F, 0xFD). A mismatched magic means the frame is
+        // corrupt or the output is not a valid zstd frame.
+        let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, DICT)
+            .expect("compression should succeed");
+
+        assert!(
+            compressed.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]),
+            "output must start with zstd magic 0xFD2FB528 (LE); got {:?}",
+            compressed.get(..4.min(compressed.len()))
+        );
+    }
+
+    #[test]
+    fn compress_with_dict_roundtrip_all_levels() {
+        // Compression must round-trip correctly across the full valid level range.
+        let dict = ZstdDictionary::new(DICT);
+
+        for level in [1, 3, 9, 19] {
+            let compressed =
+                ZstdPureProvider::compress_with_dict(PLAINTEXT, level, DICT).expect("compress");
+
+            let decompressed =
+                ZstdPureProvider::decompress_with_dict(&compressed, &dict, PLAINTEXT.len() + 1)
+                    .expect("decompress");
+
+            assert_eq!(
+                decompressed, PLAINTEXT,
+                "round-trip failed at compression level={level}"
+            );
+        }
+    }
+
+    #[test]
+    fn compress_with_dict_empty_dict_returns_error() {
+        // An empty dictionary slice must return an error because there is no
+        // content to use as LZ77 history. Both the finalized-format path and
+        // the raw-content path reject empty input.
+        let result = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, b"");
+        assert!(
+            result.is_err(),
+            "expected an error for empty dictionary, got Ok"
+        );
+    }
+
+    #[test]
+    fn compress_with_dict_raw_content_dict_works() {
+        // A raw byte sequence (no finalized-dict magic) must be accepted as a
+        // raw content dictionary and produce a valid compressed frame.
+        let raw_content_dict = b"this is raw content dictionary data for matching";
+        let dict = ZstdDictionary::new(raw_content_dict);
+
+        let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, raw_content_dict)
+            .expect("compression with raw content dict should succeed");
+
+        let decompressed =
+            ZstdPureProvider::decompress_with_dict(&compressed, &dict, PLAINTEXT.len() + 1)
+                .expect("decompression with raw content dict should succeed");
+
+        assert_eq!(
+            decompressed, PLAINTEXT,
+            "round-trip with raw content dict must equal the original plaintext"
+        );
+    }
+
+    #[test]
+    fn compress_with_dict_empty_plaintext_roundtrips() {
+        // Edge case: compressing an empty payload with a dictionary must round-trip.
+        let dict = ZstdDictionary::new(DICT);
+
+        let compressed = ZstdPureProvider::compress_with_dict(&[], 3, DICT)
+            .expect("compression of empty payload should succeed");
+
+        let decompressed = ZstdPureProvider::decompress_with_dict(&compressed, &dict, 1)
+            .expect("decompression of empty payload should succeed");
+
+        assert!(
+            decompressed.is_empty(),
+            "decompressed output of empty payload must be empty"
         );
     }
 }
