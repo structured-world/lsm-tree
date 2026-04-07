@@ -90,9 +90,10 @@ pub struct ZstdDictionary {
 
     /// Pre-compiled decompressor dictionary, lazily initialized on first use.
     ///
-    /// Wrapped in `Arc<OnceLock<…>>` so all clones share the same compiled
-    /// instance — `ZSTD_DDict` is created exactly once per unique dictionary,
-    /// regardless of how many table readers hold a reference to it.
+    /// Wrapped in `Arc<OnceLock<…>>` so all clones of the same
+    /// `ZstdDictionary` share one compiled instance. With the C FFI backend,
+    /// `ZSTD_DDict` is therefore created at most once per dictionary handle,
+    /// regardless of how many table readers hold a clone of that handle.
     ///
     /// Available only with the C FFI backend (`zstd` feature). The pure Rust
     /// backend caches an equivalent `FrameDecoder` in thread-local storage
@@ -119,7 +120,8 @@ impl ZstdDictionary {
     ///
     /// The raw bytes should be a pre-trained zstd dictionary (e.g., output
     /// of `zstd::dict::from_continuous` or `zstd --train`). The dictionary
-    /// ID is computed as a truncated xxh3 hash of the content.
+    /// ID is stored as a full 64-bit xxh3 hash; the public [`ZstdDictionary::id`]
+    /// method returns the lower 32 bits for external consumers.
     #[must_use]
     pub fn new(raw: &[u8]) -> Self {
         Self {

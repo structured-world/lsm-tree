@@ -154,9 +154,24 @@ impl CompressionProvider for ZstdPureProvider {
             // large, the post-decode check below returns `DecompressedSizeTooLarge`
             // before the data is used.
             let mut output = Vec::with_capacity(capacity);
-            decoder
-                .decode_all_to_vec(data, &mut output)
-                .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+            decoder.decode_all_to_vec(data, &mut output).map_err(|e| {
+                // `decode_all_to_vec` uses the Vec's capacity as a hard
+                // allocation limit. When the frame's decompressed content
+                // would exceed that limit, it returns `TargetTooSmall`.
+                // Normalise this to `DecompressedSizeTooLarge` for a
+                // consistent error API with the C FFI backend.
+                if matches!(
+                    e,
+                    structured_zstd::decoding::errors::FrameDecoderError::TargetTooSmall
+                ) {
+                    crate::Error::DecompressedSizeTooLarge {
+                        declared: capacity as u64 + 1,
+                        limit: capacity as u64,
+                    }
+                } else {
+                    crate::Error::Io(std::io::Error::other(e))
+                }
+            })?;
 
             // Return an error if the frame decompressed to more bytes than
             // the caller declared. Matches the bounded behaviour of
@@ -242,9 +257,9 @@ mod tests {
         let too_small = PLAINTEXT.len() / 2;
         let result = ZstdPureProvider::decompress_with_dict(COMPRESSED, &dict, too_small);
         assert!(
-            result.is_err(),
-            "expected DecompressedSizeTooLarge but got Ok({:?})",
-            result.unwrap()
+            matches!(result, Err(crate::Error::DecompressedSizeTooLarge { .. })),
+            "expected DecompressedSizeTooLarge but got {:?}",
+            result
         );
     }
 }
