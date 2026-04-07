@@ -86,7 +86,8 @@ pub mod checksum;
 pub mod coding;
 
 pub mod compaction;
-mod compression;
+#[doc(hidden)]
+pub mod compression;
 
 /// Block-level encryption at rest.
 pub mod encryption;

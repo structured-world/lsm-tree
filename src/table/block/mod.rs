@@ -337,7 +337,7 @@ impl Block {
 
                     let decompressed = crate::compression::ZstdBackend::decompress_with_dict(
                         &decrypted,
-                        dict.raw(),
+                        dict,
                         header.uncompressed_length as usize,
                     )
                     .map_err(|_| crate::Error::Decompress(compression))?;
@@ -420,7 +420,7 @@ impl Block {
 
                     let decompressed = crate::compression::ZstdBackend::decompress_with_dict(
                         &raw_data,
-                        dict.raw(),
+                        dict,
                         header.uncompressed_length as usize,
                     )
                     .map_err(|_| crate::Error::Decompress(compression))?;
@@ -590,7 +590,7 @@ impl Block {
 
                     let decompressed = crate::compression::ZstdBackend::decompress_with_dict(
                         &decrypted,
-                        dict.raw(),
+                        dict,
                         parsed_header.uncompressed_length as usize,
                     )
                     .map_err(|_| crate::Error::Decompress(compression))?;
@@ -705,7 +705,7 @@ impl Block {
 
                     let decompressed = crate::compression::ZstdBackend::decompress_with_dict(
                         compressed_data,
-                        dict.raw(),
+                        dict,
                         parsed_header.uncompressed_length as usize,
                     )
                     .map_err(|_| crate::Error::Decompress(compression))?;

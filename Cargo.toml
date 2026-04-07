@@ -96,3 +96,9 @@ name = "batch_ops"
 harness = false
 path = "benches/batch_ops.rs"
 required-features = []
+
+[[bench]]
+name = "zstd_dict"
+harness = false
+path = "benches/zstd_dict.rs"
+required-features = []
