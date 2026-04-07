@@ -77,7 +77,32 @@ impl CompressionProvider for ZstdPureProvider {
 
     fn compress_with_dict(data: &[u8], level: i32, dict_raw: &[u8]) -> crate::Result<Vec<u8>> {
         use structured_zstd::decoding::Dictionary;
-        use structured_zstd::encoding::{CompressionLevel, FrameCompressor};
+        use structured_zstd::encoding::{CompressionLevel, FrameCompressor, MatchGeneratorDriver};
+
+        // Thread-local `FrameCompressor` with the dictionary pre-loaded.
+        //
+        // Parsing a zstd dictionary (especially a finalized one with entropy tables)
+        // is expensive relative to per-block compression of 4–64 KiB LSM blocks.
+        // Caching the `FrameCompressor` instance in TLS amortises this cost: the
+        // dictionary is parsed exactly once per thread, per (dict_content, level) pair.
+        //
+        // `FrameCompressor::compress()` resets internal state at the start of
+        // each call (matcher reset, offset history `[1, 4, 8]`) and then re-primes
+        // from the stored dictionary, so re-using the compressor across calls is safe.
+        //
+        // Cache key: (xxh3_64(dict_raw), level). The full 64-bit hash avoids
+        // false cache hits when two distinct dictionaries share the same 32-bit
+        // truncation.
+        //
+        // Source type `Cursor<Vec<u8>>`: TLS requires `'static` bounds, so the
+        // source must be owned. This costs one O(data.len()) copy per call, which
+        // is negligible compared to the dictionary-parsing savings.
+        type CachedCompressor =
+            FrameCompressor<std::io::Cursor<Vec<u8>>, Vec<u8>, MatchGeneratorDriver>;
+        thread_local! {
+            static TLS_COMPRESSOR: std::cell::RefCell<Option<(u64, i32, CachedCompressor)>> =
+                const { std::cell::RefCell::new(None) };
+        }
 
         // `FrameCompressor::set_dictionary` accepts a parsed `Dictionary`.
         //
@@ -103,34 +128,57 @@ impl CompressionProvider for ZstdPureProvider {
         //   - Both compress and decompress derive the same ID from the same bytes,
         //     so the dict_id written into the frame header is consistent.
         const DICT_MAGIC: [u8; 4] = [0x37, 0xA4, 0x30, 0xEC];
+        let dict_key = xxhash_rust::xxh3::xxh3_64(dict_raw);
 
-        let dictionary = if dict_raw.starts_with(&DICT_MAGIC) {
-            Dictionary::decode_dict(dict_raw)
-                .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
-        } else {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "intentional: lower 32 bits of xxh3 as dict id"
-            )]
-            let id = {
-                let h = xxhash_rust::xxh3::xxh3_64(dict_raw) as u32;
-                h.max(1) // id=0 is invalid; collision probability is negligible
+        TLS_COMPRESSOR.with(|cell| {
+            let mut state = cell.borrow_mut();
+
+            // Re-initialise if this is the first call in this thread or if the
+            // dictionary or compression level has changed.
+            if !matches!(&*state, Some((k, l, _)) if *k == dict_key && *l == level) {
+                let dictionary = if dict_raw.starts_with(&DICT_MAGIC) {
+                    Dictionary::decode_dict(dict_raw)
+                        .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
+                } else {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "intentional: lower 32 bits of xxh3 as dict id"
+                    )]
+                    let id = {
+                        let h = dict_key as u32;
+                        h.max(1) // id=0 is invalid; collision probability is negligible
+                    };
+                    Dictionary::from_raw_content(id, dict_raw.to_vec())
+                        .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
+                };
+
+                let mut compressor = FrameCompressor::new(CompressionLevel::from_level(level));
+                compressor
+                    .set_dictionary(dictionary)
+                    .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+                *state = Some((dict_key, level, compressor));
+            }
+
+            let Some((_, _, compressor)) = state.as_mut() else {
+                // Unreachable: the branch above always initialises `state`.
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "TLS_COMPRESSOR unexpectedly empty after initialisation",
+                )));
             };
-            Dictionary::from_raw_content(id, dict_raw.to_vec())
-                .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
-        };
 
-        let mut compressor = FrameCompressor::new(CompressionLevel::from_level(level));
-        compressor
-            .set_dictionary(dictionary)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+            // `compress()` resets the matcher and offset history at the start of
+            // each call and then re-primes from the stored dictionary, so the same
+            // `FrameCompressor` instance can safely be re-used across blocks.
+            // Use `set_drain(Vec::new())` to supply a fresh owned output buffer and
+            // recover it via `take_drain()` after compression completes.
+            compressor.set_source(std::io::Cursor::new(data.to_vec()));
+            compressor.set_drain(Vec::new());
+            compressor.compress();
 
-        let mut output = Vec::new();
-        compressor.set_source(std::io::Cursor::new(data));
-        compressor.set_drain(&mut output);
-        compressor.compress();
-
-        Ok(output)
+            compressor.take_drain().ok_or_else(|| {
+                crate::Error::Io(std::io::Error::other("drain missing after compress"))
+            })
+        })
     }
 
     fn decompress_with_dict(
@@ -176,9 +224,10 @@ impl CompressionProvider for ZstdPureProvider {
                     Dictionary::decode_dict(dict.raw())
                         .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
                 } else {
-                    // `dict.id()` already returns a normalized non-zero u32
-                    // (lower 32 bits of xxh3, clamped to 1); use it directly.
-                    Dictionary::from_raw_content(dict.id(), dict.raw().to_vec())
+                    // `dict.id()` returns the raw lower 32 bits of xxh3, which
+                    // may theoretically be 0 (probability ≈ 1/2³²). Clamp to at
+                    // least 1 because id=0 is reserved in the zstd frame format.
+                    Dictionary::from_raw_content(dict.id().max(1), dict.raw().to_vec())
                         .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?
                 };
                 let mut decoder = FrameDecoder::new();

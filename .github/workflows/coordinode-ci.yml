@@ -72,6 +72,8 @@ jobs:
         with:
           prefix-key: ubuntu-cargo-zstd-pure
       - uses: taiki-e/install-action@nextest
+      - name: Clippy (pure backend)
+        run: cargo clippy --no-default-features --features zstd-pure,lz4 --all-targets -- -D warnings
       - name: Run tests (zstd-pure backend, no C zstd)
         # zstd_pure_dict integration tests are gated with
         # #[cfg(all(feature = "zstd-pure", not(feature = "zstd")))], so they

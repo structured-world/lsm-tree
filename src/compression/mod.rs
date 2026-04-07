@@ -155,13 +155,16 @@ impl ZstdDictionary {
             .get_or_init(|| zstd::dict::DecoderDictionary::copy(&self.raw))
     }
 
-    /// Returns a normalized 32-bit dictionary fingerprint (lower 32 bits of
-    /// xxh3, clamped to 1).
+    /// Returns a 32-bit dictionary fingerprint (lower 32 bits of xxh3).
     ///
-    /// The ID is always ≥ 1 because zstd dict ID 0 means "no dictionary".
-    /// All callers — config validation, `CompressionType::ZstdDict`, and the
-    /// frame encoder/decoder — must use this method so that stored metadata and
-    /// frame headers agree on the same value.
+    /// Intended for config validation (matching a `CompressionType::ZstdDict`
+    /// `dict_id` against the supplied `ZstdDictionary`) and external interop.
+    ///
+    /// The value is the raw lower 32 bits of xxh3 and may theoretically be `0`
+    /// (probability ≈ 1/2³²). Backends that embed a dict ID in the zstd frame
+    /// header (where id=0 is reserved) are responsible for clamping to at
+    /// least 1 themselves. Config validation is unaffected: both sides derive
+    /// the ID from the same bytes and therefore agree even in the zero case.
     ///
     /// For internal cache keying use [`id64`](ZstdDictionary::id64) to avoid
     /// hash collisions.
@@ -171,9 +174,7 @@ impl ZstdDictionary {
         reason = "intentional: public API returns 32-bit fingerprint"
     )]
     pub fn id(&self) -> u32 {
-        // id=0 means "no dictionary" in the zstd frame format; clamp to 1 so
-        // metadata, config validation, and frame headers all see the same value.
-        (self.id as u32).max(1)
+        self.id as u32
     }
 
     /// Returns the full 64-bit xxh3 fingerprint used as a collision-resistant
