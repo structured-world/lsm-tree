@@ -9,7 +9,7 @@
 //!
 //! # Notes
 //!
-//! - Dictionary compression is supported via [`FrameCompressor::set_dictionary_from_bytes`].
+//! - Dictionary compression is supported when configured with a zstd dictionary.
 //! - Dictionary decompression is supported.
 //! - Decompression throughput is ~2–3.5x slower than the C reference.
 
@@ -169,9 +169,27 @@ impl CompressionProvider for ZstdPureProvider {
             // `compress()` resets the matcher and offset history at the start of
             // each call and then re-primes from the stored dictionary, so the same
             // `FrameCompressor` instance can safely be re-used across blocks.
-            // Use `set_drain(Vec::new())` to supply a fresh owned output buffer and
-            // recover it via `take_drain()` after compression completes.
-            compressor.set_source(std::io::Cursor::new(data.to_vec()));
+            //
+            // Source buffer: after `compress()` the exhausted `Cursor<Vec<u8>>`
+            // remains in the compressor (position == len, Vec capacity intact).
+            // Recover it with `take_source()`, clear, and refill to reuse the
+            // allocation on subsequent calls instead of cloning `data` each time.
+            //
+            // Drain buffer: the filled `Vec<u8>` is returned to the caller via
+            // `take_drain()`, so its capacity cannot be recovered for the next
+            // call without an extra copy (which would negate the saving). Using
+            // `Vec::new()` is allocation-free at construction; the allocator
+            // recycles same-size blocks in practice on the hot path.
+            let src_buf = compressor.take_source().map_or_else(
+                || data.to_vec(),
+                |c| {
+                    let mut v = c.into_inner();
+                    v.clear();
+                    v.extend_from_slice(data);
+                    v
+                },
+            );
+            compressor.set_source(std::io::Cursor::new(src_buf));
             compressor.set_drain(Vec::new());
             compressor.compress();
 
