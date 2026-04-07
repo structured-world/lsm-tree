@@ -13,6 +13,16 @@
 //! - Dictionary decompression is supported.
 //! - Decompression throughput is ~2–3.5x slower than the C reference.
 
+// When both `zstd` (C FFI) and `zstd-pure` features are enabled, the C FFI
+// backend is selected as `ZstdBackend` and items in this module are not
+// referenced from production code paths. They remain compiled so that
+// `cargo clippy --all-features` and cross-backend integration tests can
+// exercise them. `#[allow]` is used instead of `#[expect]` because
+// `#[expect]` on a module declaration does not count inner-item diagnostics
+// as fulfilling the expectation — only a direct lint on the declaration itself
+// would satisfy it, which never fires here.
+#![cfg_attr(all(feature = "zstd-pure", feature = "zstd"), allow(dead_code))]
+
 use super::CompressionProvider;
 use std::io::Read;
 
@@ -152,8 +162,13 @@ impl CompressionProvider for ZstdPureProvider {
         //
         // Parsing a zstd dictionary (especially a finalized one with entropy tables)
         // is expensive relative to per-block compression of 4–64 KiB LSM blocks.
-        // Caching the `FrameCompressor` instance in TLS amortises this cost: the
-        // dictionary is parsed exactly once per thread, per (dict_content, level) pair.
+        // This single-entry cache amortises that cost: if the (dict_content, level)
+        // pair matches the stored entry the compressor is reused as-is; otherwise
+        // the entry is replaced (old dictionary evicted, new one parsed).
+        //
+        // In practice LSM-tree workloads use one dictionary per level, so the
+        // same (dict, level) pair recurs on every block write — the cache
+        // almost always hits.
         //
         // `FrameCompressor::compress()` resets internal state at the start of
         // each call (matcher reset, offset history `[1, 4, 8]`) and then re-primes
@@ -297,9 +312,10 @@ impl CompressionProvider for ZstdPureProvider {
         //
         // Parsing a zstd dictionary involves building Huffman and FSE decoding
         // tables — expensive relative to per-block decompression for the small
-        // 4–64 KiB blocks typical in LSM-trees. Caching the `FrameDecoder`
-        // instance across calls amortises this cost: the dictionary is parsed
-        // exactly once per thread, per distinct dictionary.
+        // 4–64 KiB blocks typical in LSM-trees. This single-entry cache
+        // amortises that cost: if the active dictionary (identified by its
+        // 64-bit xxh3 fingerprint) matches the stored entry the decoder is
+        // reused; otherwise the entry is replaced.
         //
         // Thread-local storage is appropriate because `FrameDecoder` is not
         // `Send` and each thread decompresses independently; no mutex is
@@ -383,6 +399,19 @@ impl CompressionProvider for ZstdPureProvider {
                 decoder
                     .init(&mut cursor)
                     .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+
+                // Decompression-bomb guard: if the frame header declares a
+                // content size larger than `capacity`, reject before allocating
+                // the output buffer. `content_size()` returns 0 when the
+                // frame omits the FCS field (size unknown); in that case the
+                // post-decode check on `output.len()` below acts as fallback.
+                let declared_size = decoder.content_size();
+                if declared_size > 0 && declared_size > capacity as u64 {
+                    return Err(crate::Error::DecompressedSizeTooLarge {
+                        declared: declared_size,
+                        limit: capacity as u64,
+                    });
+                }
 
                 // Derive the same synthetic id used in `add_dict` above.
                 #[expect(

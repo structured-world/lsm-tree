@@ -14,7 +14,6 @@ mod zstd_ffi;
 // used in production (the FFI backend takes precedence) but must remain visible
 // for cross-backend interoperability tests.
 #[cfg(feature = "zstd-pure")]
-#[cfg_attr(all(feature = "zstd-pure", feature = "zstd"), allow(dead_code))]
 mod zstd_pure;
 
 use crate::coding::{Decode, Encode};
@@ -187,7 +186,6 @@ impl ZstdDictionary {
     /// Returns the full 64-bit xxh3 fingerprint used as a collision-resistant
     /// cache key inside the pure Rust backend's TLS decoder.
     #[cfg(feature = "zstd-pure")]
-    #[cfg_attr(all(feature = "zstd-pure", feature = "zstd"), allow(dead_code))]
     #[must_use]
     pub(crate) fn id64(&self) -> u64 {
         self.id
@@ -607,7 +605,7 @@ mod tests {
 //
 // Only compiled when BOTH `zstd` (C FFI) and `zstd-pure` features are active.
 #[cfg(all(test, feature = "zstd", feature = "zstd-pure"))]
-#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod cross_backend_interop_tests {
     use super::zstd_ffi::ZstdFfiProvider;
     use super::zstd_pure::ZstdPureProvider;
@@ -643,9 +641,12 @@ mod cross_backend_interop_tests {
 
     #[test]
     fn ffi_compress_pure_decompress_raw_content_dict_roundtrip() {
-        // FFI backend records dictID=0 in the frame (C API convention).
-        // Pure backend loads the same bytes as a raw-content Dictionary with
-        // id=0. IDs match, so decompression succeeds.
+        // FFI backend records dictID=0 in the frame (C API convention for
+        // raw-content dicts). The pure backend's `decompress_with_dict` calls
+        // `init` (which sees no dictID and skips dict loading), then
+        // `force_dict` to load the raw-content dictionary unconditionally —
+        // bypassing the frame's dictID field so decompression succeeds
+        // regardless of which backend produced the frame.
         let compressed = ZstdFfiProvider::compress_with_dict(PLAINTEXT, 3, RAW_DICT)
             .expect("ffi compress_with_dict should succeed");
 
