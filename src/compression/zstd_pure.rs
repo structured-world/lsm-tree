@@ -13,16 +13,6 @@
 //! - Dictionary decompression is supported.
 //! - Decompression throughput is ~2–3.5x slower than the C reference.
 
-// When both `zstd` (C FFI) and `zstd-pure` features are enabled, the C FFI
-// backend is selected as `ZstdBackend` and items in this module are not
-// referenced from production code paths. They remain compiled so that
-// `cargo clippy --all-features` and cross-backend integration tests can
-// exercise them. `#[allow]` is used instead of `#[expect]` because
-// `#[expect]` on a module declaration does not count inner-item diagnostics
-// as fulfilling the expectation — only a direct lint on the declaration itself
-// would satisfy it, which never fires here.
-#![cfg_attr(all(feature = "zstd-pure", feature = "zstd"), allow(dead_code))]
-
 use super::CompressionProvider;
 use std::io::Read;
 
@@ -75,21 +65,19 @@ fn bounded_read(reader: &mut impl Read, capacity: usize) -> crate::Result<Vec<u8
     Ok(output)
 }
 
-/// Strips the `Dict_ID` field from a zstd frame header.
+/// Strips the `Dict_ID` field from a zstd frame header, modifying the frame
+/// in place.
 ///
-/// structured-zstd rejects `id=0` for [`Dictionary::from_raw_content`], so the
-/// pure backend internally assigns a synthetic non-zero id derived from the dict
-/// content hash. That id is an implementation detail — it must not be embedded in
-/// compressed frames because the C zstd library always records `dictID=0` (absent)
-/// for raw-content dicts, and its decompressor rejects frames whose `dictID`
-/// doesn't match the loaded `ZSTD_DDict`'s id.
-///
-/// Stripping the field aligns the output format: both backends produce frames with
-/// no embedded dict id for raw-content dicts, enabling mutual cross-backend
-/// decompression.
+/// `structured-zstd` rejects `id=0` for [`Dictionary::from_raw_content`], so
+/// the backend internally assigns a synthetic non-zero id derived from the dict
+/// content hash. That id is an implementation detail — compressed frames must not
+/// embed it, because the zstd standard treats a missing `dictID` (`Dict_ID_Flag
+/// == 0`) as a sentinel meaning "raw-content dict, id unknown, accept any".
+/// Embedding the synthetic id would cause a decompressor to require that exact id
+/// in the loaded `ZSTD_DDict`, breaking round-trips after serialisation.
 ///
 /// Returns the frame unchanged if no dict id is present (`Dict_ID_Flag == 0`).
-fn strip_dict_id(frame: Vec<u8>) -> Vec<u8> {
+fn strip_dict_id(mut frame: Vec<u8>) -> Vec<u8> {
     // Minimum valid frame: magic (4 bytes) + Frame_Header_Descriptor (1 byte).
     let Some(&fhd) = frame.get(4) else {
         return frame; // Frame_Header_Descriptor absent — leave unchanged.
@@ -121,25 +109,15 @@ fn strip_dict_id(frame: Vec<u8>) -> Vec<u8> {
         return frame; // Malformed frame — leave unchanged; decompressor will reject it.
     }
 
-    // Build a new frame with Dict_ID_Flag cleared and the Dict_ID bytes removed.
-    let new_fhd = fhd & !0x03u8; // Clear bits [1:0]
-    let mut out = Vec::with_capacity(frame.len() - dict_id_len);
-    if let Some(magic) = frame.get(..4) {
-        out.extend_from_slice(magic); // Frame magic
+    // Patch FHD in-place (clear Dict_ID_Flag bits), then slide the tail left
+    // by dict_id_len bytes to close the gap. No allocation needed.
+    // `frame.get(4)` already returned `Some` above, so index 4 is valid.
+    if let Some(b) = frame.get_mut(4) {
+        *b = fhd & !0x03u8;
     }
-    out.push(new_fhd); // Modified FHD
-    if !single_segment {
-        // Window_Descriptor is present at byte 5 when !single_segment.
-        // frame.len() >= dict_id_start + dict_id_len >= 7 when !single_segment (wd_len=1).
-        if let Some(&wd) = frame.get(5) {
-            out.push(wd);
-        }
-    }
-    // Skip the Dict_ID bytes; copy the rest (FCS + blocks + optional checksum).
-    if let Some(rest) = frame.get(dict_id_start + dict_id_len..) {
-        out.extend_from_slice(rest);
-    }
-    out
+    frame.copy_within(dict_id_start + dict_id_len.., dict_id_start);
+    frame.truncate(frame.len() - dict_id_len);
+    frame
 }
 
 /// Incrementally decodes `data` using the pre-initialised `decoder` and

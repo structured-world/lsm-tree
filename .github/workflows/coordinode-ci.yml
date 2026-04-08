@@ -59,7 +59,7 @@ jobs:
         working-directory: tools/db_bench
         run: cargo check --all-features
 
-  test-zstd-pure:
+  test-zstd:
     needs: lint
     timeout-minutes: 15
     runs-on: ubuntu-latest
@@ -70,16 +70,12 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ubuntu-cargo-zstd-pure
+          prefix-key: ubuntu-cargo-zstd
       - uses: taiki-e/install-action@nextest
-      - name: Clippy (pure backend)
-        run: cargo clippy --no-default-features --features zstd-pure,lz4 --all-targets -- -D warnings
-      - name: Run tests (zstd-pure backend, no C zstd)
-        # zstd_pure_dict integration tests are gated with
-        # #[cfg(all(feature = "zstd-pure", not(feature = "zstd")))], so they
-        # are skipped by --all-features. Run without "zstd" to exercise the
-        # pure Rust dictionary compression path independently.
-        run: cargo nextest run --profile ci --no-default-features --features zstd-pure,lz4
+      - name: Clippy (zstd backend)
+        run: cargo clippy --no-default-features --features zstd,lz4 --all-targets -- -D warnings
+      - name: Run tests (zstd backend)
+        run: cargo nextest run --profile ci --no-default-features --features zstd,lz4
 
   cross:
     needs: lint
@@ -119,10 +115,9 @@ jobs:
       - uses: taiki-e/install-action@nextest
       # proptest cases: 32 hardcoded in ProptestConfig
       - run: cargo +nightly llvm-cov --no-report nextest --all-features
-      # Pure Rust zstd backend: tests are gated with not(feature = "zstd") so
-      # they are skipped by --all-features. Run separately and merge the report
-      # so dictionary-compression paths are included in patch coverage.
-      - run: cargo +nightly llvm-cov --no-report nextest --no-default-features --features zstd-pure,lz4
+      # zstd feature: run separately to exercise dictionary-compression paths
+      # not covered by --all-features (which uses the same zstd backend).
+      - run: cargo +nightly llvm-cov --no-report nextest --no-default-features --features zstd,lz4
       - run: cargo +nightly llvm-cov --no-report --doc --features lz4
       - run: cargo +nightly llvm-cov report --doctests --lcov --output-path lcov.info
       - uses: codecov/codecov-action@v5

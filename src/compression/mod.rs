@@ -2,18 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-// Backend modules — only one is active at runtime based on feature flags.
-// When both `zstd` and `zstd-pure` are enabled, C FFI takes precedence as
-// the active `ZstdBackend`. The `zstd_pure` module is still compiled when
-// `zstd-pure` is enabled (regardless of `zstd`) so that its code and tests
-// remain visible to `cargo clippy --all-features` and cross-backend tests.
 #[cfg(feature = "zstd")]
-mod zstd_ffi;
-
-// When both backends are compiled (--all-features), zstd_pure items are not
-// used in production (the FFI backend takes precedence) but must remain visible
-// for cross-backend interoperability tests.
-#[cfg(feature = "zstd-pure")]
 mod zstd_pure;
 
 use crate::coding::{Decode, Encode};
@@ -25,14 +14,9 @@ use std::sync::Arc;
 
 /// Zstd compression backend operations.
 ///
-/// This trait abstracts the zstd implementation behind a compile-time
-/// selected backend. The C FFI backend (`zstd` feature) provides full
-/// compression levels 1–22 and dictionary support. The pure Rust backend
-/// (`zstd-pure` feature) provides compression levels 1–22 and dictionary
-/// support with no C dependencies.
-///
-/// Both backends produce RFC 8878 compliant zstd frames, so data
-/// compressed by one can be decompressed by the other.
+/// Abstracts the zstd implementation so callsites are independent of the
+/// underlying crate. Enabled by the `zstd` feature (pure Rust, no C
+/// dependencies). Produces RFC 8878 compliant zstd frames.
 #[cfg(zstd_any)]
 pub trait CompressionProvider {
     /// Compress `data` at the given zstd level (1–22).
@@ -52,10 +36,9 @@ pub trait CompressionProvider {
 
     /// Decompress a zstd frame that was compressed with a dictionary.
     ///
-    /// `dict` exposes the raw dictionary bytes **and** a lazily-initialized
-    /// pre-compiled form (C FFI backend: `ZSTD_DDict`; pure Rust backend:
-    /// cached `FrameDecoder` in thread-local storage). Backends must use the
-    /// prepared form to avoid re-parsing the dictionary on every call.
+    /// `dict` exposes the raw dictionary bytes and a cached `FrameDecoder`
+    /// in thread-local storage. Implementations must use the cached form
+    /// to avoid re-parsing the dictionary on every call.
     fn decompress_with_dict(
         data: &[u8],
         dict: &ZstdDictionary,
@@ -63,14 +46,8 @@ pub trait CompressionProvider {
     ) -> crate::Result<Vec<u8>>;
 }
 
-/// The active zstd backend, selected at compile time.
-///
-/// When `zstd` (C FFI) is enabled it takes precedence; otherwise
-/// `zstd-pure` (structured-zstd) is used.
+/// The active zstd backend (pure Rust via `structured-zstd`).
 #[cfg(feature = "zstd")]
-pub type ZstdBackend = zstd_ffi::ZstdFfiProvider;
-
-#[cfg(all(feature = "zstd-pure", not(feature = "zstd")))]
 pub type ZstdBackend = zstd_pure::ZstdPureProvider;
 
 /// Pre-trained zstd dictionary for improved compression of small blocks.
@@ -95,23 +72,10 @@ pub type ZstdBackend = zstd_pure::ZstdPureProvider;
 #[cfg(zstd_any)]
 pub struct ZstdDictionary {
     /// Full 64-bit xxh3 hash used as the collision-resistant cache key for the
-    /// thread-local `FrameDecoder` in the pure Rust backend. The public
-    /// `id() -> u32` method returns the lower 32 bits for external consumers.
+    /// thread-local `FrameDecoder`. The public `id() -> u32` method returns
+    /// the lower 32 bits for external consumers.
     id: u64,
     raw: Arc<[u8]>,
-
-    /// Pre-compiled decompressor dictionary, lazily initialized on first use.
-    ///
-    /// Wrapped in `Arc<OnceLock<…>>` so all clones of the same
-    /// `ZstdDictionary` share one compiled instance. With the C FFI backend,
-    /// `ZSTD_DDict` is therefore created at most once per dictionary handle,
-    /// regardless of how many table readers hold a clone of that handle.
-    ///
-    /// Available only with the C FFI backend (`zstd` feature). The pure Rust
-    /// backend caches an equivalent `FrameDecoder` in thread-local storage
-    /// inside `decompress_with_dict` instead.
-    #[cfg(feature = "zstd")]
-    prepared: Arc<std::sync::OnceLock<zstd::dict::DecoderDictionary<'static>>>,
 }
 
 #[cfg(zstd_any)]
@@ -120,8 +84,6 @@ impl Clone for ZstdDictionary {
         Self {
             id: self.id,
             raw: Arc::clone(&self.raw),
-            #[cfg(feature = "zstd")]
-            prepared: Arc::clone(&self.prepared),
         }
     }
 }
@@ -139,26 +101,7 @@ impl ZstdDictionary {
         Self {
             id: compute_dict_id(raw),
             raw: Arc::from(raw),
-            #[cfg(feature = "zstd")]
-            prepared: Arc::new(std::sync::OnceLock::new()),
         }
-    }
-
-    /// Returns the lazily-initialized pre-compiled decompressor dictionary.
-    ///
-    /// On first call this copies the raw bytes into a `ZSTD_DDict` (C
-    /// library's opaque pre-parsed form) and caches the result inside this
-    /// `ZstdDictionary`. Subsequent calls — from any thread — return the
-    /// cached reference with no further allocation or parsing.
-    ///
-    /// Using this together with
-    /// [`zstd::bulk::Decompressor::with_prepared_dictionary`] eliminates the
-    /// per-block `ZSTD_createDDict` call that was previously paid on every
-    /// `decompress_with_dict` invocation.
-    #[cfg(feature = "zstd")]
-    pub(crate) fn decoder_dict(&self) -> &zstd::dict::DecoderDictionary<'static> {
-        self.prepared
-            .get_or_init(|| zstd::dict::DecoderDictionary::copy(&self.raw))
     }
 
     /// Returns a 32-bit dictionary fingerprint (lower 32 bits of xxh3).
@@ -184,8 +127,8 @@ impl ZstdDictionary {
     }
 
     /// Returns the full 64-bit xxh3 fingerprint used as a collision-resistant
-    /// cache key inside the pure Rust backend's TLS decoder.
-    #[cfg(feature = "zstd-pure")]
+    /// cache key inside the TLS decoder.
+    #[cfg(feature = "zstd")]
     #[must_use]
     pub(crate) fn id64(&self) -> u64 {
         self.id
@@ -590,74 +533,5 @@ mod tests {
             assert!(debug.contains("ZstdDictionary"));
             assert!(debug.contains("size: 4"));
         }
-    }
-}
-
-// Cross-backend interoperability tests.
-//
-// Verifies that frames produced by the pure Rust backend can be decompressed
-// by the C FFI backend (and vice versa) when using raw-content dictionaries.
-//
-// Both backends use dictID=0 for raw-content dicts:
-//   - FFI backend (libzstd):  always records dictID=0 for raw-content dicts.
-//   - Pure backend (structured-zstd): now also uses dictID=0, matching the
-//     C API convention so that frames are mutually decompressible.
-//
-// Only compiled when BOTH `zstd` (C FFI) and `zstd-pure` features are active.
-#[cfg(all(test, feature = "zstd", feature = "zstd-pure"))]
-#[expect(clippy::expect_used, reason = "test code")]
-mod cross_backend_interop_tests {
-    use super::zstd_ffi::ZstdFfiProvider;
-    use super::zstd_pure::ZstdPureProvider;
-    use super::{CompressionProvider, ZstdDictionary};
-    use test_log::test;
-
-    // Raw-content dictionary: must NOT start with the zstd finalized-dict magic
-    // (0x37, 0xA4, 0x30, 0xEC), so both backends treat it as bare LZ77 history.
-    const RAW_DICT: &[u8] = b"the quick brown fox jumps over the lazy dog. \
-        the quick brown fox jumps over the lazy dog. \
-        key-00042 value-00042 key-00043 value-00043 ";
-
-    const PLAINTEXT: &[u8] = b"key-00042 value-00042 key-00043 value-00043";
-
-    #[test]
-    fn pure_compress_ffi_decompress_raw_content_dict_roundtrip() {
-        // Pure backend writes dictID=0 in the frame (raw-content convention).
-        // FFI decompressor loads the same bytes as a raw-content DDict with
-        // id=0. IDs match, so decompression succeeds.
-        let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, RAW_DICT)
-            .expect("pure compress_with_dict should succeed");
-
-        let dict = ZstdDictionary::new(RAW_DICT);
-        let decompressed =
-            ZstdFfiProvider::decompress_with_dict(&compressed, &dict, PLAINTEXT.len() * 4)
-                .expect("ffi decompress must succeed: pure→FFI raw-content dict cross-backend");
-
-        assert_eq!(
-            decompressed, PLAINTEXT,
-            "pure→FFI round-trip with raw-content dict must return original plaintext"
-        );
-    }
-
-    #[test]
-    fn ffi_compress_pure_decompress_raw_content_dict_roundtrip() {
-        // FFI backend records dictID=0 in the frame (C API convention for
-        // raw-content dicts). The pure backend's `decompress_with_dict` calls
-        // `init` (which sees no dictID and skips dict loading), then
-        // `force_dict` to load the raw-content dictionary unconditionally —
-        // bypassing the frame's dictID field so decompression succeeds
-        // regardless of which backend produced the frame.
-        let compressed = ZstdFfiProvider::compress_with_dict(PLAINTEXT, 3, RAW_DICT)
-            .expect("ffi compress_with_dict should succeed");
-
-        let dict = ZstdDictionary::new(RAW_DICT);
-        let decompressed =
-            ZstdPureProvider::decompress_with_dict(&compressed, &dict, PLAINTEXT.len() * 4)
-                .expect("pure decompress must succeed: FFI→pure raw-content dict cross-backend");
-
-        assert_eq!(
-            decompressed, PLAINTEXT,
-            "FFI→pure round-trip with raw-content dict must return original plaintext"
-        );
     }
 }
