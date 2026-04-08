@@ -934,4 +934,98 @@ mod tests {
             "corrupt frame must return an error on raw-content dict path; got {result:?}",
         );
     }
+
+    // --- decode_raw_content_bounded direct tests ---
+    //
+    // The `remaining == 0` and `can > capacity` error paths inside
+    // `decode_raw_content_bounded` are guarded by the FCS pre-check in
+    // `do_decompress_with_dict` when called through the high-level API:
+    // if the frame embeds a content size and that size exceeds `capacity`,
+    // `do_decompress_with_dict` returns early before ever calling this helper.
+    //
+    // To exercise these branches, the tests below set up a `FrameDecoder`
+    // manually (mirroring `do_decompress_with_dict`) and call the private
+    // function directly.
+
+    /// Compute the synthetic raw-content dict id used by both
+    /// `compress_with_dict` and `do_decompress_with_dict` for raw-content
+    /// (non-finalized) dictionaries.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "intentional: lower 32 bits of xxh3"
+    )]
+    fn raw_content_id(dict_raw: &[u8]) -> u32 {
+        let h = xxhash_rust::xxh3::xxh3_64(dict_raw) as u32;
+        h.max(1)
+    }
+
+    /// Build a `FrameDecoder` initialised with `dict_raw` for the raw-content
+    /// path, pointing `cursor` at the blocks region of `compressed`.
+    ///
+    /// Mirrors the setup performed by `do_decompress_with_dict(is_raw_content=true)`.
+    fn make_raw_content_decoder<'a>(
+        dict_raw: &[u8],
+        compressed: &'a [u8],
+        cursor: &mut std::io::Cursor<&'a [u8]>,
+    ) -> structured_zstd::decoding::FrameDecoder {
+        use structured_zstd::decoding::{Dictionary, FrameDecoder};
+        let id = raw_content_id(dict_raw);
+        let parsed = Dictionary::from_raw_content(id, dict_raw.to_vec())
+            .expect("Dictionary::from_raw_content should succeed");
+        let mut decoder = FrameDecoder::new();
+        decoder.add_dict(parsed).expect("add_dict should succeed");
+        *cursor = std::io::Cursor::new(compressed);
+        decoder
+            .init(cursor)
+            .expect("FrameDecoder::init should succeed");
+        decoder.force_dict(id).expect("force_dict should succeed");
+        decoder
+    }
+
+    #[test]
+    fn decode_raw_content_bounded_remaining_zero_returns_error() {
+        // capacity = 0 → remaining = 0 on the very first loop iteration.
+        // decoder.is_finished() = false (blocks not yet decoded).
+        // The `if remaining == 0` branch fires, returning DecompressedSizeTooLarge.
+        //
+        // This path is unreachable through the high-level API because the FCS
+        // pre-check in do_decompress_with_dict returns early first (frames
+        // produced by compress_with_dict include the frame content size).
+        let raw_dict = b"raw content dict for remaining-zero test";
+        let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, raw_dict)
+            .expect("compression should succeed");
+
+        let mut cursor = std::io::Cursor::new(compressed.as_slice());
+        let mut decoder = make_raw_content_decoder(raw_dict, &compressed, &mut cursor);
+
+        let result = decode_raw_content_bounded(&mut decoder, &mut cursor, 0);
+        assert!(
+            matches!(result, Err(crate::Error::DecompressedSizeTooLarge { .. })),
+            "capacity=0 must return DecompressedSizeTooLarge; got {result:?}",
+        );
+    }
+
+    #[test]
+    fn decode_raw_content_bounded_collected_exceeds_capacity_returns_error() {
+        // capacity = 5 (smaller than PLAINTEXT = 35 bytes).
+        // decode_blocks(UptoBytes(5)) decodes the block containing 35 bytes.
+        // Since zstd blocks cannot be split, the decoder collects 35 bytes
+        // even though only 5 were requested.  0 + 35 > 5 fires the
+        // `can > capacity` guard, returning DecompressedSizeTooLarge.
+        //
+        // This path is unreachable through the high-level API for the same
+        // reason as the test above.
+        let raw_dict = b"raw content dict for can-exceeds-capacity test";
+        let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, raw_dict)
+            .expect("compression should succeed");
+
+        let mut cursor = std::io::Cursor::new(compressed.as_slice());
+        let mut decoder = make_raw_content_decoder(raw_dict, &compressed, &mut cursor);
+
+        let result = decode_raw_content_bounded(&mut decoder, &mut cursor, 5);
+        assert!(
+            matches!(result, Err(crate::Error::DecompressedSizeTooLarge { .. })),
+            "capacity < plaintext must return DecompressedSizeTooLarge; got {result:?}",
+        );
+    }
 }
