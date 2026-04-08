@@ -119,6 +119,10 @@ jobs:
       - uses: taiki-e/install-action@nextest
       # proptest cases: 32 hardcoded in ProptestConfig
       - run: cargo +nightly llvm-cov --no-report nextest --all-features
+      # Pure Rust zstd backend: tests are gated with not(feature = "zstd") so
+      # they are skipped by --all-features. Run separately and merge the report
+      # so dictionary-compression paths are included in patch coverage.
+      - run: cargo +nightly llvm-cov --no-report nextest --no-default-features --features zstd-pure,lz4
       - run: cargo +nightly llvm-cov --no-report --doc --features lz4
       - run: cargo +nightly llvm-cov report --doctests --lcov --output-path lcov.info
       - uses: codecov/codecov-action@v5
