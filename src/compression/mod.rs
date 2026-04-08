@@ -36,9 +36,10 @@ pub trait CompressionProvider {
 
     /// Decompress a zstd frame that was compressed with a dictionary.
     ///
-    /// `dict` exposes the raw dictionary bytes and a cached `FrameDecoder`
-    /// in thread-local storage. Implementations must use the cached form
-    /// to avoid re-parsing the dictionary on every call.
+    /// `dict` provides the raw dictionary bytes and a 64-bit fingerprint used
+    /// as the TLS cache key. Implementations cache the parsed decoder in
+    /// thread-local storage keyed by that fingerprint to avoid re-parsing the
+    /// dictionary on every call.
     fn decompress_with_dict(
         data: &[u8],
         dict: &ZstdDictionary,

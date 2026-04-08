@@ -329,6 +329,10 @@ impl CompressionProvider for ZstdPureProvider {
         type CachedCompressor =
             FrameCompressor<std::io::Cursor<Vec<u8>>, Vec<u8>, MatchGeneratorDriver>;
         thread_local! {
+            // Single-entry memoizer keyed by (dict_hash, level).
+            // Sufficient for the typical case of one dict/level per compaction job per thread.
+            // For workloads that interleave multiple dicts in the same thread, a multi-entry
+            // keyed cache would avoid re-initialization on key changes (tracked in #231).
             static TLS_COMPRESSOR: std::cell::RefCell<Option<(u64, i32, CachedCompressor)>> =
                 const { std::cell::RefCell::new(None) };
         }
