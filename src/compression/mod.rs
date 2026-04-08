@@ -30,8 +30,8 @@ pub trait CompressionProvider {
     /// `dict_raw` may be either a finalized zstd dictionary (magic `0x37A430EC`
     /// header, entropy tables, content — produced by `zstd --train` or
     /// [`ZstdDictionary::raw`]) or a raw content dictionary (bare bytes used as
-    /// LZ77 history). Both the C FFI backend and the pure Rust backend accept
-    /// either representation.
+    /// LZ77 history). The zstd backend in this crate accepts either
+    /// representation.
     fn compress_with_dict(data: &[u8], level: i32, dict_raw: &[u8]) -> crate::Result<Vec<u8>>;
 
     /// Decompress a zstd frame that was compressed with a dictionary.

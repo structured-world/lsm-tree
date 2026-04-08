@@ -73,14 +73,12 @@ fn bench_decompress_with_dict(c: &mut Criterion) {
         });
     });
 
-    // "Cold" benchmark: each iteration gets a fresh `ZstdDictionary` handle.
-    //
-    // The TLS decoder is keyed by the 64-bit content hash. All iterations share
-    // the same DICT bytes and therefore the same hash, so after the first
-    // iteration the TLS entry is still live — subsequent iterations measure the
-    // TLS-hit path, not dict parsing. True "cold" cost is only observable on
-    // the very first iteration of the first benchmark run.
-    c.bench_function("decompress_with_dict/cold", |b| {
+    // TLS-hit benchmark: each iteration gets a fresh `ZstdDictionary` handle,
+    // but the TLS decoder is keyed by the 64-bit content hash. All iterations
+    // share the same DICT bytes and therefore the same hash, so the TLS entry
+    // remains live across iterations — this measures the steady-state per-block
+    // decompression cost with the decoder already cached.
+    c.bench_function("decompress_with_dict/tls_hit", |b| {
         b.iter_batched(
             || ZstdDictionary::new(DICT),
             |d| {

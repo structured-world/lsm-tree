@@ -734,10 +734,10 @@ mod tests {
     #[test]
     fn compress_with_dict_raw_content_empty_plaintext_roundtrips_at_exact_capacity() {
         // Regression: empty plaintext with a raw-content dictionary must succeed even
-        // when capacity=0 (exact capacity for 0-byte output). The `remaining==0`
-        // early-return inside `decode_raw_content_bounded` must not fire before the
-        // decoder has had a chance to read the final (empty) block and mark the
-        // frame as finished.
+        // when capacity=0 (exact capacity for 0-byte output). The raw-content path
+        // still enters block decoding for empty frames by calling `decode_blocks`
+        // with `remaining.max(1)`, then relies on the post-collect size guard to
+        // enforce the exact-capacity check after the frame is marked finished.
         let raw_dict = b"raw content dictionary for empty payload exact-capacity test";
         let dict = ZstdDictionary::new(raw_dict);
 
@@ -781,8 +781,9 @@ mod tests {
     #[test]
     fn decompress_with_dict_raw_content_rejects_zero_capacity_non_empty() {
         // Capacity=0 with non-empty plaintext must return an error immediately:
-        // the FCS pre-check (if FCS present) or the remaining==0 branch inside
-        // decode_raw_content_bounded catches this before any allocation.
+        // either the FCS pre-check rejects the frame up front, or the bounded
+        // raw-content decode path hits its size/capacity guard when decoding the
+        // first block for a zero-capacity output buffer.
         let raw_dict = b"raw content dict for zero-capacity test";
 
         let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, raw_dict)
@@ -962,15 +963,16 @@ mod tests {
 
     // --- decode_raw_content_bounded direct tests ---
     //
-    // The `remaining == 0` and `can > capacity` error paths inside
-    // `decode_raw_content_bounded` are guarded by the FCS pre-check in
-    // `do_decompress_with_dict` when called through the high-level API:
-    // if the frame embeds a content size and that size exceeds `capacity`,
-    // `do_decompress_with_dict` returns early before ever calling this helper.
+    // The post-decode `output.len() + can_collect() > capacity` size guard inside
+    // `decode_raw_content_bounded` is normally bypassed by the FCS pre-check in
+    // `do_decompress_with_dict`: if the frame embeds a content size that exceeds
+    // `capacity`, `do_decompress_with_dict` returns early before ever calling
+    // this helper. `decode_raw_content_bounded` always calls `decode_blocks` with
+    // `remaining.max(1)` — there is no `remaining == 0` early-return.
     //
-    // To exercise these branches, the tests below set up a `FrameDecoder`
-    // manually (mirroring `do_decompress_with_dict`) and call the private
-    // function directly.
+    // To exercise the post-decode size guard directly, the tests below set up a
+    // `FrameDecoder` manually (mirroring `do_decompress_with_dict`) and call the
+    // private function directly, bypassing the FCS pre-check.
 
     /// Compute the synthetic raw-content dict id used by both
     /// `compress_with_dict` and `do_decompress_with_dict` for raw-content
@@ -1009,9 +1011,11 @@ mod tests {
 
     #[test]
     fn decode_raw_content_bounded_remaining_zero_returns_error() {
-        // capacity = 0 → remaining = 0 on the very first loop iteration.
-        // decoder.is_finished() = false (blocks not yet decoded).
-        // The `if remaining == 0` branch fires, returning DecompressedSizeTooLarge.
+        // capacity = 0 on the very first loop iteration.
+        // The decoder still advances with `remaining.max(1)`, so it can decode
+        // a block and report collected output. Once `can_collect()` becomes
+        // non-zero, the `output.len() + can_collect() > capacity` guard returns
+        // DecompressedSizeTooLarge.
         //
         // This path is unreachable through the high-level API because the FCS
         // pre-check in do_decompress_with_dict returns early first (frames
