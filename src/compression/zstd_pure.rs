@@ -703,4 +703,47 @@ mod tests {
             "decompressed output of empty payload must be empty"
         );
     }
+
+    #[test]
+    fn decompress_with_dict_raw_content_rejects_frame_exceeding_capacity() {
+        // Raw-content dict path: the frame is produced by the pure backend with a
+        // raw-content (non-finalized) dictionary. The decompressor must return
+        // DecompressedSizeTooLarge when the capacity limit is smaller than the
+        // plaintext — exercising the FCS pre-check in decompress_with_dict and
+        // the decode_raw_content_bounded loop capacity guard.
+        let raw_dict = b"this is raw content dictionary data for matching";
+
+        let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, raw_dict)
+            .expect("compression with raw content dict should succeed");
+
+        let dict = ZstdDictionary::new(raw_dict);
+        // Capacity set to half the plaintext length — frame decompresses to
+        // more than this limit so the guard must fire.
+        let too_small = PLAINTEXT.len() / 2;
+        let result = ZstdPureProvider::decompress_with_dict(&compressed, &dict, too_small);
+
+        assert!(
+            matches!(result, Err(crate::Error::DecompressedSizeTooLarge { .. })),
+            "raw-content path must return DecompressedSizeTooLarge when capacity < plaintext; got {result:?}",
+        );
+    }
+
+    #[test]
+    fn decompress_with_dict_raw_content_rejects_zero_capacity_non_empty() {
+        // Capacity=0 with non-empty plaintext must return an error immediately:
+        // the FCS pre-check (if FCS present) or the remaining==0 branch inside
+        // decode_raw_content_bounded catches this before any allocation.
+        let raw_dict = b"raw content dict for zero-capacity test";
+
+        let compressed = ZstdPureProvider::compress_with_dict(PLAINTEXT, 3, raw_dict)
+            .expect("compression should succeed");
+
+        let dict = ZstdDictionary::new(raw_dict);
+        let result = ZstdPureProvider::decompress_with_dict(&compressed, &dict, 0);
+
+        assert!(
+            matches!(result, Err(crate::Error::DecompressedSizeTooLarge { .. })),
+            "capacity=0 with non-empty frame must return DecompressedSizeTooLarge; got {result:?}",
+        );
+    }
 }
