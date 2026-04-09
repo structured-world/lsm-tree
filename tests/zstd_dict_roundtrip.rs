@@ -464,6 +464,86 @@ mod zstd_dict {
     }
 
     #[test]
+    fn blob_zstd_dict_range_scan() -> lsm_tree::Result<()> {
+        // Range-scan and prefix-scan resolve blob indirections through the
+        // iterator path (Guard::value → resolve_value_handle).  Verify that
+        // the dict is threaded correctly through that path.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = lsm_tree::CompressionType::zstd_dict(3, dict.id())?;
+        let dict_arc = Arc::new(dict);
+
+        let tree = make_config(dir.path())
+            .with_kv_separation(Some(make_blob_opts(compression, dict_arc)))
+            .open()?;
+
+        let big_value = b"range-blob-value-".repeat(10);
+
+        for i in 0u32..40 {
+            let key = format!("key-{i:04}");
+            tree.insert(key.as_bytes(), &big_value, i.into());
+        }
+        tree.flush_active_memtable(0)?;
+
+        // Inclusive range scan
+        let items: Vec<_> = tree
+            .range(
+                "key-0010".as_bytes()..="key-0019".as_bytes(),
+                lsm_tree::MAX_SEQNO,
+                None,
+            )
+            .collect();
+        assert_eq!(items.len(), 10, "range scan should return 10 blob items");
+
+        // Consume items via into_inner to resolve blob indirections
+        for g in items {
+            let (_, val) = g.into_inner()?;
+            assert_eq!(val.as_ref(), big_value.as_slice());
+        }
+
+        // Prefix scan
+        let prefix_items: Vec<_> = tree.prefix("key-002", lsm_tree::MAX_SEQNO, None).collect();
+        assert_eq!(
+            prefix_items.len(),
+            10,
+            "prefix scan should return 10 blob items"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn blob_zstd_dict_multi_get() -> lsm_tree::Result<()> {
+        // multi_get resolves blob indirections via a separate code path
+        // (blob_tree::multi_get → resolve_value_handle).  Verify dict threads correctly.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = lsm_tree::CompressionType::zstd_dict(3, dict.id())?;
+        let dict_arc = Arc::new(dict);
+
+        let tree = make_config(dir.path())
+            .with_kv_separation(Some(make_blob_opts(compression, dict_arc)))
+            .open()?;
+
+        let big_value = b"multi-get-blob-value-".repeat(10);
+
+        tree.insert(b"alpha", &big_value, 0);
+        tree.insert(b"beta", &big_value, 1);
+        tree.insert(b"gamma", &big_value, 2);
+        tree.flush_active_memtable(0)?;
+
+        let results = tree.multi_get(["alpha", "beta", "gamma", "missing"], lsm_tree::MAX_SEQNO)?;
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].as_deref(), Some(big_value.as_slice()), "alpha");
+        assert_eq!(results[1].as_deref(), Some(big_value.as_slice()), "beta");
+        assert_eq!(results[2].as_deref(), Some(big_value.as_slice()), "gamma");
+        assert!(results[3].is_none(), "missing key should return None");
+
+        Ok(())
+    }
+
+    #[test]
     fn reopen_with_wrong_dict_fails_at_recovery() -> lsm_tree::Result<()> {
         let dir = tempfile::tempdir()?;
         let dict = make_test_dictionary();
