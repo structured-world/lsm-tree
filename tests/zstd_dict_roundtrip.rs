@@ -311,7 +311,6 @@ mod zstd_dict {
 
     /// Build KvSeparationOptions that force every value into a blob file,
     /// compress blobs with ZstdDict, and attach the matching dictionary.
-    #[cfg(feature = "zstd")]
     fn make_blob_opts(
         compression: lsm_tree::CompressionType,
         dict: Arc<lsm_tree::ZstdDictionary>,

@@ -1074,4 +1074,99 @@ mod tests {
 
         Ok(())
     }
+
+    /// Write a blob with ZstdDict, then read it back without supplying a
+    /// dictionary.  Expect `ZstdDictMismatch { got: None }`.
+    #[test]
+    #[cfg(zstd_any)]
+    fn blob_reader_zstd_dict_missing_dict_returns_mismatch() -> crate::Result<()> {
+        use crate::compression::ZstdDictionary;
+
+        let id_generator = SequenceNumberCounter::default();
+        let folder = tempfile::tempdir()?;
+
+        let dict = ZstdDictionary::new(b"some_dictionary_content_for_testing");
+        let compression = CompressionType::ZstdDict {
+            level: 3,
+            dict_id: dict.id(),
+        };
+        let dict_arc = Arc::new(dict);
+
+        let mut writer = crate::vlog::BlobFileWriter::new(
+            id_generator,
+            folder.path(),
+            0,
+            None,
+            Arc::new(StdFs),
+        )?
+        .use_target_size(u64::MAX)
+        .use_compression(compression)
+        .use_zstd_dictionary(Some(dict_arc));
+
+        let handle = writer.write(b"key", 0, b"value-to-compress-with-dict")?;
+        let blob_file = writer.finish()?;
+        let blob_file = blob_file.first().unwrap();
+
+        let file = File::open(&blob_file.0.path)?;
+        // Reader created WITHOUT a dictionary
+        let reader = Reader::new(blob_file, &file);
+
+        let result = reader.get(b"key", &handle);
+        assert!(
+            matches!(
+                result,
+                Err(crate::Error::ZstdDictMismatch { got: None, .. })
+            ),
+            "expected ZstdDictMismatch{{got: None}} when dict is absent; got: {result:?}",
+        );
+
+        Ok(())
+    }
+
+    /// Write a blob with dict A, then read it back with dict B (different id).
+    /// Expect `ZstdDictMismatch { got: Some(B.id()) }`.
+    #[test]
+    #[cfg(zstd_any)]
+    fn blob_reader_zstd_dict_wrong_dict_id_returns_mismatch() -> crate::Result<()> {
+        use crate::compression::ZstdDictionary;
+
+        let id_generator = SequenceNumberCounter::default();
+        let folder = tempfile::tempdir()?;
+
+        let dict_a = ZstdDictionary::new(b"dictionary_a_content_for_testing");
+        let dict_b = ZstdDictionary::new(b"dictionary_b_entirely_different_content");
+        let compression = CompressionType::ZstdDict {
+            level: 3,
+            dict_id: dict_a.id(),
+        };
+        let dict_a_arc = Arc::new(dict_a);
+        let dict_b_arc = Arc::new(dict_b);
+
+        let mut writer = crate::vlog::BlobFileWriter::new(
+            id_generator,
+            folder.path(),
+            0,
+            None,
+            Arc::new(StdFs),
+        )?
+        .use_target_size(u64::MAX)
+        .use_compression(compression)
+        .use_zstd_dictionary(Some(dict_a_arc));
+
+        let handle = writer.write(b"key", 0, b"value-compressed-with-dict-a")?;
+        let blob_file = writer.finish()?;
+        let blob_file = blob_file.first().unwrap();
+
+        let file = File::open(&blob_file.0.path)?;
+        // Reader supplied with dict B (wrong id)
+        let reader = Reader::new(blob_file, &file).with_dict(Some(&dict_b_arc));
+
+        let result = reader.get(b"key", &handle);
+        assert!(
+            matches!(result, Err(crate::Error::ZstdDictMismatch { .. })),
+            "expected ZstdDictMismatch when wrong dict id provided; got: {result:?}",
+        );
+
+        Ok(())
+    }
 }

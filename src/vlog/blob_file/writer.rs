@@ -250,6 +250,12 @@ impl Writer {
                             expected: *dict_id,
                             got: None,
                         })?;
+                if dict.id() != *dict_id {
+                    return Err(crate::Error::ZstdDictMismatch {
+                        expected: *dict_id,
+                        got: Some(dict.id()),
+                    });
+                }
                 let compressed =
                     crate::compression::ZstdBackend::compress_with_dict(value, *level, dict.raw())?;
                 check_size_cap(compressed.len())?;
