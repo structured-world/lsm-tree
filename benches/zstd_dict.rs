@@ -4,15 +4,21 @@
 
 //! Benchmark: per-block zstd dictionary decompression latency.
 //!
-//! Measures the cost of `decompress_with_dict` for a single compressed block,
-//! both cold (first call, dictionary not yet cached in the backend's TLS /
-//! `OnceLock`) and warm (subsequent calls, dictionary already cached).
+//! Measures the cost of `decompress_with_dict` for a single compressed block.
+//! Two scenarios are covered:
+//!
+//! - **`warm`** — steady-state per-block cost with a long-lived `ZstdDictionary`
+//!   handle; the TLS `FrameDecoder` is pre-populated before timing starts.
+//! - **`tls_hit`** — each iteration receives a *fresh* `ZstdDictionary` handle,
+//!   but because all iterations share the same dictionary bytes (same xxh3 hash
+//!   key), the thread-local `FrameDecoder` remains cached across iterations.
+//!   This measures the steady-state per-block cost when callers reconstruct the
+//!   handle on every operation.
 //!
 //! Run with:
 //!
 //! ```text
-//! cargo bench --bench zstd_dict --features zstd        # C FFI backend
-//! cargo bench --bench zstd_dict --features zstd-pure   # pure Rust backend
+//! cargo bench --bench zstd_dict --features zstd
 //! ```
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -74,20 +80,12 @@ fn bench_decompress_with_dict(c: &mut Criterion) {
         });
     });
 
-    // "Cold" benchmark: each iteration gets a fresh `ZstdDictionary` handle
-    // (new `OnceLock` for the C FFI backend, same dict bytes for both).
-    //
-    // For the C FFI backend this truly measures first-call cost: a fresh
-    // `ZstdDictionary` has an unpopulated `OnceLock`, so `ZSTD_createDDict`
-    // is invoked on the first decompression and cached in the handle.
-    //
-    // For the pure Rust backend the result is different: the TLS decoder is
-    // keyed by the 64-bit content hash.  All iterations share the same DICT
-    // bytes and therefore the same hash, so after the first iteration the TLS
-    // entry is still live — subsequent iterations measure the TLS-hit path, not
-    // dict parsing.  True "cold" cost for the pure Rust backend is therefore
-    // only observable on the very first iteration of the first benchmark run.
-    c.bench_function("decompress_with_dict/cold", |b| {
+    // TLS-hit benchmark: each iteration gets a fresh `ZstdDictionary` handle,
+    // but the TLS decoder is keyed by the 64-bit content hash. All iterations
+    // share the same DICT bytes and therefore the same hash, so the TLS entry
+    // remains live across iterations — this measures the steady-state per-block
+    // decompression cost with the decoder already cached.
+    c.bench_function("decompress_with_dict/tls_hit", |b| {
         b.iter_batched(
             || ZstdDictionary::new(DICT),
             |d| {

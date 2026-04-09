@@ -230,6 +230,82 @@ mod zstd_dict {
     }
 
     #[test]
+    fn zstd_dict_survives_major_compaction() -> lsm_tree::Result<()> {
+        // Verifies that dictionary-compressed data is correctly preserved through
+        // the full compaction cycle: three L0 SSTs are flushed, then major_compact
+        // merges them into L1, decompressing source blocks and re-compressing the
+        // output with the same ZstdDict policy.  Both compress_with_dict and
+        // decompress_with_dict are exercised on the compaction hot path.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+
+        let tree = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(compression))
+            .zstd_dictionary(Some(Arc::new(dict)))
+            .open()?;
+
+        // Three separate flushes → three L0 SSTs
+        for batch in 0u32..3 {
+            for i in 0u32..100 {
+                let key = format!("key-{batch:02}-{i:04}");
+                let val = format!("value-{batch:02}-{i:04}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), (batch * 100 + i).into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        assert!(
+            tree.table_count() >= 3,
+            "expected at least 3 tables before compaction; got {}",
+            tree.table_count()
+        );
+
+        tree.major_compact(u64::MAX, 0)?;
+
+        // Verify compaction actually ran: L0 must be empty after major compaction.
+        // If major_compact() ever regresses to a no-op, this guard catches it before
+        // the read assertions, which would otherwise pass against the original L0 tables.
+        assert_eq!(
+            Some(0),
+            tree.level_table_count(0),
+            "L0 must be empty after major_compact — compaction may not have run"
+        );
+
+        // All 300 keys must be readable after compaction.
+        for batch in 0u32..3 {
+            for i in 0u32..100 {
+                let key = format!("key-{batch:02}-{i:04}");
+                let expected = format!("value-{batch:02}-{i:04}-padding-to-make-it-longer");
+                let got = tree
+                    .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                    .unwrap_or_else(|| panic!("key {key} missing after compaction"));
+                assert_eq!(
+                    got.as_ref(),
+                    expected.as_bytes(),
+                    "value mismatch for {key} after compaction"
+                );
+            }
+        }
+
+        // Range scan across the compacted SST must also work.
+        let items: Vec<_> = tree
+            .range(
+                "key-01-0000".as_bytes()..="key-01-0009".as_bytes(),
+                lsm_tree::MAX_SEQNO,
+                None,
+            )
+            .collect();
+        assert_eq!(
+            items.len(),
+            10,
+            "range scan after compaction should return 10 items"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn reopen_with_wrong_dict_fails_at_recovery() -> lsm_tree::Result<()> {
         let dir = tempfile::tempdir()?;
         let dict = make_test_dictionary();

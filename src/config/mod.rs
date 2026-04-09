@@ -508,23 +508,6 @@ impl Config {
     /// at open time rather than at first block write/read.
     #[cfg(zstd_any)]
     fn validate_zstd_dictionary(&self) -> crate::Result<()> {
-        // The pure Rust backend does not support dictionary *compression*.
-        // Reject ZstdDict write policies upfront so Config::open() fails early
-        // instead of deferring to the first block spill.
-        // Dictionary *reading* remains available under zstd_any for opening
-        // tables written by the C FFI backend.
-        #[cfg(all(feature = "zstd-pure", not(feature = "zstd")))]
-        if self
-            .data_block_compression_policy
-            .iter()
-            .any(|ct| matches!(ct, CompressionType::ZstdDict { .. }))
-        {
-            return Err(crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "zstd dictionary compression is not supported by the pure Rust backend",
-            )));
-        }
-
         let dict_id = self.zstd_dictionary.as_ref().map(|d| d.id());
 
         // NOTE: Only data block policies are validated. Index blocks never

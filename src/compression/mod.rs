@@ -2,12 +2,7 @@
 // This source code is licensed under both the Apache 2.0 and MIT License
 // (found in the LICENSE-* files in the repository)
 
-// Backend modules — only one is compiled based on feature flags.
-// When both `zstd` and `zstd-pure` are enabled, C FFI takes precedence.
 #[cfg(feature = "zstd")]
-mod zstd_ffi;
-
-#[cfg(all(feature = "zstd-pure", not(feature = "zstd")))]
 mod zstd_pure;
 
 use crate::coding::{Decode, Encode};
@@ -19,14 +14,9 @@ use std::sync::Arc;
 
 /// Zstd compression backend operations.
 ///
-/// This trait abstracts the zstd implementation behind a compile-time
-/// selected backend. The C FFI backend (`zstd` feature) provides full
-/// compression levels 1–22 and dictionary support. The pure Rust backend
-/// (`zstd-pure` feature) provides compression levels 1–22 with no C
-/// dependencies (dictionary compression not yet supported).
-///
-/// Both backends produce RFC 8878 compliant zstd frames, so data
-/// compressed by one can be decompressed by the other.
+/// Abstracts the zstd implementation so callsites are independent of the
+/// underlying crate. Enabled by the `zstd` feature (pure Rust, no C
+/// dependencies). Produces RFC 8878 compliant zstd frames.
 #[cfg(zstd_any)]
 pub trait CompressionProvider {
     /// Compress `data` at the given zstd level (1–22).
@@ -35,15 +25,22 @@ pub trait CompressionProvider {
     /// Decompress a zstd frame, pre-allocating `capacity` bytes.
     fn decompress(data: &[u8], capacity: usize) -> crate::Result<Vec<u8>>;
 
-    /// Compress `data` using a pre-trained dictionary.
+    /// Compress `data` using a zstd dictionary.
+    ///
+    /// `dict_raw` may be either a finalized zstd dictionary (header bytes
+    /// `37 A4 30 EC`, i.e. little-endian integer `0xEC30A437`, followed by
+    /// entropy tables and content — produced by `zstd --train`; accessible
+    /// via [`ZstdDictionary::raw`] for persistence and interop) or raw content
+    /// bytes (bare bytes used as LZ77 history). The zstd backend in this crate
+    /// accepts either representation.
     fn compress_with_dict(data: &[u8], level: i32, dict_raw: &[u8]) -> crate::Result<Vec<u8>>;
 
     /// Decompress a zstd frame that was compressed with a dictionary.
     ///
-    /// `dict` exposes the raw dictionary bytes **and** a lazily-initialized
-    /// pre-compiled form (C FFI backend: `ZSTD_DDict`; pure Rust backend:
-    /// cached `FrameDecoder` in thread-local storage). Backends must use the
-    /// prepared form to avoid re-parsing the dictionary on every call.
+    /// `dict` provides the raw dictionary bytes and a 64-bit fingerprint used
+    /// as the TLS cache key. Implementations cache the parsed decoder in
+    /// thread-local storage keyed by that fingerprint to avoid re-parsing the
+    /// dictionary on every call.
     fn decompress_with_dict(
         data: &[u8],
         dict: &ZstdDictionary,
@@ -51,14 +48,8 @@ pub trait CompressionProvider {
     ) -> crate::Result<Vec<u8>>;
 }
 
-/// The active zstd backend, selected at compile time.
-///
-/// When `zstd` (C FFI) is enabled it takes precedence; otherwise
-/// `zstd-pure` (structured-zstd) is used.
+/// The active zstd backend (pure Rust via `structured-zstd`).
 #[cfg(feature = "zstd")]
-pub type ZstdBackend = zstd_ffi::ZstdFfiProvider;
-
-#[cfg(all(feature = "zstd-pure", not(feature = "zstd")))]
 pub type ZstdBackend = zstd_pure::ZstdPureProvider;
 
 /// Pre-trained zstd dictionary for improved compression of small blocks.
@@ -83,23 +74,10 @@ pub type ZstdBackend = zstd_pure::ZstdPureProvider;
 #[cfg(zstd_any)]
 pub struct ZstdDictionary {
     /// Full 64-bit xxh3 hash used as the collision-resistant cache key for the
-    /// thread-local `FrameDecoder` in the pure Rust backend. The public
-    /// `id() -> u32` method returns the lower 32 bits for external consumers.
+    /// thread-local `FrameDecoder`. The public `id() -> u32` method returns
+    /// the lower 32 bits for external consumers.
     id: u64,
     raw: Arc<[u8]>,
-
-    /// Pre-compiled decompressor dictionary, lazily initialized on first use.
-    ///
-    /// Wrapped in `Arc<OnceLock<…>>` so all clones of the same
-    /// `ZstdDictionary` share one compiled instance. With the C FFI backend,
-    /// `ZSTD_DDict` is therefore created at most once per dictionary handle,
-    /// regardless of how many table readers hold a clone of that handle.
-    ///
-    /// Available only with the C FFI backend (`zstd` feature). The pure Rust
-    /// backend caches an equivalent `FrameDecoder` in thread-local storage
-    /// inside `decompress_with_dict` instead.
-    #[cfg(feature = "zstd")]
-    prepared: Arc<std::sync::OnceLock<zstd::dict::DecoderDictionary<'static>>>,
 }
 
 #[cfg(zstd_any)]
@@ -108,52 +86,52 @@ impl Clone for ZstdDictionary {
         Self {
             id: self.id,
             raw: Arc::clone(&self.raw),
-            #[cfg(feature = "zstd")]
-            prepared: Arc::clone(&self.prepared),
         }
     }
 }
 
 #[cfg(zstd_any)]
 impl ZstdDictionary {
-    /// Creates a new dictionary from raw bytes.
+    /// Creates a new dictionary handle from raw bytes.
     ///
-    /// The raw bytes should be a pre-trained zstd dictionary (e.g., output
-    /// of `zstd::dict::from_continuous` or `zstd --train`). The dictionary
-    /// ID is stored as a full 64-bit xxh3 hash; the public [`ZstdDictionary::id`]
-    /// method returns the lower 32 bits for external consumers.
+    /// `raw` may be either:
+    ///
+    /// * A **finalized zstd dictionary** — bytes starting with the magic
+    ///   `37 A4 30 EC` (as produced by `zstd --train`; accessible via
+    ///   [`ZstdDictionary::raw`] for persistence and interop).  The backend
+    ///   parses it with the full entropy-table decoder.
+    /// * A **raw content dictionary** — arbitrary bytes used as LZ77 history
+    ///   (no magic header).  Useful when the caller controls the training data
+    ///   and does not need the full entropy-table overhead.
+    ///
+    /// Both forms are accepted by [`CompressionProvider::compress_with_dict`]
+    /// and [`CompressionProvider::decompress_with_dict`].
+    ///
+    /// The handle stores the full 64-bit xxh3 hash of `raw` internally.
+    /// [`ZstdDictionary::id`] returns the lower 32 bits for external consumers
+    /// (config validation, frame header); [`ZstdDictionary::id64`] exposes the
+    /// full fingerprint for use as a cache key.
     #[must_use]
     pub fn new(raw: &[u8]) -> Self {
         Self {
             id: compute_dict_id(raw),
             raw: Arc::from(raw),
-            #[cfg(feature = "zstd")]
-            prepared: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
-    /// Returns the lazily-initialized pre-compiled decompressor dictionary.
+    /// Returns a 32-bit fingerprint derived from the dictionary content.
     ///
-    /// On first call this copies the raw bytes into a `ZSTD_DDict` (C
-    /// library's opaque pre-parsed form) and caches the result inside this
-    /// `ZstdDictionary`. Subsequent calls — from any thread — return the
-    /// cached reference with no further allocation or parsing.
+    /// The fingerprint is the lower 32 bits of the xxh3-64 hash of the raw
+    /// dictionary bytes.  It is stable for a given byte sequence and is
+    /// intended for config validation (matching a `CompressionType::ZstdDict`
+    /// `dict_id` field against the supplied `ZstdDictionary`) and external
+    /// interop.
     ///
-    /// Using this together with
-    /// [`zstd::bulk::Decompressor::with_prepared_dictionary`] eliminates the
-    /// per-block `ZSTD_createDDict` call that was previously paid on every
-    /// `decompress_with_dict` invocation.
-    #[cfg(feature = "zstd")]
-    pub(crate) fn decoder_dict(&self) -> &zstd::dict::DecoderDictionary<'static> {
-        self.prepared
-            .get_or_init(|| zstd::dict::DecoderDictionary::copy(&self.raw))
-    }
-
-    /// Returns a 32-bit dictionary fingerprint (lower 32 bits of xxh3).
-    ///
-    /// Intended for display and external interop (e.g., matching against the
-    /// dict ID embedded in a zstd frame header). For internal cache keying
-    /// use [`id64`](ZstdDictionary::id64) to avoid hash collisions.
+    /// The value may theoretically be `0` (probability ≈ 1/2³²). Backends
+    /// that embed a dict ID in the zstd frame header (where id=0 is reserved)
+    /// are responsible for clamping to at least 1 themselves.  Config
+    /// validation is unaffected: both sides derive the ID from the same bytes
+    /// and therefore agree even in the zero case.
     #[must_use]
     #[expect(
         clippy::cast_possible_truncation,
@@ -164,8 +142,8 @@ impl ZstdDictionary {
     }
 
     /// Returns the full 64-bit xxh3 fingerprint used as a collision-resistant
-    /// cache key inside the pure Rust backend's TLS decoder.
-    #[cfg(all(feature = "zstd-pure", not(feature = "zstd")))]
+    /// cache key inside the TLS decoder.
+    #[cfg(feature = "zstd")]
     #[must_use]
     pub(crate) fn id64(&self) -> u64 {
         self.id
