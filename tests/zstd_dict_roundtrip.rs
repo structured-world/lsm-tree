@@ -392,6 +392,11 @@ mod zstd_dict {
         tree.flush_active_memtable(0)?;
 
         tree.major_compact(u64::MAX, 0)?;
+        assert_eq!(
+            Some(0),
+            tree.level_table_count(0),
+            "L0 must be empty after major_compact — compaction may not have run",
+        );
 
         for i in 0u32..60 {
             let key = format!("key-{i:04}");
@@ -443,7 +448,9 @@ mod zstd_dict {
         let dict = make_test_dictionary();
         let wrong_dict = ZstdDictionary::new(b"entirely different content for wrong dict");
         // compression claims to need wrong_dict.id(), but we provide dict
-        let compression = lsm_tree::CompressionType::zstd_dict(3, wrong_dict.id())?;
+        let expected_id = wrong_dict.id();
+        let provided_id = dict.id();
+        let compression = lsm_tree::CompressionType::zstd_dict(3, expected_id)?;
 
         let result = make_config(dir.path())
             .with_kv_separation(Some(
@@ -455,8 +462,14 @@ mod zstd_dict {
             .open();
 
         assert!(
-            matches!(result, Err(lsm_tree::Error::ZstdDictMismatch { .. })),
-            "expected ZstdDictMismatch when dict_id in compression != actual dict id",
+            matches!(
+                result,
+                Err(lsm_tree::Error::ZstdDictMismatch {
+                    expected,
+                    got: Some(actual),
+                }) if expected == expected_id && actual == provided_id
+            ),
+            "expected ZstdDictMismatch{{expected: {expected_id}, got: Some({provided_id})}}",
         );
 
         Ok(())
