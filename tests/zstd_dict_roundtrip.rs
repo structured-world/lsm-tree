@@ -500,13 +500,18 @@ mod zstd_dict {
             assert_eq!(val.as_ref(), big_value.as_slice());
         }
 
-        // Prefix scan
+        // Prefix scan — also resolve blob indirections via into_inner to exercise
+        // the zstd-dict decompression path through the prefix iterator.
         let prefix_items: Vec<_> = tree.prefix("key-002", lsm_tree::MAX_SEQNO, None).collect();
         assert_eq!(
             prefix_items.len(),
             10,
             "prefix scan should return 10 blob items"
         );
+        for g in prefix_items {
+            let (_, val) = g.into_inner()?;
+            assert_eq!(val.as_ref(), big_value.as_slice());
+        }
 
         Ok(())
     }
