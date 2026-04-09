@@ -147,6 +147,16 @@ fn decode_raw_content_bounded(
             // decoded). For non-empty frames `can_collect()` will be > 0 after this
             // call and the size guard below rejects them; for empty frames the
             // decoder marks itself finished with 0 bytes collectible.
+            //
+            // Note: `UptoBytes(N)` is a best-effort hint. The decoder may decode
+            // one additional zstd block (≤ 128 KiB by the zstd standard) into its
+            // internal buffer before returning, so `can_collect()` can transiently
+            // exceed `remaining` by up to one block. The `new_len > capacity` guard
+            // below immediately rejects such frames and frees the buffer. This is
+            // acceptable because this path only decompresses data from SST files
+            // that have already passed checksum verification — adversarial frames
+            // are not a threat model concern here. FCS-less frames produced by
+            // trusted writers are handled by the post-decode check alone.
             decoder
                 .decode_blocks(
                     &mut *cursor,
