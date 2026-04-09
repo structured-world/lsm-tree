@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775579071739,
+  "lastUpdate": 1775729828250,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -5616,6 +5616,84 @@ window.BENCHMARK_DATA = {
             "value": 185713.20211867147,
             "unit": "ops/sec (normalized)",
             "extra": "raw: 371237 ops/sec | factor: 0.500 | P50: 2.5us | P99: 4.9us | P99.9: 11.1us\nthreads: 1 | elapsed: 0.54s | num: 200000 | iterations: 3 | runner: seq_wr=336033 rand_rd=912806 cpu=117 composite=45976.5"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "abd0ee5443dcf9362937ff54baefbb4bc8d29239",
+          "message": "feat(compression): enable dictionary compression in pure Rust backend (#229)\n\n## Summary\n\n- Implements \\`compress_with_dict()\\` in \\`ZstdPureProvider\\` using\n\\`FrameCompressor\\` from \\`structured-zstd\\` v0.0.11\n(structured-world/structured-zstd#25)\n- Removes the C FFI \\`zstd\\` crate entirely; \\`structured-zstd\\` is now\nthe sole backend under the \\`zstd\\` feature flag\n- \\`zstd-pure\\` becomes a deprecated alias (\\`zstd-pure = [\"zstd\"]\\`) —\nenabling it is equivalent to enabling \\`zstd\\`\n- Supports both finalized zstd dictionaries (magic bytes \\`37 A4 30 EC\\`\n+ entropy tables) and raw content dictionaries\n- TLS caching: single-entry \\`FrameCompressor\\` / \\`FrameDecoder\\` per\nthread, keyed by 64-bit xxh3 fingerprint + level\n- \\`strip_dict_id\\`: rewritten in-place (\\`get_mut\\` + \\`copy_within\\` +\n\\`truncate\\`) — eliminates O(frame_len) allocation per compressed block\n- Bug fix: \\`decode_raw_content_bounded\\` with \\`capacity=0\\` and an\nempty frame no longer incorrectly returns \\`DecompressedSizeTooLarge\\`;\nuses \\`remaining.max(1)\\` in \\`UptoBytes\\` so the decoder advances past\nthe empty Last_Block before capacity is checked\n- CI: \\`test-zstd-pure\\` → \\`test-zstd\\`, matrix extended to include\nMSRV 1.92.0\n\n## Technical Details\n\n**Format detection:** \\`compress_with_dict\\` and\n\\`decompress_with_dict\\` check for the zstd dictionary magic prefix\n(bytes \\`37 A4 30 EC\\`, little-endian \\`0xEC30A437\\`):\n- Finalized dict → \\`Dictionary::decode_dict\\` (entropy tables +\ncontent)\n- Raw content dict → \\`Dictionary::from_raw_content\\` with ID = lower 32\nbits of xxh3, clamped to ≥1 (id=0 is reserved in the zstd frame format)\n\n**Raw-content dict ID stripping:** \\`compress_with_dict\\` strips the\nsynthetic dictID from the frame header after compression. This matches\nthe zstd standard convention where \\`dictID=0\\` (absent) means\n\"raw-content dict, id unknown, accept any\", preventing decompressors\nfrom requiring the specific synthetic id.\n\n**Decompression-bomb guard:** The raw-content dict decompress path calls\n\\`decoder.content_size()\\` after \\`init()\\` and rejects frames whose\ndeclared size exceeds the caller's capacity limit before allocating the\noutput buffer. Frames without the FCS field fall back to the post-decode\ncheck.\n\n**\\`ZstdDictionary::id()\\`:** Returns the raw lower 32 bits of xxh3 (may\ntheoretically be 0). Config validation paths compare \\`dict.id()\\`\nagainst on-disk \\`dict_id\\` — both sides derive the same value, so\nvalidation is unaffected. The \\`.max(1)\\` clamp is only applied inside\nthe backend when embedding an id in a zstd frame header.\n\n**Blocker resolved:** structured-world/structured-zstd#25 (FastCOVER +\ndictionary finalization) merged; \\`structured-zstd\\` bumped to v0.0.11\n(encoding performance improvements: row-based match finder, HC positions\nrebase, streaming scratch buffer reuse, FSE decoder packing, and HC\ntable improvements).\n\n## Known Limitations\n\n- TLS compressor/decoder is a single-entry memoizer; switching\ndictionaries/levels on the same thread causes a re-parse — tracked in\n#231\n- Blob-file dictionary compression remains unsupported — tracked in #230\n- Decompression throughput ~2–3.5× slower than C reference\n(pre-existing)\n\n## Test Plan\n\n- [x] \\`src/compression/zstd_pure.rs\\` — roundtrip, magic detection, all\nlevels, empty input, raw content dict, capacity guard, in-place\nstrip_dict_id, empty-frame-at-capacity-0 regression\n- [x] \\`tests/zstd_dict_roundtrip.rs\\` — full Tree write/flush/read,\nrange scan, reopen, missing/wrong dict errors, finalized dict,\nencryption, per-level policy\n- [x] \\`tests/zstd_dict_roundtrip.rs\\` — compaction path: 3 L0 SSTs\nflushed → \\`major_compact\\` → 300 keys readable + range scan (exercises\nboth \\`compress_with_dict\\` and \\`decompress_with_dict\\` on the\ncompaction hot path)\n- [x] \\`tests/zstd_dict_roundtrip.rs\\` — reopen with wrong dict fails at\nrecovery (\\`ZstdDictMismatch\\` on first SST read)\n- [x] \\`cargo nextest run --no-default-features --features zstd,lz4\\`:\n1208 passed\n- [x] \\`cargo nextest run --all-features\\`: 1256 passed\n- [x] \\`cargo clippy --all-features -- -D warnings\\`: clean\n- [x] \\`cargo clippy --no-default-features --features zstd,lz4\n--all-targets -- -D warnings\\`: clean\n- [x] CI job \\`test-zstd\\` (renamed from \\`test-zstd-pure\\`) runs on\n\\`[stable, \"1.92.0\"]\\`\n\nCloses #218\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai\n-->\n## Summary by CodeRabbit\n\n* **New Features**\n* Added support for zstd dictionary compression and decompression\n(pure-Rust backend).\n\n* **Documentation**\n* Clarifies zstd now uses a pure‑Rust backend (no C toolchain),\ndocuments performance tradeoffs, current limitations, and marks the old\nalias as deprecated.\n\n* **Tests**\n* Substantially expanded unit and integration tests for dictionary\nbehaviors and round‑trip/compaction scenarios.\n\n* **Chores**\n* CI and benchmark workflow updates; dependency and build-script feature\nwiring adjusted.\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+          "timestamp": "2026-04-09T13:16:04+03:00",
+          "tree_id": "041bf19ebc8549f6cd00a538204fe159852a0994",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/abd0ee5443dcf9362937ff54baefbb4bc8d29239"
+        },
+        "date": 1775729827275,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 1156876.464750592,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2114039 ops/sec | factor: 0.547 | P50: 0.3us | P99: 2.0us | P99.9: 4.9us\nthreads: 1 | elapsed: 0.09s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
+          },
+          {
+            "name": "fillrandom",
+            "value": 646297.6479424117,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1181024 ops/sec | factor: 0.547 | P50: 0.7us | P99: 2.6us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
+          },
+          {
+            "name": "readrandom",
+            "value": 321578.6052394696,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 587643 ops/sec | factor: 0.547 | P50: 1.5us | P99: 4.9us | P99.9: 12.7us\nthreads: 1 | elapsed: 0.34s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
+          },
+          {
+            "name": "readseq",
+            "value": 1369693.9633325106,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 2502935 ops/sec | factor: 0.547 | P50: 0.2us | P99: 3.7us | P99.9: 7.7us\nthreads: 1 | elapsed: 0.08s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
+          },
+          {
+            "name": "seekrandom",
+            "value": 213675.06712768466,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 390463 ops/sec | factor: 0.547 | P50: 2.2us | P99: 5.7us | P99.9: 13.5us\nthreads: 1 | elapsed: 0.51s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
+          },
+          {
+            "name": "prefixscan",
+            "value": 102822.20747632984,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 187894 ops/sec | factor: 0.547 | P50: 5.0us | P99: 7.4us | P99.9: 16.9us\nthreads: 1 | elapsed: 1.06s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
+          },
+          {
+            "name": "overwrite",
+            "value": 656502.1417723434,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 1199671 ops/sec | factor: 0.547 | P50: 0.7us | P99: 2.6us | P99.9: 5.9us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
+          },
+          {
+            "name": "mergerandom",
+            "value": 372923.68981854105,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 681469 ops/sec | factor: 0.547 | P50: 0.3us | P99: 1.8us | P99.9: 5.0us\nthreads: 1 | elapsed: 0.29s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 274109.5212248919,
+            "unit": "ops/sec (normalized)",
+            "extra": "raw: 500899 ops/sec | factor: 0.547 | P50: 1.7us | P99: 7.0us | P99.9: 13.3us\nthreads: 1 | elapsed: 0.40s | num: 200000 | iterations: 3 | runner: seq_wr=225405 rand_rd=950499 cpu=123 composite=42029.5"
           }
         ]
       }
