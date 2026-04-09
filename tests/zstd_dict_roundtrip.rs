@@ -305,6 +305,164 @@ mod zstd_dict {
         Ok(())
     }
 
+    // -------------------------------------------------------------------------
+    // Blob-file (KV-separation) tests
+    // -------------------------------------------------------------------------
+
+    /// Build KvSeparationOptions that force every value into a blob file,
+    /// compress blobs with ZstdDict, and attach the matching dictionary.
+    #[cfg(feature = "zstd")]
+    fn make_blob_opts(
+        compression: lsm_tree::CompressionType,
+        dict: Arc<lsm_tree::ZstdDictionary>,
+    ) -> lsm_tree::KvSeparationOptions {
+        lsm_tree::KvSeparationOptions::default()
+            .compression(compression)
+            // separation_threshold = 1 forces every non-empty value into a blob file
+            .separation_threshold(1)
+            .dict(dict)
+    }
+
+    #[test]
+    fn blob_zstd_dict_roundtrip_write_flush_read() -> lsm_tree::Result<()> {
+        // Round-trip: write blobs compressed with ZstdDict, flush to disk, read back.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = lsm_tree::CompressionType::zstd_dict(3, dict.id())?;
+        let dict_arc = Arc::new(dict);
+
+        let tree = make_config(dir.path())
+            .with_kv_separation(Some(make_blob_opts(compression, dict_arc)))
+            .open()?;
+
+        let big_value = b"blob-value-".repeat(20);
+
+        for i in 0u32..50 {
+            let key = format!("key-{i:04}");
+            tree.insert(key.as_bytes(), &big_value, i.into());
+        }
+
+        tree.flush_active_memtable(0)?;
+
+        assert!(
+            tree.blob_file_count() >= 1,
+            "at least one blob file should exist after flush"
+        );
+
+        for i in 0u32..50 {
+            let key = format!("key-{i:04}");
+            let got = tree
+                .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                .unwrap_or_else(|| panic!("key {key} missing"));
+            assert_eq!(
+                got.as_ref(),
+                big_value.as_slice(),
+                "value mismatch for key {key}",
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn blob_zstd_dict_roundtrip_survives_major_compact() -> lsm_tree::Result<()> {
+        // Verifies that blob files compressed with ZstdDict survive major compaction
+        // (relocation path reads with dict, writes with dict).
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = lsm_tree::CompressionType::zstd_dict(3, dict.id())?;
+        let dict_arc = Arc::new(dict);
+
+        let tree = make_config(dir.path())
+            .with_kv_separation(Some(make_blob_opts(compression, dict_arc)))
+            .open()?;
+
+        let big_value = b"compacted-blob-value-".repeat(15);
+
+        // Two flushes to have multiple tables/blob files
+        for i in 0u32..30 {
+            let key = format!("key-{i:04}");
+            tree.insert(key.as_bytes(), &big_value, i.into());
+        }
+        tree.flush_active_memtable(0)?;
+
+        for i in 30u32..60 {
+            let key = format!("key-{i:04}");
+            tree.insert(key.as_bytes(), &big_value, i.into());
+        }
+        tree.flush_active_memtable(0)?;
+
+        tree.major_compact(u64::MAX, 0)?;
+
+        for i in 0u32..60 {
+            let key = format!("key-{i:04}");
+            let got = tree
+                .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                .unwrap_or_else(|| panic!("key {key} missing after major_compact"));
+            assert_eq!(
+                got.as_ref(),
+                big_value.as_slice(),
+                "value mismatch for {key} after major_compact",
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn blob_zstd_dict_missing_at_open_is_rejected() -> lsm_tree::Result<()> {
+        // ZstdDict compression configured for blobs, but no dictionary provided at open.
+        // Config::validate_zstd_dictionary must catch this before any I/O.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = lsm_tree::CompressionType::zstd_dict(3, dict.id())?;
+
+        let result = make_config(dir.path())
+            .with_kv_separation(Some(
+                lsm_tree::KvSeparationOptions::default()
+                    .compression(compression)
+                    .separation_threshold(1),
+                // deliberately omit .dict(...)
+            ))
+            .open();
+
+        assert!(
+            matches!(
+                result,
+                Err(lsm_tree::Error::ZstdDictMismatch { got: None, .. })
+            ),
+            "expected ZstdDictMismatch{{got: None}} when dict is missing for blob compression",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn blob_zstd_dict_id_mismatch_at_open_is_rejected() -> lsm_tree::Result<()> {
+        // dict_id in CompressionType does not match the actual dictionary provided.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let wrong_dict = ZstdDictionary::new(b"entirely different content for wrong dict");
+        // compression claims to need wrong_dict.id(), but we provide dict
+        let compression = lsm_tree::CompressionType::zstd_dict(3, wrong_dict.id())?;
+
+        let result = make_config(dir.path())
+            .with_kv_separation(Some(
+                lsm_tree::KvSeparationOptions::default()
+                    .compression(compression)
+                    .separation_threshold(1)
+                    .dict(Arc::new(dict)),
+            ))
+            .open();
+
+        assert!(
+            matches!(result, Err(lsm_tree::Error::ZstdDictMismatch { .. })),
+            "expected ZstdDictMismatch when dict_id in compression != actual dict id",
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn reopen_with_wrong_dict_fails_at_recovery() -> lsm_tree::Result<()> {
         let dir = tempfile::tempdir()?;

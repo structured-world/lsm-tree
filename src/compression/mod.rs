@@ -90,6 +90,18 @@ impl Clone for ZstdDictionary {
     }
 }
 
+/// Two dictionaries are equal when their full 64-bit xxh3 fingerprints agree,
+/// which is equivalent to comparing the raw bytes that produced those fingerprints.
+#[cfg(zstd_any)]
+impl PartialEq for ZstdDictionary {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+#[cfg(zstd_any)]
+impl Eq for ZstdDictionary {}
+
 #[cfg(zstd_any)]
 impl ZstdDictionary {
     /// Creates a new dictionary handle from raw bytes.

@@ -34,11 +34,32 @@ const MAX_DECOMPRESSION_SIZE: usize = 256 * 1024 * 1024;
 pub struct Reader<'a> {
     blob_file: &'a BlobFile,
     file: &'a dyn FsFile,
+
+    /// Dictionary for `ZstdDict` decompression.  Must be supplied when the
+    /// blob file's compression type is [`CompressionType::ZstdDict`].
+    #[cfg(zstd_any)]
+    zstd_dictionary: Option<&'a crate::compression::ZstdDictionary>,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(blob_file: &'a BlobFile, file: &'a dyn FsFile) -> Self {
-        Self { blob_file, file }
+        Self {
+            blob_file,
+            file,
+            #[cfg(zstd_any)]
+            zstd_dictionary: None,
+        }
+    }
+
+    /// Provides the zstd dictionary for [`CompressionType::ZstdDict`] blobs.
+    ///
+    /// Must be called when the blob file's metadata reports `ZstdDict`
+    /// compression.  Passing `None` clears a previously set dictionary.
+    #[cfg(zstd_any)]
+    #[must_use]
+    pub fn with_dict(mut self, dict: Option<&'a crate::compression::ZstdDictionary>) -> Self {
+        self.zstd_dictionary = dict;
+        self
     }
 
     #[expect(
@@ -232,11 +253,31 @@ impl<'a> Reader<'a> {
             }
 
             #[cfg(zstd_any)]
-            CompressionType::ZstdDict { .. } => {
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "zstd dictionary compression is not supported for blob files",
-                )));
+            CompressionType::ZstdDict { dict_id, .. } => {
+                let dict = self.zstd_dictionary.ok_or(crate::Error::ZstdDictMismatch {
+                    expected: *dict_id,
+                    got: None,
+                })?;
+
+                if dict.id() != *dict_id {
+                    return Err(crate::Error::ZstdDictMismatch {
+                        expected: *dict_id,
+                        got: Some(dict.id()),
+                    });
+                }
+
+                let decompressed = crate::compression::ZstdBackend::decompress_with_dict(
+                    &raw_data,
+                    dict,
+                    real_val_len,
+                )
+                .map_err(|_| crate::Error::Decompress(self.blob_file.0.meta.compression))?;
+
+                if decompressed.len() != real_val_len {
+                    return Err(crate::Error::Decompress(self.blob_file.0.meta.compression));
+                }
+
+                UserValue::from(decompressed)
             }
         };
 
