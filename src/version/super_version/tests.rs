@@ -377,6 +377,56 @@ fn oldest_retained_seqno_tracks_the_history_front() -> crate::Result<()> {
     Ok(())
 }
 
+/// The boundary is the FRONT's seqno even when a later version carries a
+/// smaller one (a reopen at a persisted floor followed by an install from a
+/// reset counter): a read below the front must not be served from that
+/// "newer" version just because its seqno happens to sit below the request.
+#[test]
+fn get_version_for_snapshot_checks_the_front_before_searching() -> crate::Result<()> {
+    let history = test_super_versions(vec![
+        SuperVersion {
+            active_memtable: Arc::new(new_memtable(0)),
+            sealed_memtables: Arc::default(),
+            version: Version::new(1, crate::TreeType::Standard),
+            seqno: 10,
+        },
+        SuperVersion {
+            active_memtable: Arc::new(new_memtable(0)),
+            sealed_memtables: Arc::default(),
+            version: Version::new(2, crate::TreeType::Standard),
+            seqno: 3,
+        },
+    ]);
+
+    assert_eq!(history.oldest_retained_seqno(), 10);
+    assert!(matches!(
+        history.get_version_for_snapshot(5),
+        Err(crate::Error::SnapshotBelowRetention {
+            requested: 5,
+            oldest_retained: 10
+        })
+    ));
+    assert_eq!(history.get_version_for_snapshot(11)?.version.id(), 2);
+    Ok(())
+}
+
+/// A history seeded from a recovered version starts at that version's
+/// retention floor, so the reopened boundary is the persisted one.
+#[test]
+fn new_history_seeds_the_front_at_the_retention_floor() {
+    let version = Version::new(7, crate::TreeType::Standard).with_retention_floor(42);
+    let history = SuperVersions::new(
+        version,
+        &default_comparator(),
+        SyncMode::Normal,
+        7,
+        1024 * 1024,
+    );
+    assert_eq!(history.oldest_retained_seqno(), 42);
+    assert!(history.get_version_for_snapshot(42).is_err());
+    assert!(history.get_version_for_snapshot(43).is_ok());
+}
+
 #[test]
 fn super_version_gc_below_watermark_shadowed() -> crate::Result<()> {
     let fs = MemFs::new();

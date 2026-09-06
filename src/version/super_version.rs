@@ -78,6 +78,30 @@ impl core::ops::Deref for SnapshotRef {
     }
 }
 
+/// What an installed version does to the snapshots older than it, which is
+/// what decides whether the install raises the persisted retention floor
+/// (see [`Version::retention_floor`]).
+///
+/// The in-memory history keeps serving older snapshots from retained
+/// versions either way; the floor matters after a reopen, when only the
+/// latest version survives and the data an older snapshot saw may be gone.
+#[derive(Clone, Copy, Debug)]
+pub enum RetentionEffect {
+    /// Every snapshot the prior version served stays servable after a
+    /// reopen: the install only adds or moves data (flush, ingest, trivial
+    /// move, checksum refresh, blob relocation).
+    Keep,
+    /// The install ran MVCC garbage collection below this watermark: versions
+    /// a snapshot below it depended on may have been dropped, so after a
+    /// reopen every snapshot below the watermark is unservable. `0` means no
+    /// GC ran and is the same as [`Self::Keep`].
+    GcBelow(SeqNo),
+    /// The install physically removes user-visible data (a `clear`, a table
+    /// drop): every snapshot at or below the install's own seqno is
+    /// unservable after a reopen.
+    DropsData,
+}
+
 pub struct SuperVersions {
     versions: VecDeque<SuperVersion>,
 
@@ -137,6 +161,12 @@ impl SuperVersions {
     /// create (the first persist writes that snapshot), or the recovered
     /// snapshot id on open (which may be `< version.id()` when edits were
     /// replayed on top of it).
+    ///
+    /// The single seed version sits at the recovered
+    /// [`retention_floor`](Version::retention_floor): the history holds no
+    /// older version to serve a snapshot at or below it from, and the data
+    /// such a snapshot saw may be gone, so the seed's seqno IS the reopened
+    /// tree's read boundary (`0` on a fresh create).
     pub fn new(
         version: Version,
         comparator: &SharedComparator,
@@ -149,8 +179,8 @@ impl SuperVersions {
         let initial = SuperVersion {
             active_memtable: Arc::new(Memtable::new(0, comparator.clone())),
             sealed_memtables: Arc::default(),
+            seqno: version.retention_floor(),
             version,
-            seqno: 0,
         };
 
         Self {
@@ -272,13 +302,16 @@ impl SuperVersions {
     /// and returns a new version.
     ///
     /// The function takes care of persisting the version changes on disk.
+    /// `retention` names what the install does to older snapshots; a GC
+    /// compaction or a data drop raises the persisted retention floor with
+    /// the same version edit (see [`RetentionEffect`]).
     // Takes &SharedSequenceNumberGenerator (not &dyn SequenceNumberGenerator)
     // because Config stores Arc<dyn ...> and all callers already have that type.
     #[expect(
         clippy::too_many_arguments,
         reason = "version upgrade threads tree_path, mutator closure, two seqno gens, fs, \
-                  runtime, encryption — every parameter is load-bearing per the \
-                  manifest-persist contract"
+                  runtime, encryption, retention effect: every parameter is load-bearing \
+                  per the manifest-persist contract"
     )]
     pub(crate) fn upgrade_version<F: FnOnce(&SuperVersion) -> crate::Result<SuperVersion>>(
         &mut self,
@@ -289,6 +322,7 @@ impl SuperVersions {
         fs: &dyn Fs,
         runtime: Arc<crate::runtime_config::RuntimeConfig>,
         encryption: Option<Arc<dyn crate::encryption::EncryptionProvider>>,
+        retention: RetentionEffect,
     ) -> crate::Result<()> {
         self.upgrade_version_with_seqno(
             tree_path,
@@ -298,6 +332,7 @@ impl SuperVersions {
             fs,
             runtime,
             encryption,
+            retention,
         )
     }
 
@@ -308,8 +343,8 @@ impl SuperVersions {
     #[expect(
         clippy::too_many_arguments,
         reason = "version upgrade with pre-allocated seqno: tree_path, mutator, seqno, \
-                  visible_seqno, fs, runtime, encryption — same load-bearing surface as \
-                  the auto-allocating sibling above"
+                  visible_seqno, fs, runtime, encryption, retention effect; same \
+                  load-bearing surface as the auto-allocating sibling above"
     )]
     pub(crate) fn upgrade_version_with_seqno<
         F: FnOnce(&SuperVersion) -> crate::Result<SuperVersion>,
@@ -322,11 +357,38 @@ impl SuperVersions {
         fs: &dyn Fs,
         runtime: Arc<crate::runtime_config::RuntimeConfig>,
         encryption: Option<Arc<dyn crate::encryption::EncryptionProvider>>,
+        retention: RetentionEffect,
     ) -> crate::Result<()> {
         let prior = self.latest_version();
+        // Version seqnos are non-decreasing along the history. The counter is
+        // caller-owned and a deployment that reopens with it reset would
+        // otherwise install a version BELOW the recovered retention floor;
+        // a read below the floor would then find that "newer" version by its
+        // smaller seqno and be served from data the snapshot never saw, and
+        // the lock-free latest-snapshot fast path (which trusts the back to
+        // carry the highest seqno) would serve it too. Under the seqno
+        // contract (monotone counter) this clamp is a no-op.
+        let seqno = seqno.max(prior.seqno);
         let mut next_version = f(&prior)?;
         next_version.seqno = seqno;
         log::trace!("Next version seqno={}", next_version.seqno);
+
+        // Raise the persisted retention floor for an install that discards
+        // what older snapshots saw; it rides in the same version edit, so a
+        // crash cannot separate the data loss from the boundary that records
+        // it. A GC watermark `w` invalidates every snapshot below `w`, i.e.
+        // the floor (highest unservable snapshot) is `w - 1`; a data drop
+        // invalidates everything up to and including the install itself.
+        let floor = match retention {
+            RetentionEffect::Keep | RetentionEffect::GcBelow(0) => None,
+            RetentionEffect::GcBelow(watermark) => Some(watermark - 1),
+            RetentionEffect::DropsData => Some(seqno),
+        };
+        if let Some(floor) = floor
+            && floor > next_version.version.retention_floor()
+        {
+            next_version.version = next_version.version.with_retention_floor(floor);
+        }
 
         self.persist_change(
             tree_path,
@@ -530,27 +592,38 @@ impl SuperVersions {
     /// past the requested snapshot, and serving it from a newer version would
     /// answer with data the snapshot never saw.
     pub fn get_version_for_snapshot(&self, seqno: SeqNo) -> crate::Result<SuperVersion> {
+        let oldest = self.oldest_version_ref();
         if seqno == 0 {
-            return Ok(self.oldest_version_ref().clone());
+            return Ok(oldest.clone());
         }
 
-        self.versions
+        // The boundary is checked against the FRONT explicitly rather than
+        // left to the search below: version seqnos are non-decreasing along
+        // the history, so the search would reach the same verdict, but the
+        // explicit check keeps the contract independent of that ordering (and
+        // costs nothing: the front is one deref away).
+        if seqno <= oldest.seqno {
+            log::trace!(
+                "snapshot seqno={seqno} is below the retained history (oldest retained \
+                 seqno={}, {} versions)",
+                oldest.seqno,
+                self.versions.len()
+            );
+            return Err(crate::Error::SnapshotBelowRetention {
+                requested: seqno,
+                oldest_retained: oldest.seqno,
+            });
+        }
+
+        // `oldest.seqno < seqno` holds here, so the search finds at least the
+        // front; the fallback is unreachable and only keeps the code panic-free.
+        Ok(self
+            .versions
             .iter()
             .rev()
             .find(|version| version.seqno < seqno)
-            .cloned()
-            .ok_or_else(|| {
-                let oldest_retained = self.oldest_retained_seqno();
-                log::trace!(
-                    "snapshot seqno={seqno} is below the retained history (oldest retained \
-                     seqno={oldest_retained}, {} versions)",
-                    self.versions.len()
-                );
-                crate::Error::SnapshotBelowRetention {
-                    requested: seqno,
-                    oldest_retained,
-                }
-            })
+            .unwrap_or(oldest)
+            .clone())
     }
 }
 

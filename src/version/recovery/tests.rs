@@ -17,8 +17,54 @@ fn recovery_with(version_id: u64, table_ids: Vec<Vec<Vec<RecoveredTable>>>) -> R
         gc_stats: crate::blob_tree::FragmentationMap::default(),
         restrictions: crate::HashMap::default(),
         blob_restrictions: crate::HashMap::default(),
+        retention_floor: 0,
         stats: RecoveryStats::default(),
     }
+}
+
+/// An edit that raised the retention floor carries the new absolute value;
+/// one that did not leaves the recovered floor untouched.
+#[test]
+fn apply_edit_overwrites_the_retention_floor_only_when_carried() {
+    let mut rec = recovery_with(1, vec![]);
+    rec.apply_edit(&VersionEdit {
+        new_version_id: 2,
+        retention_floor: Some(41),
+        ..Default::default()
+    })
+    .expect("apply");
+    assert_eq!(rec.retention_floor, 41);
+
+    rec.apply_edit(&VersionEdit {
+        new_version_id: 3,
+        retention_floor: None,
+        ..Default::default()
+    })
+    .expect("apply");
+    assert_eq!(rec.retention_floor, 41, "an edit without a floor keeps it");
+
+    rec.apply_edit(&VersionEdit {
+        new_version_id: 4,
+        retention_floor: Some(99),
+        ..Default::default()
+    })
+    .expect("apply");
+    assert_eq!(rec.retention_floor, 99);
+}
+
+/// The snapshot section is exactly one `u64`; a short or long one is a
+/// corrupt floor and must abort rather than read as a lower boundary.
+#[test]
+fn parse_retention_floor_section_is_strict() {
+    let mut bytes = Vec::new();
+    bytes.write_u64::<LittleEndian>(77).expect("write");
+    assert_eq!(parse_retention_floor_section(&bytes).expect("parse"), 77);
+    assert!(parse_retention_floor_section(&bytes[..7]).is_err(), "short");
+    bytes.push(0);
+    assert!(
+        parse_retention_floor_section(&bytes).is_err(),
+        "trailing byte"
+    );
 }
 
 fn rtable(id: u64, seqno: u64) -> RecoveredTable {

@@ -38,6 +38,7 @@ mod super_version;
 pub use blob_file_list::BlobFileList;
 pub use persist::persist_version;
 pub use run::Run;
+pub use super_version::RetentionEffect;
 pub use super_version::SnapshotRef;
 pub use super_version::{SuperVersion, SuperVersions};
 
@@ -226,6 +227,14 @@ pub struct VersionInner {
 
     /// Blob file fragmentation
     gc_stats: Arc<FragmentationMap>,
+
+    /// Highest snapshot seqno this version can no longer serve: data a
+    /// snapshot at or below it saw may have been discarded (a GC compaction
+    /// dropped versions below its watermark, a `clear` / table drop removed
+    /// whole tables). Monotone across versions and persisted with the
+    /// manifest, so a reopened tree refuses those snapshots instead of
+    /// answering from data they never saw. `0` until the first such install.
+    retention_floor: crate::SeqNo,
 }
 
 /// A version is an immutable, point-in-time view of a tree's structure
@@ -260,6 +269,33 @@ impl Version {
         &self.gc_stats
     }
 
+    /// Highest snapshot seqno this version can no longer serve after a
+    /// reopen; see [`VersionInner::retention_floor`].
+    #[must_use]
+    pub fn retention_floor(&self) -> crate::SeqNo {
+        self.retention_floor
+    }
+
+    /// Raises the retention floor to `floor` (never lowers it: a later
+    /// install cannot un-discard what an earlier one dropped). Returns this
+    /// version unchanged when `floor` is not above the current one.
+    #[must_use]
+    pub fn with_retention_floor(&self, floor: crate::SeqNo) -> Self {
+        if floor <= self.retention_floor {
+            return self.clone();
+        }
+        Self {
+            inner: Arc::new(VersionInner {
+                id: self.id,
+                tree_type: self.tree_type,
+                levels: self.levels.clone(),
+                blob_files: self.blob_files.clone(),
+                gc_stats: self.gc_stats.clone(),
+                retention_floor: floor,
+            }),
+        }
+    }
+
     pub fn l0(&self) -> &Level {
         #[expect(clippy::expect_used)]
         self.levels.first().expect("L0 should exist")
@@ -286,6 +322,7 @@ impl Version {
                 levels,
                 blob_files: Arc::default(),
                 gc_stats: Arc::default(),
+                retention_floor: 0,
             }),
         }
     }
@@ -345,7 +382,8 @@ impl Version {
             version_levels,
             BlobFileList::new(blob_files.iter().cloned().map(|bf| (bf.id(), bf)).collect()),
             recovery.gc_stats,
-        ))
+        )
+        .with_retention_floor(recovery.retention_floor))
     }
 
     /// Creates a new pre-populated version.
@@ -363,6 +401,7 @@ impl Version {
                 levels,
                 blob_files: Arc::new(blob_files),
                 gc_stats: Arc::new(gc_stats),
+                retention_floor: 0,
             }),
         }
     }
@@ -482,6 +521,7 @@ impl Version {
                 levels,
                 blob_files: value_log,
                 gc_stats,
+                retention_floor: self.retention_floor,
             }),
         }
     }
@@ -568,6 +608,7 @@ impl Version {
                 levels,
                 blob_files: value_log,
                 gc_stats,
+                retention_floor: self.retention_floor,
             }),
         })
     }
@@ -664,6 +705,7 @@ impl Version {
                 levels,
                 blob_files: value_log,
                 gc_stats,
+                retention_floor: self.retention_floor,
             }),
         }
     }
@@ -718,6 +760,7 @@ impl Version {
                 levels,
                 blob_files: self.blob_files.clone(),
                 gc_stats: self.gc_stats.clone(),
+                retention_floor: self.retention_floor,
             }),
         }
     }
@@ -773,6 +816,7 @@ impl Version {
                 levels,
                 blob_files: self.blob_files.clone(),
                 gc_stats: self.gc_stats.clone(),
+                retention_floor: self.retention_floor,
             }),
         })
     }
@@ -872,6 +916,7 @@ impl Version {
                 levels,
                 blob_files: value_log,
                 gc_stats,
+                retention_floor: self.retention_floor,
             }),
         }
     }
@@ -1063,6 +1108,15 @@ impl Version {
             writer.write_u64::<LittleEndian>(*id)?;
             writer.write_u64::<LittleEndian>(*frontier)?;
         }
+
+        // The retention floor: the highest snapshot a reopen may no longer
+        // serve (see `VersionInner::retention_floor`). Its own section so a
+        // reader that predates it simply does not find it (and serves every
+        // snapshot, as before), and a snapshot written before it existed
+        // recovers as floor 0: the same optional-section treatment as the
+        // restrictions above.
+        writer.start("retention_floor")?;
+        writer.write_u64::<LittleEndian>(self.retention_floor)?;
 
         Ok(())
     }

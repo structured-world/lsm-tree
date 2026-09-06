@@ -145,6 +145,21 @@ matching entry (and add one for a new subsystem).
   `src/version/super_version.rs` (`get_version_for_snapshot`) and surfaced by
   every read path that resolves a snapshot (`src/tree`, `src/blob_tree`).
 
+- **The retention boundary is durable.** An install that discards what older
+  snapshots saw raises the version's *retention floor* in the same version
+  edit (`Version::retention_floor`, the `retention_floor` manifest section and
+  the appended edit-log field): a GC compaction with watermark `w` sets it to
+  `w - 1`, a `clear` or a table drop to its own install seqno; a flush,
+  ingest, move or relocation leaves it alone. A reopened history is seeded at
+  the floor, so the snapshots the live tree refused stay refused after a
+  restart instead of being answered from the surviving version. Version seqnos
+  are non-decreasing along the history (`upgrade_version_with_seqno` clamps),
+  so a counter reset below the floor cannot slip a version under it. A
+  manifest rebuilt by `Config::repair` seeds the floor from
+  `Config::repair_retention_floor` (default `0`): the tables cannot record it
+  and the engine must not guess it (see
+  [manifest-recovery.md](manifest-recovery.md#retention-floor)).
+
 - **Retention is versioned, so its storage cost scales with write + compaction
   volume.** History is served from whole retained `SuperVersion`s: every table a
   compaction consumed stays on disk until the GC watermark passes that

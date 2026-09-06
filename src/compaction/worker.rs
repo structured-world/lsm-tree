@@ -1330,6 +1330,9 @@ fn run_tight_space_compaction(
                 &*opts.config.fs,
                 opts.runtime_config.load_full(),
                 opts.encryption.clone(),
+                // A slice is a merge with GC below the watermark, plus the
+                // punched input prefix: older snapshots lose both.
+                crate::version::RetentionEffect::GcBelow(opts.mvcc_gc_watermark),
             );
             if let Err(e) = install {
                 // The install did not commit, so no sidecar was written (the mark
@@ -1849,6 +1852,8 @@ fn move_tables(
         &*opts.config.fs,
         opts.runtime_config.load_full(),
         opts.encryption.clone(),
+        // A trivial move rewrites nothing: every version survives as-is.
+        crate::version::RetentionEffect::Keep,
     )?;
 
     if let Err(e) = version_history_lock.maintenance(
@@ -2848,6 +2853,10 @@ fn drop_tables(
         &*opts.config.fs,
         opts.runtime_config.load_full(),
         opts.encryption.clone(),
+        // Whole tables go (drop-range, FIFO / TTL eviction): the rows every
+        // older snapshot saw in them are gone, so no snapshot up to this
+        // install is servable after a reopen.
+        crate::version::RetentionEffect::DropsData,
     )?;
 
     if let Err(e) = version_history_lock.maintenance(

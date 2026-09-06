@@ -951,6 +951,9 @@ impl AbstractTree for BlobTree {
             &*config.fs,
             self.index.0.runtime_config.load_full(),
             self.index.0.config.encryption.clone(),
+            // Every table and blob file goes: no snapshot up to this install
+            // is servable after a reopen.
+            crate::version::RetentionEffect::DropsData,
         )?;
 
         // Same MVCC-safe reclaim as the standard tree, plus the blob files:
@@ -1422,13 +1425,17 @@ impl AbstractTree for BlobTree {
         keys: impl IntoIterator<Item = K>,
         seqno: SeqNo,
     ) -> crate::Result<Vec<Option<crate::UserValue>>> {
+        // The snapshot is validated BEFORE the empty-batch return: the
+        // retention contract is per read, not per key, and the standard tree
+        // refuses an empty batch below retention the same way.
+        let super_version = self.index.snapshot_for_read(seqno)?;
+
         let keys: Vec<_> = keys.into_iter().collect();
         let n = keys.len();
         if n == 0 {
             return Ok(Vec::new());
         }
 
-        let super_version = self.index.snapshot_for_read(seqno)?;
         let comparator = self.index.config.comparator.as_ref();
 
         // For small batches, use the simple per-key path

@@ -53,7 +53,55 @@ fn sample() -> VersionEdit {
         // Two blob frontiers, so the round-trip also covers the fixed-width
         // blob-restriction codec (id + offset).
         blob_restrictions: vec![(3, 4_096), (4, 1_048_576)],
+        // A raised retention floor, so the round-trip covers the trailing
+        // appended section as well.
+        retention_floor: Some(77),
     }
+}
+
+#[test]
+fn retention_floor_roundtrips_with_and_without_blob_frontiers() {
+    // With frontiers: blob section, then the floor.
+    let with_frontiers = sample();
+    let mut payload = Vec::new();
+    with_frontiers.encode_payload(&mut payload).expect("encode");
+    assert_eq!(
+        VersionEdit::decode_payload(&payload).expect("decode"),
+        with_frontiers
+    );
+
+    // Without frontiers: the encoder still writes the (empty) blob section so
+    // the floor cannot be mistaken for a blob count.
+    let mut floor_only = sample();
+    floor_only.blob_restrictions = vec![];
+    let mut payload = Vec::new();
+    floor_only.encode_payload(&mut payload).expect("encode");
+    let decoded = VersionEdit::decode_payload(&payload).expect("decode");
+    assert!(decoded.blob_restrictions.is_empty());
+    assert_eq!(decoded.retention_floor, Some(77));
+
+    // Neither: the payload ends after the restrictions (the pre-floor shape).
+    let mut plain = sample();
+    plain.blob_restrictions = vec![];
+    plain.retention_floor = None;
+    let mut payload = Vec::new();
+    plain.encode_payload(&mut payload).expect("encode");
+    let decoded = VersionEdit::decode_payload(&payload).expect("decode");
+    assert!(decoded.blob_restrictions.is_empty());
+    assert_eq!(decoded.retention_floor, None);
+}
+
+#[test]
+fn payload_with_frontiers_but_no_floor_decodes_floor_as_none() {
+    // Edits written between the two appended sections end after the blob
+    // frontiers; the floor must read as absent, not as a decode error.
+    let mut edit = sample();
+    edit.retention_floor = None;
+    let mut payload = Vec::new();
+    edit.encode_payload(&mut payload).expect("encode");
+    let decoded = VersionEdit::decode_payload(&payload).expect("decode");
+    assert_eq!(decoded.blob_restrictions, edit.blob_restrictions);
+    assert_eq!(decoded.retention_floor, None);
 }
 
 #[test]
@@ -125,6 +173,7 @@ fn payload_without_the_blob_frontier_section_decodes_as_empty() {
     // InvalidHeader — otherwise every pre-existing manifest becomes unopenable.
     let mut edit = sample();
     edit.blob_restrictions = vec![];
+    edit.retention_floor = None;
     let mut payload = Vec::new();
     edit.encode_payload(&mut payload).expect("encode");
     let decoded = VersionEdit::decode_payload(&payload).expect("decode");

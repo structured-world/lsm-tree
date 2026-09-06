@@ -997,6 +997,17 @@ pub trait AbstractTree: sealed::Sealed {
     /// here before reading and report "history collected" instead of an
     /// unexpected error mid-scan. A fresh tree reports `0`.
     ///
+    /// The boundary survives a reopen. The install that discards what older
+    /// snapshots saw records it in the same version edit: after a GC
+    /// compaction with watermark `w` the reopened boundary is `w - 1` (the
+    /// retained pre-compaction version that served reads between the live
+    /// front and `w` does not survive a restart), after a `clear` or a table
+    /// drop it is that install's seqno. A manifest rebuilt by
+    /// [`Config::repair`](crate::Config::repair) cannot know what the lost
+    /// manifest recorded and seeds the boundary from
+    /// [`Config::repair_retention_floor`](crate::Config::repair_retention_floor)
+    /// (default `0`: every snapshot served).
+    ///
     /// # Examples
     ///
     /// ```

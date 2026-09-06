@@ -463,7 +463,8 @@ pub enum Error {
     /// from. Serving it from the oldest retained version instead would
     /// silently answer with data the snapshot never saw, so the read is
     /// refused. Snapshot `0` is the exception: it sees no entry from any
-    /// version and is always served (empty).
+    /// version and is always served (empty). The boundary is persisted with
+    /// the manifest, so the refusal holds across a reopen as well.
     ///
     /// Point reads return it directly; iterators yield it as their first and
     /// only item. [`AbstractTree::oldest_retained_seqno`](crate::AbstractTree::oldest_retained_seqno)

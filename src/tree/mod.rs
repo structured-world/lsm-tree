@@ -469,6 +469,7 @@ impl AbstractTree for Tree {
                 &*self.config.fs,
                 self.0.runtime_config.load_full(),
                 self.0.config.encryption.clone(),
+                crate::version::RetentionEffect::Keep,
             )
             .map(|()| ChecksumRefreshOutcome::Refreshed)
     }
@@ -713,6 +714,9 @@ impl AbstractTree for Tree {
             &*config.fs,
             self.0.runtime_config.load_full(),
             self.0.config.encryption.clone(),
+            // Every table goes: no snapshot up to this install is servable
+            // after a reopen.
+            crate::version::RetentionEffect::DropsData,
         )?;
 
         // Release the history's hold on the now-obsolete versions; only the new
@@ -1029,6 +1033,9 @@ impl AbstractTree for Tree {
             &*self.config.fs,
             self.0.runtime_config.load_full(),
             self.0.config.encryption.clone(),
+            // A flush only adds a run; the watermark below prunes the
+            // in-memory history, it discards no data.
+            crate::version::RetentionEffect::Keep,
         )?;
 
         if let Err(e) = version_lock.maintenance(&self.config.path, gc_watermark, &*self.config.fs)

@@ -50,6 +50,34 @@ fn diff_emits_gc_stats_only_when_changed() {
     );
 }
 
+/// The floor rides in the edit exactly when it rose; an unchanged floor is
+/// not re-emitted, and a version with the same floor as its prior carries
+/// `None` even when the floor is non-zero.
+#[test]
+fn diff_emits_retention_floor_only_when_changed() {
+    let v1 = empty_version(1);
+    let v2 = empty_version(2).with_retention_floor(40);
+    let edit = v2.diff(&v1).expect("diff");
+    assert_eq!(edit.retention_floor, Some(40));
+
+    let v3 = empty_version(3).with_retention_floor(40);
+    let edit = v3.diff(&v2).expect("diff");
+    assert_eq!(
+        edit.retention_floor, None,
+        "unchanged floor is not re-emitted"
+    );
+}
+
+/// `with_retention_floor` never lowers the floor: a later install cannot
+/// un-discard what an earlier one dropped.
+#[test]
+fn with_retention_floor_is_monotone() {
+    let v = empty_version(1).with_retention_floor(40);
+    assert_eq!(v.with_retention_floor(10).retention_floor(), 40);
+    assert_eq!(v.with_retention_floor(40).retention_floor(), 40);
+    assert_eq!(v.with_retention_floor(41).retention_floor(), 41);
+}
+
 #[test]
 fn diff_handles_growing_level_count_without_panic() {
     // prior has 0 levels, self has 2 (both empty) → still no changed levels,

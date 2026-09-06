@@ -478,6 +478,9 @@ pub(super) fn install_merge(
             &*opts.config.fs,
             opts.runtime_config.load_full(),
             opts.encryption.clone(),
+            // The merge stream GC'd below the watermark: versions a snapshot
+            // below it depended on are gone from the outputs.
+            crate::version::RetentionEffect::GcBelow(opts.mvcc_gc_watermark),
         )
         .inspect_err(|_| {
             for table in &created_tables {

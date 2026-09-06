@@ -50,7 +50,20 @@
 //!   repeat: id u64 LE
 //! gc_stats_len        : u32 LE   (0 = GC stats unchanged from the prior version)
 //!   gc_stats bytes    : [u8; gc_stats_len]
+//! restriction_count   : u32 LE
+//!   repeat: id u64 LE | key_len u32 LE | key bytes
+//! [blob_restriction_count : u32 LE]        (appended section, see below)
+//!   repeat: id u64 LE | frontier u64 LE
+//! [retention_floor    : u64 LE]            (appended section, see below)
 //! ```
+//!
+//! The two bracketed sections were appended after the format shipped and are
+//! written only when they carry something: the blob frontiers when the list is
+//! non-empty, the retention floor when it changed in this edit. A payload that
+//! ends before either decodes as "absent", so older edit logs replay unchanged.
+//! Because the blob-frontier section has no presence marker of its own, an
+//! edit that carries a retention floor always writes the blob section first
+//! (with a zero count when empty), so the decoder can tell the two apart.
 //!
 //! The per-table / per-blob record bodies are byte-identical to the snapshot
 //! encoding in [`Version::encode_into`](super::Version::encode_into) (plus the
@@ -136,6 +149,11 @@ pub struct VersionEdit {
     /// offset because a blob file has no key index to resolve a bound through.
     /// Empty on every edit that did not reclaim a blob prefix.
     pub blob_restrictions: Vec<(u64, u64)>,
+    /// The version's retention floor (highest snapshot seqno a reopen may no
+    /// longer serve), or `None` when unchanged from the prior version. Only a
+    /// GC compaction, a `clear` or a table drop raises it, so the common edit
+    /// carries nothing here.
+    pub retention_floor: Option<u64>,
 }
 
 /// `checksum_type` byte written for XXH3-128 (matches the snapshot encoder).
@@ -201,12 +219,20 @@ impl VersionEdit {
         // handle. Rolling back a binary stays possible for every database
         // that never used tight-space blob reclaim — exactly the databases a
         // rollback could still serve.
-        if !self.blob_restrictions.is_empty() {
+        //
+        // The retention floor is the section AFTER this one and has no presence
+        // marker either, so whenever it is written the blob section is written
+        // too (a zero count when empty): the decoder reads "blob section, then
+        // floor" positionally and must not mistake a floor for a blob count.
+        if !self.blob_restrictions.is_empty() || self.retention_floor.is_some() {
             out.write_u32::<LittleEndian>(u32_len(self.blob_restrictions.len())?)?;
             for (id, frontier) in &self.blob_restrictions {
                 out.write_u64::<LittleEndian>(*id)?;
                 out.write_u64::<LittleEndian>(*frontier)?;
             }
+        }
+        if let Some(floor) = self.retention_floor {
+            out.write_u64::<LittleEndian>(floor)?;
         }
         Ok(())
     }
@@ -322,6 +348,16 @@ impl VersionEdit {
             }
         }
 
+        // The retention floor is the second appended section: present only
+        // when the edit raised it, and always preceded by the blob section
+        // (which the encoder writes with a zero count in that case), so a
+        // payload that still has bytes here holds the floor.
+        let retention_floor = if r.is_empty() {
+            None
+        } else {
+            Some(r.read_u64::<LittleEndian>().map_err(|_| ERR)?)
+        };
+
         // A well-formed edit consumes its payload exactly. Trailing bytes mean a
         // corrupt / mis-encoded record (format drift, not power loss — the
         // framing checksum already passed), so reject rather than silently
@@ -338,6 +374,7 @@ impl VersionEdit {
             gc_stats,
             restrictions,
             blob_restrictions,
+            retention_floor,
         })
     }
 }
