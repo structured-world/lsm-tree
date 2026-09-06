@@ -796,7 +796,10 @@ impl AbstractTree for BlobTree {
         let prefix_hash =
             compute_prefix_hash(self.index.config.prefix_extractor.as_ref(), prefix_bytes);
 
-        let super_version = self.index.get_version_for_snapshot(seqno);
+        let super_version = match self.index.get_version_for_snapshot(seqno) {
+            Ok(super_version) => super_version,
+            Err(e) => return Box::new(core::iter::once(crate::tree::error_guard(e))),
+        };
         let tree = self.clone();
 
         let range = prefix_to_range(prefix_bytes);
@@ -826,7 +829,10 @@ impl AbstractTree for BlobTree {
         seqno: SeqNo,
         index: Option<(Arc<Memtable>, SeqNo)>,
     ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static> {
-        let super_version = self.index.get_version_for_snapshot(seqno);
+        let super_version = match self.index.get_version_for_snapshot(seqno) {
+            Ok(super_version) => super_version,
+            Err(e) => return Box::new(core::iter::once(crate::tree::error_guard(e))),
+        };
         let tree = self.clone();
         let state = self.scan_prefetch_state();
 
@@ -855,9 +861,13 @@ impl AbstractTree for BlobTree {
         index: Option<(Arc<Memtable>, SeqNo)>,
     ) -> Box<dyn crate::iter_guard::SeekableGuardIter + 'static> {
         let (lo, hi) = crate::tree::range_to_user_bounds(&range);
-        let inner = self
+        let inner = match self
             .index
-            .create_seekable_range_bounds(lo, hi, seqno, index);
+            .create_seekable_range_bounds(lo, hi, seqno, index)
+        {
+            Ok(inner) => inner,
+            Err(e) => return Box::new(crate::iter_guard::FailedSeekable::new(e)),
+        };
         let version = inner.version();
         Box::new(BlobSeekable {
             inner,
@@ -875,12 +885,15 @@ impl AbstractTree for BlobTree {
     where
         I::IntoIter: Send + 'static,
     {
-        let inner = self.index.create_seekable_range_bounds(
+        let inner = match self.index.create_seekable_range_bounds(
             core::ops::Bound::Unbounded,
             core::ops::Bound::Unbounded,
             seqno,
             index,
-        );
+        ) {
+            Ok(inner) => inner,
+            Err(e) => return Box::new(core::iter::once(crate::tree::error_guard(e))),
+        };
         let version = inner.version();
         let tree = self.clone();
         let intervals = intervals
@@ -1377,6 +1390,11 @@ impl AbstractTree for BlobTree {
         self.index.get_highest_persisted_seqno()
     }
 
+    fn oldest_retained_seqno(&self) -> SeqNo {
+        // Snapshots are resolved through the index tree's history.
+        self.index.oldest_retained_seqno()
+    }
+
     fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> crate::Result<(u64, u64)> {
         self.index.apply_batch(batch, seqno)
     }
@@ -1391,7 +1409,7 @@ impl AbstractTree for BlobTree {
     }
 
     fn get<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<crate::UserValue>> {
-        let super_version = self.index.snapshot_for_read(seqno);
+        let super_version = self.index.snapshot_for_read(seqno)?;
         self.resolve_key(&super_version, key.as_ref(), seqno)
     }
 
@@ -1410,7 +1428,7 @@ impl AbstractTree for BlobTree {
             return Ok(Vec::new());
         }
 
-        let super_version = self.index.snapshot_for_read(seqno);
+        let super_version = self.index.snapshot_for_read(seqno)?;
         let comparator = self.index.config.comparator.as_ref();
 
         // For small batches, use the simple per-key path

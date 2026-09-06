@@ -230,6 +230,18 @@ fn standard_guard(item: crate::Result<InternalValue>) -> IterGuardImpl {
     IterGuardImpl::Standard(Guard(item.map(|iv| (iv.key.user_key, iv.value))))
 }
 
+/// A guard carrying only an error: the single item an iterator surface yields
+/// when it fails before it can open a snapshot (no row, no version to bind a
+/// blob guard to), so the failure reaches the consumer through the same
+/// `Result` it already handles per row.
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "reached from blob_tree as crate::tree::error_guard"
+)]
+pub(crate) fn error_guard(e: crate::Error) -> IterGuardImpl {
+    IterGuardImpl::Standard(Guard(Err(e)))
+}
+
 /// Extract owned user-key bounds from any range.
 #[expect(
     clippy::redundant_pub_crate,
@@ -373,7 +385,7 @@ impl AbstractTree for Tree {
     }
 
     fn get_internal_entry(&self, key: &[u8], seqno: SeqNo) -> crate::Result<Option<InternalValue>> {
-        let super_version = self.snapshot_for_read(seqno);
+        let super_version = self.snapshot_for_read(seqno)?;
 
         Self::get_internal_entry_from_version(
             &super_version,
@@ -580,10 +592,10 @@ impl AbstractTree for Tree {
         seqno: SeqNo,
         index: Option<(Arc<Memtable>, SeqNo)>,
     ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static> {
-        Box::new(
-            self.create_prefix(&prefix, seqno, index)
-                .map(|kv| IterGuardImpl::Standard(Guard(kv))),
-        )
+        match self.create_prefix(&prefix, seqno, index) {
+            Ok(iter) => Box::new(iter.map(|kv| IterGuardImpl::Standard(Guard(kv)))),
+            Err(e) => Box::new(core::iter::once(error_guard(e))),
+        }
     }
 
     fn range<K: AsRef<[u8]>, R: RangeBounds<K>>(
@@ -592,10 +604,10 @@ impl AbstractTree for Tree {
         seqno: SeqNo,
         index: Option<(Arc<Memtable>, SeqNo)>,
     ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static> {
-        Box::new(
-            self.create_range(&range, seqno, index)
-                .map(|kv| IterGuardImpl::Standard(Guard(kv))),
-        )
+        match self.create_range(&range, seqno, index) {
+            Ok(iter) => Box::new(iter.map(|kv| IterGuardImpl::Standard(Guard(kv)))),
+            Err(e) => Box::new(core::iter::once(error_guard(e))),
+        }
     }
 
     fn range_seekable<K: AsRef<[u8]>, R: RangeBounds<K>>(
@@ -605,8 +617,10 @@ impl AbstractTree for Tree {
         index: Option<(Arc<Memtable>, SeqNo)>,
     ) -> Box<dyn crate::iter_guard::SeekableGuardIter + 'static> {
         let (lo, hi) = range_to_user_bounds(&range);
-        let inner = self.create_seekable_range_bounds(lo, hi, seqno, index);
-        Box::new(StandardSeekable { inner })
+        match self.create_seekable_range_bounds(lo, hi, seqno, index) {
+            Ok(inner) => Box::new(StandardSeekable { inner }),
+            Err(e) => Box::new(crate::iter_guard::FailedSeekable::new(e)),
+        }
     }
 
     fn batch_range_scan<K: AsRef<[u8]>, R: RangeBounds<K> + 'static, I: IntoIterator<Item = R>>(
@@ -620,8 +634,15 @@ impl AbstractTree for Tree {
     {
         // Open the seekable iterator over the whole keyspace once; each interval
         // is served by repositioning it (single per-SST setup, amortized).
-        let inner =
-            self.create_seekable_range_bounds(Bound::Unbounded, Bound::Unbounded, seqno, index);
+        let inner = match self.create_seekable_range_bounds(
+            Bound::Unbounded,
+            Bound::Unbounded,
+            seqno,
+            index,
+        ) {
+            Ok(inner) => inner,
+            Err(e) => return Box::new(core::iter::once(error_guard(e))),
+        };
         let intervals = intervals.into_iter().map(|r| range_to_user_bounds(&r));
         Box::new(crate::range::BatchRangeScan::new(inner, intervals).map(standard_guard))
     }
@@ -1169,7 +1190,10 @@ impl AbstractTree for Tree {
         // at `seqno` (no entries newer than the snapshot, and a consistent set of
         // tables + memtables even during a concurrent flush / compaction).
         let comparator = self.config.comparator.as_ref();
-        let super_version = self.version_history.read().get_version_for_snapshot(seqno);
+        let super_version = self
+            .version_history
+            .read()
+            .get_version_for_snapshot(seqno)?;
 
         // SST contribution: interpolate data-block offsets at the boundaries
         // (block granularity), no data-block reads. For a KV-separated SST the
@@ -1367,7 +1391,10 @@ impl AbstractTree for Tree {
         };
         let bounds = (lo, hi);
         let comparator = self.config.comparator.as_ref();
-        let super_version = self.version_history.read().get_version_for_snapshot(seqno);
+        let super_version = self
+            .version_history
+            .read()
+            .get_version_for_snapshot(seqno)?;
 
         let mut rows: u64 = 0;
         let mut total_rows: u64 = 0;
@@ -1583,10 +1610,14 @@ impl AbstractTree for Tree {
             .max()
     }
 
+    fn oldest_retained_seqno(&self) -> SeqNo {
+        self.version_history.read().oldest_retained_seqno()
+    }
+
     fn get<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<UserValue>> {
         let key = key.as_ref();
 
-        let super_version = self.snapshot_for_read(seqno);
+        let super_version = self.snapshot_for_read(seqno)?;
 
         Self::resolve_or_passthrough(
             &super_version,
@@ -1604,7 +1635,7 @@ impl AbstractTree for Tree {
     ) -> crate::Result<Option<crate::PinnableSlice>> {
         let key = key.as_ref();
 
-        let super_version = self.snapshot_for_read(seqno);
+        let super_version = self.snapshot_for_read(seqno)?;
 
         Self::resolve_or_passthrough_pinned(
             &super_version,
@@ -1624,7 +1655,7 @@ impl AbstractTree for Tree {
         keys: impl IntoIterator<Item = K>,
         seqno: SeqNo,
     ) -> crate::Result<Vec<Option<UserValue>>> {
-        let super_version = self.snapshot_for_read(seqno);
+        let super_version = self.snapshot_for_read(seqno)?;
         let comparator = self.config.comparator.as_ref();
         let merge_operator = self.config.merge_operator.as_ref();
 
@@ -3747,7 +3778,10 @@ impl Tree {
         None
     }
 
-    pub(crate) fn get_version_for_snapshot(&self, seqno: SeqNo) -> SuperVersion {
+    /// Resolves the super-version serving snapshot `seqno`; see
+    /// [`SuperVersions::get_version_for_snapshot`](crate::version::SuperVersions::get_version_for_snapshot)
+    /// for the retention error.
+    pub(crate) fn get_version_for_snapshot(&self, seqno: SeqNo) -> crate::Result<SuperVersion> {
         self.version_history.read().get_version_for_snapshot(seqno)
     }
 
@@ -3769,17 +3803,29 @@ impl Tree {
     /// mirror's writers, so iterators keep their own clones. no-std has no
     /// mirror (`arc-swap` is std-only) and always clones out of the locked
     /// history, as before.
-    pub(crate) fn snapshot_for_read(&self, seqno: SeqNo) -> crate::version::SnapshotRef {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// when the history no longer retains a version for `seqno`. The fast path
+    /// cannot hit it: a snapshot above the latest version is always served.
+    pub(crate) fn snapshot_for_read(
+        &self,
+        seqno: SeqNo,
+    ) -> crate::Result<crate::version::SnapshotRef> {
         use crate::version::SnapshotRef;
 
         #[cfg(feature = "std")]
         {
             let latest = self.latest_super_version.load();
             if seqno > latest.seqno {
-                return SnapshotRef::Latest(latest);
+                return Ok(SnapshotRef::Latest(latest));
             }
         }
-        SnapshotRef::Owned(self.version_history.read().get_version_for_snapshot(seqno))
+        self.version_history
+            .read()
+            .get_version_for_snapshot(seqno)
+            .map(SnapshotRef::Owned)
     }
 
     /// Normalizes a user-provided range into owned `Bound<Slice>` values.
@@ -4210,26 +4256,42 @@ impl Tree {
         Ok(result)
     }
 
+    /// Iterator over the whole tree at snapshot `seqno`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// when the history no longer retains a version for `seqno`; the error is
+    /// raised here, before any I/O, rather than as an iterator item.
     #[doc(hidden)]
-    #[must_use]
     pub fn create_iter(
         &self,
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
-    ) -> impl DoubleEndedIterator<Item = crate::Result<KvPair>> + 'static {
+    ) -> crate::Result<impl DoubleEndedIterator<Item = crate::Result<KvPair>> + 'static> {
         self.create_range::<UserKey, _>(&.., seqno, ephemeral)
     }
 
+    /// Iterator over `range` at snapshot `seqno`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// when the history no longer retains a version for `seqno`; the error is
+    /// raised here, before any I/O, rather than as an iterator item.
     #[doc(hidden)]
     pub fn create_range<'a, K: AsRef<[u8]> + 'a, R: RangeBounds<K> + 'a>(
         &self,
         range: &'a R,
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
-    ) -> impl DoubleEndedIterator<Item = crate::Result<KvPair>> + 'static {
-        let super_version = self.version_history.read().get_version_for_snapshot(seqno);
+    ) -> crate::Result<impl DoubleEndedIterator<Item = crate::Result<KvPair>> + 'static> {
+        let super_version = self
+            .version_history
+            .read()
+            .get_version_for_snapshot(seqno)?;
 
-        Self::create_internal_range(
+        Ok(Self::create_internal_range(
             super_version,
             range,
             seqno,
@@ -4240,23 +4302,30 @@ impl Tree {
         .map(|item| match item {
             Ok(kv) => Ok((kv.key.user_key, kv.value)),
             Err(e) => Err(e),
-        })
+        }))
     }
 
     /// Build a [`SeekableTreeIter`](crate::range::SeekableTreeIter) over
     /// `[lo, hi)`. Source collection (Phase 1) runs once; repositions reuse it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// when the history no longer retains a version for `seqno`.
     #[doc(hidden)]
-    #[must_use]
     pub fn create_seekable_range_bounds(
         &self,
         lo: Bound<UserKey>,
         hi: Bound<UserKey>,
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
-    ) -> crate::range::SeekableTreeIter {
+    ) -> crate::Result<crate::range::SeekableTreeIter> {
         use crate::range::{IterState, SeekableTreeIter};
 
-        let super_version = self.version_history.read().get_version_for_snapshot(seqno);
+        let super_version = self
+            .version_history
+            .read()
+            .get_version_for_snapshot(seqno)?;
 
         let iter_state = IterState {
             version: super_version,
@@ -4270,16 +4339,23 @@ impl Tree {
             metrics: Some(self.0.metrics.clone()),
         };
 
-        SeekableTreeIter::create(iter_state, lo, hi, seqno)
+        Ok(SeekableTreeIter::create(iter_state, lo, hi, seqno))
     }
 
+    /// Iterator over the keys starting with `prefix` at snapshot `seqno`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// when the history no longer retains a version for `seqno`; the error is
+    /// raised here, before any I/O, rather than as an iterator item.
     #[doc(hidden)]
     pub fn create_prefix<'a, K: AsRef<[u8]> + 'a>(
         &self,
         prefix: K,
         seqno: SeqNo,
         ephemeral: Option<(Arc<Memtable>, SeqNo)>,
-    ) -> impl DoubleEndedIterator<Item = crate::Result<KvPair>> + 'static {
+    ) -> crate::Result<impl DoubleEndedIterator<Item = crate::Result<KvPair>> + 'static> {
         use crate::prefix::compute_prefix_hash;
         use crate::range::{IterState, TreeIter, prefix_to_range};
 
@@ -4289,7 +4365,10 @@ impl Tree {
 
         let range = prefix_to_range(prefix_bytes);
 
-        let super_version = self.version_history.read().get_version_for_snapshot(seqno);
+        let super_version = self
+            .version_history
+            .read()
+            .get_version_for_snapshot(seqno)?;
 
         let iter_state = IterState {
             version: super_version,
@@ -4303,10 +4382,12 @@ impl Tree {
             metrics: Some(self.0.metrics.clone()),
         };
 
-        TreeIter::create_range(iter_state, range, seqno).map(|item| match item {
-            Ok(kv) => Ok((kv.key.user_key, kv.value)),
-            Err(e) => Err(e),
-        })
+        Ok(
+            TreeIter::create_range(iter_state, range, seqno).map(|item| match item {
+                Ok(kv) => Ok((kv.key.user_key, kv.value)),
+                Err(e) => Err(e),
+            }),
+        )
     }
 
     /// Adds an item to the active memtable.

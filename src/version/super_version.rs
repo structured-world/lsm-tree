@@ -496,34 +496,61 @@ impl SuperVersions {
             .expect("should always have a SuperVersion")
     }
 
-    pub fn get_version_for_snapshot(&self, seqno: SeqNo) -> SuperVersion {
+    /// Borrows the oldest retained super-version: the history is never empty
+    /// (construction seeds it, and every eviction keeps at least the back).
+    fn oldest_version_ref(&self) -> &SuperVersion {
+        #[expect(clippy::expect_used, reason = "SuperVersion is expected to exist")]
+        self.versions
+            .front()
+            .expect("should always have a SuperVersion")
+    }
+
+    /// Seqno of the oldest retained version: the read boundary. A snapshot at
+    /// seqno `s` is servable iff `s == 0` or `s > oldest_retained_seqno()`.
+    /// Advances when [`maintenance`](Self::maintenance) prunes the front and
+    /// when [`drain_obsolete_to_latest`](Self::drain_obsolete_to_latest) drops
+    /// everything but the back.
+    #[must_use]
+    pub fn oldest_retained_seqno(&self) -> SeqNo {
+        self.oldest_version_ref().seqno
+    }
+
+    /// Resolves the super-version that serves a read at snapshot `seqno`: the
+    /// newest retained version installed below it.
+    ///
+    /// Snapshot `0` is served from the oldest retained version. No entry has a
+    /// seqno below `0`, so nothing is visible at that snapshot from any
+    /// version and the choice is immaterial; keeping it servable lets a caller
+    /// probe an empty tree at `0` after pruning.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// when `0 < seqno <= oldest_retained_seqno()`: the history has been pruned
+    /// past the requested snapshot, and serving it from a newer version would
+    /// answer with data the snapshot never saw.
+    pub fn get_version_for_snapshot(&self, seqno: SeqNo) -> crate::Result<SuperVersion> {
         if seqno == 0 {
-            #[expect(clippy::expect_used, reason = "SuperVersion is expected to exist")]
-            return self
-                .versions
-                .front()
-                .cloned()
-                .expect("should always find a SuperVersion");
+            return Ok(self.oldest_version_ref().clone());
         }
 
-        let version = self
-            .versions
+        self.versions
             .iter()
             .rev()
             .find(|version| version.seqno < seqno)
-            .cloned();
-
-        if version.is_none() {
-            log::error!("Failed to find a SuperVersion for snapshot with seqno={seqno}");
-            log::error!("SuperVersions:");
-
-            for version in self.versions.iter().rev() {
-                log::error!("-> {}, seqno={}", version.version.id(), version.seqno);
-            }
-        }
-
-        #[expect(clippy::expect_used, reason = "SuperVersion is expected to exist")]
-        version.expect("should always find a SuperVersion")
+            .cloned()
+            .ok_or_else(|| {
+                let oldest_retained = self.oldest_retained_seqno();
+                log::trace!(
+                    "snapshot seqno={seqno} is below the retained history (oldest retained \
+                     seqno={oldest_retained}, {} versions)",
+                    self.versions.len()
+                );
+                crate::Error::SnapshotBelowRetention {
+                    requested: seqno,
+                    oldest_retained,
+                }
+            })
     }
 }
 

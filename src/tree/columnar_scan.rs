@@ -169,7 +169,10 @@ impl Tree {
         let hi = clone_bound(range.end_bound());
         let bounds_ref = (bound_as_ref(&lo), bound_as_ref(&hi));
 
-        let super_version = self.version_history.read().get_version_for_snapshot(seqno);
+        let super_version = self
+            .version_history
+            .read()
+            .get_version_for_snapshot(seqno)?;
 
         let mut segments: Vec<Segment> = Vec::new();
         // `iter_tables` yields newest-first (the same order the sequenced

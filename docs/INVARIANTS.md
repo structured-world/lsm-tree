@@ -132,6 +132,28 @@ matching entry (and add one for a new subsystem).
   visible at read seqno `s + 1`. Enforced in the read path (`src/tree`, `src/mvcc_stream.rs`) and the
   seqno ordering (`src/seqno.rs`, `src/value.rs`).
 
+- **A snapshot is served from a retained version, or refused; never clamped.**
+  A read at snapshot `R` resolves to the newest `SuperVersion` installed below
+  `R`. Compaction maintenance keeps only the newest version below the caller's
+  GC watermark (`major_compact`'s `seqno_threshold`) and releases the older
+  ones, and `clear` drains the history to the new empty version; a read at
+  `0 < R <= oldest_retained_seqno()` then has no version to be served from and
+  fails with `Error::SnapshotBelowRetention` (point reads directly, iterators as
+  their first and only item) rather than being served from a newer version,
+  which would return data the snapshot never saw. Snapshot `0` sees nothing
+  from any version and is always served empty. Enforced in
+  `src/version/super_version.rs` (`get_version_for_snapshot`) and surfaced by
+  every read path that resolves a snapshot (`src/tree`, `src/blob_tree`).
+
+- **Retention is versioned, so its storage cost scales with write + compaction
+  volume.** History is served from whole retained `SuperVersion`s: every table a
+  compaction consumed stays on disk until the GC watermark passes that
+  compaction's install seqno, whether or not the snapshot window still needs any
+  key version inside it. A wide window therefore costs the disk of every flush
+  and compaction output produced while it was open, not just the disk of the
+  superseded key versions; keep `seqno_threshold` as close to the oldest live
+  snapshot as the caller can prove.
+
 - **Re-applying a put / delete at its original seqno is idempotent; a merge
   operand is NOT.** For a put or delete, the same (key, value, seqno) reproduces
   the same MVCC version (an overwrite), which is what makes external-WAL replay
