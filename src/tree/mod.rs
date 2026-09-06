@@ -1621,6 +1621,14 @@ impl AbstractTree for Tree {
         self.version_history.read().oldest_retained_seqno()
     }
 
+    fn retention_floor(&self) -> SeqNo {
+        self.version_history
+            .read()
+            .latest_version_ref()
+            .version
+            .retention_floor()
+    }
+
     fn get<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<UserValue>> {
         let key = key.as_ref();
 

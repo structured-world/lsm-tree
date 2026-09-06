@@ -11,7 +11,7 @@ use crate::{
     blob_tree::FragmentationMap,
     compaction::{
         Choice,
-        filter::{Context, StreamFilterAdapter},
+        filter::{Context, StreamFilterAdapter, TransformCounters},
         flavour::{RelocatingCompaction, StandardCompaction},
         state::CompactionState,
         stream::CompactionStream,
@@ -1649,6 +1649,9 @@ fn run_subcompaction(
     }
 
     let mut filter_blob_writer = None;
+    // Filter-only transform counter (see `TransformCounters::filter`): read
+    // after `produce` to decide the install's retention effect.
+    let filter_marker = Arc::new(portable_atomic::AtomicU64::new(0));
     let merge_iter = merge_iter.with_filter(StreamFilterAdapter::new(
         compaction_filter.as_deref_mut(),
         opts,
@@ -1656,7 +1659,10 @@ fn run_subcompaction(
         blobs_folder,
         &mut filter_blob_writer,
         &filter_ctx,
-        transform_marker.clone(),
+        TransformCounters {
+            transform: transform_marker.clone(),
+            filter: Arc::clone(&filter_marker),
+        },
     ));
 
     // Bottommost seqno-zeroing: at the last level, entries below the GC
@@ -1800,13 +1806,17 @@ fn run_subcompaction(
     // rolls back sibling outputs on error but cannot reach this range's own
     // filter blobs, so clean them up here.
     let rollback_extra_blob_files = extra_blob_files.clone();
-    compactor
+    let mut produced = compactor
         .produce(opts, dst_lvl, blob_frag_map, extra_blob_files)
         .inspect_err(|_| {
             for blob_file in &rollback_extra_blob_files {
                 blob_file.mark_as_deleted();
             }
-        })
+        })?;
+    if filter_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+        produced.mark_filter_transformed();
+    }
+    Ok(produced)
 }
 
 #[expect(
@@ -2529,6 +2539,9 @@ fn merge_tables(
     // TODO: the filter should really pipe new blobs into the compaction stream directly,
     // TODO: but that will probably require to change the protocol between filter <-> compaction stream a bit
     let mut filter_blob_writer = None;
+    // Filter-only transform counter (see `TransformCounters::filter`): read
+    // after `produce` to decide the install's retention effect.
+    let filter_marker = Arc::new(portable_atomic::AtomicU64::new(0));
     let mut merge_iter = merge_iter.with_filter(StreamFilterAdapter::new(
         compaction_filter.as_deref_mut(),
         opts,
@@ -2536,7 +2549,10 @@ fn merge_tables(
         &blobs_folder,
         &mut filter_blob_writer,
         &filter_ctx,
-        transform_marker.clone(),
+        TransformCounters {
+            transform: transform_marker.clone(),
+            filter: Arc::clone(&filter_marker),
+        },
     ));
 
     // Serial (single-stream) compaction: block compression may use the pool,
@@ -2738,7 +2754,7 @@ fn merge_tables(
     // single output the result is identical to the old combined `finish`; the
     // split is what lets parallel sub-compactions each produce independently
     // and then share one install.
-    let produce_output = compactor
+    let mut produce_output = compactor
         .produce(opts, dst_lvl, blob_frag_map, extra_blob_files)
         .inspect_err(|e| {
             // NOTE: We cannot use hidden_guard here because we already locked the compaction state
@@ -2753,6 +2769,9 @@ fn merge_tables(
                 blob_file.mark_as_deleted();
             }
         })?;
+    if filter_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+        produce_output.mark_filter_transformed();
+    }
 
     let tables_out = super::flavour::install_merge(
         &mut version_history_lock,
@@ -2798,6 +2817,15 @@ fn drop_tables(
     opts: &Options,
     ids_to_drop: &[TableId],
 ) -> crate::Result<CompactionResult> {
+    // Nothing to drop: no version edit either. Installing an empty drop would
+    // cost a manifest append AND raise the persisted retention floor to an
+    // install that removed nothing, refusing every older snapshot after a
+    // reopen for no reason. A strategy that picks no table (a `drop_range`
+    // with no fully contained SST) is a no-op, not a drop.
+    if ids_to_drop.is_empty() {
+        return Ok(CompactionResult::nothing());
+    }
+
     let mut version_history_lock = opts.version_history.write();
 
     // Fail-safe for buggy compaction strategies

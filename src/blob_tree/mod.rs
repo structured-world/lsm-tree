@@ -1398,6 +1398,10 @@ impl AbstractTree for BlobTree {
         self.index.oldest_retained_seqno()
     }
 
+    fn retention_floor(&self) -> SeqNo {
+        self.index.retention_floor()
+    }
+
     fn apply_batch(&self, batch: crate::WriteBatch, seqno: SeqNo) -> crate::Result<(u64, u64)> {
         self.index.apply_batch(batch, seqno)
     }

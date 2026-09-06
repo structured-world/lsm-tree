@@ -93,12 +93,14 @@ pub enum RetentionEffect {
     Keep,
     /// The install ran MVCC garbage collection below this watermark: versions
     /// a snapshot below it depended on may have been dropped, so after a
-    /// reopen every snapshot below the watermark is unservable. `0` means no
-    /// GC ran and is the same as [`Self::Keep`].
+    /// reopen every snapshot below the watermark (capped at the install's own
+    /// seqno) is unservable. `0` means no GC ran and is the same as
+    /// [`Self::Keep`].
     GcBelow(SeqNo),
-    /// The install physically removes user-visible data (a `clear`, a table
-    /// drop): every snapshot at or below the install's own seqno is
-    /// unservable after a reopen.
+    /// The install physically removes or rewrites user-visible data
+    /// regardless of any watermark (a `clear`, a table drop, a compaction
+    /// whose filter transformed rows): every snapshot at or below the
+    /// install's own seqno is unservable after a reopen.
     DropsData,
 }
 
@@ -379,9 +381,16 @@ impl SuperVersions {
         // it. A GC watermark `w` invalidates every snapshot below `w`, i.e.
         // the floor (highest unservable snapshot) is `w - 1`; a data drop
         // invalidates everything up to and including the install itself.
+        //
+        // Neither exceeds the install's own seqno: a snapshot taken after the
+        // install (any seqno above it, since the counter is monotone) sees the
+        // installed, complete data. A watermark far above the counter, such
+        // as `SeqNo::MAX` to collect all existing history, must therefore not
+        // push the floor past the install, or every snapshot the counter can
+        // still hand out would be refused after a reopen.
         let floor = match retention {
             RetentionEffect::Keep | RetentionEffect::GcBelow(0) => None,
-            RetentionEffect::GcBelow(watermark) => Some(watermark - 1),
+            RetentionEffect::GcBelow(watermark) => Some((watermark - 1).min(seqno)),
             RetentionEffect::DropsData => Some(seqno),
         };
         if let Some(floor) = floor

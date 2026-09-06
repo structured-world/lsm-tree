@@ -744,6 +744,206 @@ fn fifo_eviction_raises_the_boundary_to_its_install() -> lsm_tree::Result<()> {
     Ok(())
 }
 
+/// A GC watermark far above the counter (`SeqNo::MAX` to collect all
+/// history) must not push the persisted boundary past the compaction's own
+/// install: every snapshot taken AFTER the install sees post-compaction
+/// data, which is complete, so the boundary is the install seqno and the
+/// counter's next snapshots stay readable after a reopen.
+#[test]
+fn gc_watermark_above_the_counter_is_capped_at_the_install() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let seqno = SequenceNumberCounter::default();
+    let tree = open_tree(folder.path(), false, &seqno)?;
+
+    let first = seqno.next();
+    tree.insert("k", "v1", first);
+    tree.flush_active_memtable(0)?;
+    tree.insert("k", "v2", seqno.next());
+    tree.flush_active_memtable(0)?;
+    // The compaction's install takes the next seqno.
+    let install = seqno.get();
+    tree.major_compact(common::COMPACTION_TARGET, SeqNo::MAX)?;
+    assert_eq!(
+        tree.retention_floor(),
+        install,
+        "the persisted boundary is capped at the install"
+    );
+    drop(tree);
+
+    let tree = reopen(folder.path(), false, seqno.get())?;
+    let oldest = tree.oldest_retained_seqno();
+    assert_eq!(oldest, install);
+    assert_below_retention(tree.get("k", first + 1).unwrap_err(), first + 1, oldest);
+    assert_eq!(
+        tree.get("k", install + 1)?.as_deref(),
+        Some(b"v2".as_slice()),
+        "the first snapshot after the install is served"
+    );
+    // The counter's own next snapshot, the normal read seqno, is above it.
+    assert_eq!(
+        tree.get("k", seqno.get())?.as_deref(),
+        Some(b"v2".as_slice())
+    );
+    Ok(())
+}
+
+/// A compaction filter removes or rewrites rows regardless of the GC
+/// watermark, so a filtering compaction discards what older snapshots saw
+/// even at watermark `0`: its install seqno becomes the persisted boundary,
+/// and the reopen refuses the snapshot the live tree still served from the
+/// retained pre-compaction version.
+#[test]
+fn compaction_filter_rewrite_raises_the_boundary_to_its_install() -> lsm_tree::Result<()> {
+    use lsm_tree::compaction::filter::{
+        CompactionFilter, Context as FilterContext, Factory, ItemAccessor, Verdict,
+    };
+
+    struct NukeFilter;
+    impl CompactionFilter for NukeFilter {
+        fn filter_item(
+            &mut self,
+            _: ItemAccessor<'_>,
+            _: &FilterContext,
+        ) -> lsm_tree::Result<Verdict> {
+            Ok(Verdict::Remove)
+        }
+    }
+    struct NukeFactory;
+    impl Factory for NukeFactory {
+        fn name(&self) -> &str {
+            "Nuke"
+        }
+        fn make_filter(&self, _: &FilterContext) -> Box<dyn CompactionFilter> {
+            Box::new(NukeFilter)
+        }
+    }
+
+    let folder = get_tmp_folder();
+    let seqno = SequenceNumberCounter::default();
+    let open = |next: SeqNo| {
+        Config::new(
+            folder.path(),
+            SequenceNumberCounter::new(next),
+            SequenceNumberCounter::default(),
+        )
+        .with_compaction_filter_factory(Some(Arc::new(NukeFactory)))
+        .open()
+    };
+    let tree = Config::new(
+        folder.path(),
+        seqno.clone(),
+        SequenceNumberCounter::default(),
+    )
+    .with_compaction_filter_factory(Some(Arc::new(NukeFactory)))
+    .open()?;
+
+    tree.insert("a", "a", seqno.next());
+    tree.flush_active_memtable(0)?;
+    tree.insert("b", "b", seqno.next());
+    tree.flush_active_memtable(0)?;
+    let snapshot = seqno.get();
+
+    let install = seqno.get();
+    tree.major_compact(common::COMPACTION_TARGET, 0)?;
+    // Live: the retained pre-compaction version still serves the snapshot.
+    assert_eq!(tree.get("a", snapshot)?.as_deref(), Some(b"a".as_slice()));
+    assert!(
+        tree.get("a", SeqNo::MAX)?.is_none(),
+        "the filter removed it"
+    );
+    assert_eq!(tree.retention_floor(), install);
+    drop(tree);
+
+    let tree = open(seqno.get())?;
+    let oldest = tree.oldest_retained_seqno();
+    assert_eq!(oldest, install, "the filter's install is the boundary");
+    assert_below_retention(tree.get("a", snapshot).unwrap_err(), snapshot, oldest);
+    assert!(tree.get("a", SeqNo::MAX)?.is_none());
+    Ok(())
+}
+
+/// A `drop_range` that finds no table fully inside its bounds installs
+/// nothing and must not raise the boundary: no data changed, so every
+/// snapshot stays readable after a reopen.
+#[test]
+fn drop_range_without_a_contained_table_keeps_the_boundary() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let seqno = SequenceNumberCounter::default();
+    let tree = open_tree(folder.path(), false, &seqno)?;
+
+    let first = seqno.next();
+    tree.insert("a", "va", first);
+    tree.insert("z", "vz", seqno.next());
+    // One table spanning a..z: no range short of the whole span contains it.
+    tree.flush_active_memtable(0)?;
+    let snapshot = seqno.get();
+
+    tree.drop_range("m"..="n")?;
+    assert_eq!(tree.table_count(), 1, "nothing was dropped");
+    assert_eq!(
+        tree.retention_floor(),
+        0,
+        "a no-op drop leaves the boundary"
+    );
+    drop(tree);
+
+    let tree = reopen(folder.path(), false, seqno.get())?;
+    assert_eq!(tree.oldest_retained_seqno(), 0);
+    assert_eq!(tree.get("a", snapshot)?.as_deref(), Some(b"va".as_slice()));
+    assert_eq!(tree.get("a", first + 1)?.as_deref(), Some(b"va".as_slice()));
+    Ok(())
+}
+
+/// `retention_floor()` reports the PERSISTED boundary (what a reopen will
+/// enforce) while `oldest_retained_seqno()` reports the LIVE one (what the
+/// retained history still serves); a table drop separates the two until the
+/// restart, and the persisted one is what a deployment records for a later
+/// repair.
+#[test]
+fn retention_floor_reports_the_persisted_boundary() -> lsm_tree::Result<()> {
+    let folder = get_tmp_folder();
+    let seqno = SequenceNumberCounter::default();
+    let tree = open_tree(folder.path(), false, &seqno)?;
+    assert_eq!(tree.retention_floor(), 0);
+
+    tree.insert("a", "va", seqno.next());
+    tree.flush_active_memtable(0)?;
+    tree.insert("b", "vb", seqno.next());
+    tree.flush_active_memtable(0)?;
+    let snapshot = seqno.get();
+
+    let install = seqno.get();
+    tree.drop_range("a"..="a")?;
+    assert_eq!(
+        tree.retention_floor(),
+        install,
+        "persisted: the drop's install"
+    );
+    assert_eq!(
+        tree.oldest_retained_seqno(),
+        0,
+        "live: history still retained"
+    );
+    assert_eq!(tree.get("b", snapshot)?.as_deref(), Some(b"vb".as_slice()));
+
+    // A later GC compaction below that install does not lower it.
+    tree.insert("b", "vb2", seqno.next());
+    tree.flush_active_memtable(0)?;
+    let watermark = seqno.get();
+    tree.major_compact(common::COMPACTION_TARGET, watermark)?;
+    assert_eq!(
+        tree.retention_floor(),
+        watermark - 1,
+        "raised by the compaction"
+    );
+    drop(tree);
+
+    let tree = reopen(folder.path(), false, seqno.get())?;
+    assert_eq!(tree.oldest_retained_seqno(), watermark - 1);
+    assert_eq!(tree.retention_floor(), watermark - 1);
+    Ok(())
+}
+
 /// With the edit log rotating on every install, the boundary reaches disk
 /// through the snapshot's own section rather than an appended edit; the
 /// reopen must read it from there.

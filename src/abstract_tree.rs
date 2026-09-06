@@ -999,10 +999,11 @@ pub trait AbstractTree: sealed::Sealed {
     ///
     /// The boundary survives a reopen. The install that discards what older
     /// snapshots saw records it in the same version edit: after a GC
-    /// compaction with watermark `w` the reopened boundary is `w - 1` (the
-    /// retained pre-compaction version that served reads between the live
-    /// front and `w` does not survive a restart), after a `clear` or a table
-    /// drop it is that install's seqno. A manifest rebuilt by
+    /// compaction with watermark `w` the reopened boundary is `w - 1`, capped
+    /// at the compaction's own install seqno (the retained pre-compaction
+    /// version that served reads between the live front and `w` does not
+    /// survive a restart), after a `clear`, a table drop or a compaction
+    /// whose filter transformed rows it is that install's seqno. A manifest rebuilt by
     /// [`Config::repair`](crate::Config::repair) cannot know what the lost
     /// manifest recorded and seeds the boundary from
     /// [`Config::repair_retention_floor`](crate::Config::repair_retention_floor)
@@ -1038,6 +1039,23 @@ pub trait AbstractTree: sealed::Sealed {
     /// # Ok::<(), lsm_tree::Error>(())
     /// ```
     fn oldest_retained_seqno(&self) -> SeqNo;
+
+    /// Returns the PERSISTED retention boundary: the highest snapshot seqno
+    /// the tree will refuse after a reopen.
+    ///
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno) is the LIVE
+    /// boundary, which the in-memory version history may hold below this
+    /// one: a table drop with no GC watermark keeps its pre-drop version
+    /// retained (and serving) until the restart, while the manifest already
+    /// records the drop's install seqno here. The two agree after a reopen.
+    ///
+    /// This is the value a deployment records for a later manifest repair
+    /// ([`Config::repair_retention_floor`](crate::Config::repair_retention_floor)):
+    /// it already folds in every operation that advanced the boundary (GC
+    /// compactions, `clear`, table drops, filtering compactions), so no
+    /// caller-side bookkeeping of watermarks is needed. `0` until the first
+    /// such install.
+    fn retention_floor(&self) -> SeqNo;
 
     /// Scans the entire tree, returning the number of items.
     ///

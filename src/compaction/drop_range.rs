@@ -97,7 +97,9 @@ impl CompactionStrategy for Strategy {
         // But just as a fail-safe...
         let some_hidden = table_ids.iter().any(|&id| state.hidden_set().is_hidden(id));
 
-        if some_hidden {
+        // No fully contained table is a no-op, not an empty drop (an empty drop
+        // would still install a version edit); same shape as the FIFO strategy.
+        if some_hidden || table_ids.is_empty() {
             Choice::DoNothing
         } else {
             Choice::Drop(table_ids)

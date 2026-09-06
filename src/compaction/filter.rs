@@ -192,6 +192,23 @@ impl<'a> ItemAccessor<'a> {
     }
 }
 
+/// The transform counters a [`StreamFilterAdapter`] ticks on a non-`Keep`
+/// verdict.
+pub(crate) struct TransformCounters {
+    /// Shared with the merge stream and the table writer: an output whose
+    /// window saw a TRANSFORMATION is not derivable from its inputs, so the
+    /// writer strips its compaction lineage (a `Keep`-only run keeps it, and
+    /// the manifest-repair dedup stays effective).
+    pub transform: Option<alloc::sync::Arc<portable_atomic::AtomicU64>>,
+    /// The FILTER's non-`Keep` verdicts alone. The shared counter above also
+    /// ticks on the merge stream's own watermark-gated drops, which the GC
+    /// watermark already accounts for; a user filter removes or rewrites rows
+    /// regardless of any watermark, so the install needs to know that the
+    /// filter itself changed something to raise the persisted retention floor
+    /// to its own seqno.
+    pub filter: alloc::sync::Arc<portable_atomic::AtomicU64>,
+}
+
 /// Adapts a [`CompactionFilter`] to a [`StreamFilter`]
 //
 // NOTE: this slightly helps insulate CompactionStream from lifetime spam
@@ -201,11 +218,7 @@ pub(crate) struct StreamFilterAdapter<'a, 'b: 'a> {
     blob_opts: Option<&'a KvSeparationOptions>,
     blob_writer: &'a mut Option<BlobFileWriter>,
     ctx: &'a Context,
-    /// Counts every non-`Keep` verdict, shared with the table writer: an
-    /// output whose window saw a TRANSFORMATION is not derivable from its
-    /// inputs, so the writer strips its compaction lineage (a `Keep`-only
-    /// run keeps it, and the manifest-repair dedup stays effective).
-    transform_marker: Option<alloc::sync::Arc<portable_atomic::AtomicU64>>,
+    counters: TransformCounters,
 }
 
 impl<'a, 'b: 'a> StreamFilterAdapter<'a, 'b> {
@@ -216,7 +229,7 @@ impl<'a, 'b: 'a> StreamFilterAdapter<'a, 'b> {
         blobs_folder: &'a Path,
         blob_writer: &'a mut Option<BlobFileWriter>,
         ctx: &'a Context,
-        transform_marker: Option<alloc::sync::Arc<portable_atomic::AtomicU64>>,
+        counters: TransformCounters,
     ) -> Self {
         Self {
             filter,
@@ -228,7 +241,7 @@ impl<'a, 'b: 'a> StreamFilterAdapter<'a, 'b> {
             blob_opts: opts.config.kv_separation_opts.as_ref(),
             blob_writer,
             ctx,
-            transform_marker,
+            counters,
         }
     }
 
@@ -292,10 +305,13 @@ impl<'a, 'b: 'a> StreamFilter for StreamFilterAdapter<'a, 'b> {
             },
             self.ctx,
         )?;
-        if !matches!(verdict, Verdict::Keep)
-            && let Some(marker) = &self.transform_marker
-        {
-            marker.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if !matches!(verdict, Verdict::Keep) {
+            self.counters
+                .filter
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if let Some(marker) = &self.counters.transform {
+                marker.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            }
         }
         match verdict {
             Verdict::Destroy => Ok(StreamFilterVerdict::Drop),

@@ -149,8 +149,10 @@ matching entry (and add one for a new subsystem).
   snapshots saw raises the version's *retention floor* in the same version
   edit (`Version::retention_floor`, the `retention_floor` manifest section and
   the appended edit-log field): a GC compaction with watermark `w` sets it to
-  `w - 1`, a `clear` or a table drop to its own install seqno; a flush,
-  ingest, move or relocation leaves it alone. A reopened history is seeded at
+  `w - 1` (capped at its own install seqno), a `clear`, a table drop or a
+  compaction whose filter removed or rewrote rows to its own install seqno;
+  a flush, ingest, move, relocation or an empty drop leaves it alone.
+  `AbstractTree::retention_floor` exposes the persisted value. A reopened history is seeded at
   the floor, so the snapshots the live tree refused stay refused after a
   restart instead of being answered from the surviving version. Version seqnos
   are non-decreasing along the history (`upgrade_version_with_seqno` clamps),
