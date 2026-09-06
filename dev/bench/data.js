@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788631855488,
+  "lastUpdate": 1788712228088,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -21528,6 +21528,84 @@ window.BENCHMARK_DATA = {
             "value": 595360.6527091248,
             "unit": "ops/sec",
             "extra": "P50: 1.5us | P99: 4.7us | P99.9: 7.6us\nthreads: 1 | elapsed: 0.34s | num: 200000 | iterations: 3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a91be3d3c0828c1e57dd5a9b4fffacc7bccba140",
+          "message": "fix(version): refuse a snapshot read below the retained history (#617)\n\n## Summary\n\n`SuperVersions::get_version_for_snapshot` panicked with `should always\nfind a SuperVersion` when a read asked for a snapshot at or below the\noldest retained version's seqno. Compaction maintenance (with the\ncaller's GC watermark) and `clear` prune the version history past such\nsnapshots, so every read API (`get`, `multi_get`, range / prefix\niterators, seekable and batch scans, columnar scan, range estimates)\ncould take the tree down on a valid argument.\n\nThe read is now refused with a typed error instead of served from a\nnewer version (which would silently return data the snapshot never saw),\nand the boundary is durable:\n\n- `Error::SnapshotBelowRetention { requested, oldest_retained }`: point\nreads return it directly; iterators yield it as their first and only\nitem (also via `peek_key` on the seekable iterator, whose seeks become\nno-ops). Standard and KV-separated trees alike, including an empty\n`multi_get` batch.\n- `AbstractTree::oldest_retained_seqno()`: the read boundary, so a\ncaller can validate a long-lived snapshot before reading. A snapshot is\nservable iff it is `0` or strictly above that seqno.\n- Snapshot `0` stays served from the oldest retained version: nothing is\nvisible at `0` from any version, so the choice is immaterial and probing\nan empty tree keeps working after pruning.\n- **The boundary survives a reopen.** `Version::retention_floor`\n(persisted as a manifest section plus an appended edit-log field, both\noptional so older manifests recover as `0`) records the highest snapshot\nan install made unservable: a GC compaction with watermark `w` sets it\nto `w - 1`, capped at the compaction's own install seqno (so a\n`SeqNo::MAX` watermark cannot refuse every later snapshot); a `clear` /\n`drop_range` / FIFO eviction / a compaction whose user filter removed or\nrewrote rows sets it to its own install seqno; additive installs (flush,\ningest, trivial move) and an empty drop leave it alone. The install\npasses a `RetentionEffect` to `upgrade_version`, so the floor rides in\nthe same version edit as the data loss it records. A reopened history is\nseeded at the floor, version seqnos are clamped non-decreasing, and the\nfront is checked explicitly, so a counter reset below the floor cannot\nslip a version under it.\n- `AbstractTree::retention_floor()`: the persisted boundary (what a\nreopen enforces), distinct from the live `oldest_retained_seqno()`, and\nthe value a deployment records for a later repair.\n- `Config::repair_retention_floor` (default `0`): a rebuilt manifest\ncannot derive the floor (a GC compaction zeroes the settled rows'\nseqnos) and must not guess it (the external-WAL reconciliation reads\nintermediate snapshots back after a repair), so the deployment supplies\nthe `retention_floor()` it last recorded.\n- `Tree::create_{iter,range,prefix,seekable_range_bounds}` (doc-hidden)\nreturn `Result` and raise the error before any I/O; the happy path gains\nno per-item branch, and the lock-free `snapshot_for_read` fast path is\nunchanged.\n- Docs: `INVARIANTS.md` (retention boundary, its durability, and the\nstorage cost of a retention window), `manifest-recovery.md` (retention\nfloor after a repair), `external-wal.md` (repair floor), rustdoc on the\nnew API.\n\n## Testing\n\n- `tests/snapshot_below_retention.rs` (31 tests): every read surface on\nboth tree types, the `clear` path, snapshot `0`, the exact boundary\n(`oldest` fails, `oldest + 1` succeeds), the unpruned case; the boundary\nafter a reopen following a GC compaction, `clear`, `drop_range`, FIFO\neviction, a leveled merge and a filtering compaction at watermark 0, a\n`SeqNo::MAX` watermark capped at the install, an empty `drop_range`\nleaving it alone, additive installs leaving it at `0`, manifest rotation\n(floor read from the snapshot section), a reopen chain with a rising\nfloor, a reset counter, the persisted-vs-live boundary, checkpoints, and\nrepair with and without the configured floor.\n- Unit tests: edit codec round-trips (floor with / without blob\nfrontiers, pre-floor payloads), `diff` emits the floor only when\nchanged, recovery applies it, the history seeds at the floor and checks\nthe front before searching.\n- Gates: `cargo fmt --check`, `cargo clippy --workspace --all-targets`\n(default and `--all-features`) with `-D warnings`, `cargo doc --no-deps`\n(default and `--all-features`) 0 warnings, no-std check 0 errors, `cargo\nnextest run --workspace --all-features` 3288/3288, `cargo test --doc\n--all-features` 80/80.\n\nCloses #616",
+          "timestamp": "2026-09-06T19:28:13+03:00",
+          "tree_id": "555474f8d057724146b73d8050c28abee9f2f9de",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/a91be3d3c0828c1e57dd5a9b4fffacc7bccba140"
+        },
+        "date": 1788712193347,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 3606339.74331372,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.5us | P99.9: 3.4us\nthreads: 1 | elapsed: 0.06s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1302242.5952288501,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 2.1us | P99.9: 4.1us\nthreads: 1 | elapsed: 0.15s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readrandom",
+            "value": 927453.3041173177,
+            "unit": "ops/sec",
+            "extra": "P50: 0.9us | P99: 4.1us | P99.9: 6.5us\nthreads: 1 | elapsed: 0.22s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readseq",
+            "value": 3833379.1102688755,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 3.1us | P99.9: 5.5us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 472239.52691497543,
+            "unit": "ops/sec",
+            "extra": "P50: 1.8us | P99: 5.2us | P99.9: 8.1us\nthreads: 1 | elapsed: 0.42s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 248883.14002019863,
+            "unit": "ops/sec",
+            "extra": "P50: 3.7us | P99: 4.9us | P99.9: 6.9us\nthreads: 1 | elapsed: 0.80s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "overwrite",
+            "value": 1386877.319647665,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 2.0us | P99.9: 4.1us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 1221551.433719343,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 1.4us | P99.9: 2.2us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 761905.118911732,
+            "unit": "ops/sec",
+            "extra": "P50: 1.1us | P99: 5.4us | P99.9: 8.3us\nthreads: 1 | elapsed: 0.26s | num: 200000 | iterations: 3"
           }
         ]
       }
