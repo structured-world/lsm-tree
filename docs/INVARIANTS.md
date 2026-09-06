@@ -132,6 +132,45 @@ matching entry (and add one for a new subsystem).
   visible at read seqno `s + 1`. Enforced in the read path (`src/tree`, `src/mvcc_stream.rs`) and the
   seqno ordering (`src/seqno.rs`, `src/value.rs`).
 
+- **A snapshot is served from a retained version, or refused; never clamped.**
+  A read at snapshot `R` resolves to the newest `SuperVersion` installed below
+  `R`. Compaction maintenance keeps only the newest version below the caller's
+  GC watermark (`major_compact`'s `seqno_threshold`) and releases the older
+  ones, and `clear` drains the history to the new empty version; a read at
+  `0 < R <= oldest_retained_seqno()` then has no version to be served from and
+  fails with `Error::SnapshotBelowRetention` (point reads directly, iterators as
+  their first and only item) rather than being served from a newer version,
+  which would return data the snapshot never saw. Snapshot `0` sees nothing
+  from any version and is always served empty. Enforced in
+  `src/version/super_version.rs` (`get_version_for_snapshot`) and surfaced by
+  every read path that resolves a snapshot (`src/tree`, `src/blob_tree`).
+
+- **The retention boundary is durable.** An install that discards what older
+  snapshots saw raises the version's *retention floor* in the same version
+  edit (`Version::retention_floor`, the `retention_floor` manifest section and
+  the appended edit-log field): a GC compaction with watermark `w` sets it to
+  `w - 1` (capped at its own install seqno), a `clear`, a table drop or a
+  compaction whose filter removed or rewrote rows to its own install seqno;
+  a flush, ingest, move, relocation or an empty drop leaves it alone.
+  `AbstractTree::retention_floor` exposes the persisted value. A reopened history is seeded at
+  the floor, so the snapshots the live tree refused stay refused after a
+  restart instead of being answered from the surviving version. Version seqnos
+  are non-decreasing along the history (`upgrade_version_with_seqno` clamps),
+  so a counter reset below the floor cannot slip a version under it. A
+  manifest rebuilt by `Config::repair` seeds the floor from
+  `Config::repair_retention_floor` (default `0`): the tables cannot record it
+  and the engine must not guess it (see
+  [manifest-recovery.md](manifest-recovery.md#retention-floor)).
+
+- **Retention is versioned, so its storage cost scales with write + compaction
+  volume.** History is served from whole retained `SuperVersion`s: every table a
+  compaction consumed stays on disk until the GC watermark passes that
+  compaction's install seqno, whether or not the snapshot window still needs any
+  key version inside it. A wide window therefore costs the disk of every flush
+  and compaction output produced while it was open, not just the disk of the
+  superseded key versions; keep `seqno_threshold` as close to the oldest live
+  snapshot as the caller can prove.
+
 - **Re-applying a put / delete at its original seqno is idempotent; a merge
   operand is NOT.** For a put or delete, the same (key, value, seqno) reproduces
   the same MVCC version (an overwrite), which is what makes external-WAL replay

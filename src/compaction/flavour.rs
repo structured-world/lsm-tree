@@ -288,6 +288,12 @@ pub(super) struct ProducedOutput {
     /// tight-space loop punches `[data_start, frontier)` of each stale file and
     /// resumes the next slice's scan here.
     consumed_through: crate::HashMap<BlobFileId, u64>,
+    /// Whether the user compaction filter removed or rewrote at least one row
+    /// of this output. A filter acts regardless of the GC watermark, so the
+    /// install must raise the persisted retention floor to its own seqno
+    /// (see [`RetentionEffect::DropsData`](crate::version::RetentionEffect::DropsData))
+    /// instead of the watermark-derived floor.
+    filter_transformed: bool,
 }
 
 #[cfg_attr(
@@ -324,6 +330,12 @@ impl ProducedOutput {
         &self.consumed_through
     }
 
+    /// Records that the user compaction filter transformed at least one row of
+    /// this output (called by the producer, which owns the filter counter).
+    pub(super) fn mark_filter_transformed(&mut self) {
+        self.filter_transformed = true;
+    }
+
     /// Marks this produced-but-not-installed output's freshly written files as
     /// deleted. Used when a sibling sub-compaction fails and the shared
     /// [`install_merge`] is skipped: each already-finished sub-compaction has
@@ -354,6 +366,8 @@ impl ProducedOutput {
             tables_to_delete: vec![deleted],
             blob_frag_map: FragmentationMap::default(),
             consumed_through: crate::HashMap::default(),
+            // A relocation reuses the source's rows verbatim.
+            filter_transformed: false,
         }
     }
 }
@@ -394,6 +408,7 @@ pub(super) fn install_merge(
     let mut blob_files_to_drop = Vec::new();
     let mut tables_to_delete = Vec::new();
     let mut blob_frag_map = FragmentationMap::default();
+    let mut filter_transformed = false;
 
     for out in outputs {
         created_tables.extend(out.created_tables);
@@ -401,7 +416,20 @@ pub(super) fn install_merge(
         blob_files_to_drop.extend(out.rewritten_blob_files_to_drop);
         tables_to_delete.extend(out.tables_to_delete);
         out.blob_frag_map.merge_into(&mut blob_frag_map);
+        filter_transformed |= out.filter_transformed;
     }
+
+    // What this install does to older snapshots. The merge stream GC'd below
+    // the watermark, so the watermark-derived floor covers that; a user
+    // compaction filter removes or rewrites rows regardless of the watermark
+    // (a `Remove` at watermark 0 still drops the row from the output), so an
+    // output the filter transformed invalidates every snapshot up to the
+    // install itself.
+    let retention = if filter_transformed {
+        crate::version::RetentionEffect::DropsData
+    } else {
+        crate::version::RetentionEffect::GcBelow(opts.mvcc_gc_watermark)
+    };
 
     let tables_out = created_tables.len();
 
@@ -478,6 +506,7 @@ pub(super) fn install_merge(
             &*opts.config.fs,
             opts.runtime_config.load_full(),
             opts.encryption.clone(),
+            retention,
         )
         .inspect_err(|_| {
             for table in &created_tables {
@@ -723,6 +752,8 @@ impl CompactionFlavour for RelocatingCompaction {
             tables_to_delete,
             blob_frag_map,
             consumed_through: self.consumed_through,
+            // The producer owns the filter counter and marks this after.
+            filter_transformed: false,
         })
     }
 }
@@ -832,6 +863,8 @@ impl CompactionFlavour for StandardCompaction {
             blob_frag_map,
             // A standard sub-compaction relocates nothing.
             consumed_through: crate::HashMap::default(),
+            // The producer owns the filter counter and marks this after.
+            filter_transformed: false,
         })
     }
 }

@@ -240,6 +240,20 @@ up to `b` for `LostUpTo(b)`, unbounded for `FullHistory`.
 Run the replay BEFORE publishing your visible watermark, so readers never
 observe the repaired-but-not-yet-reconciled state.
 
+**Snapshots below the retention boundary stay refused.** A live tree refuses
+a snapshot read below the history it no longer holds
+(`Error::SnapshotBelowRetention`): a compaction's GC watermark, a `clear`, a
+table drop (`drop_range`, FIFO eviction) or a filtering compaction each raise
+that boundary, and the manifest carries it across a normal reopen. A repair
+rebuilds the manifest from the tables, which do not record it, so record
+`retention_floor()` in your own durable state whenever you record the trim
+watermark `W` (it already folds in every operation that raised the boundary,
+not only the GC watermark) and pass the last recorded value as
+`Config::repair_retention_floor` on the repairing `Config`: the repaired tree
+then refuses exactly the snapshots the source refused, and the reconciled
+replay above the floor stays readable. Left at `0`, the repaired tree serves
+every snapshot, including ones a past compaction or drop collected.
+
 ## Executable companion
 
 This recipe is not only specified here; it is executed and self-verified in the

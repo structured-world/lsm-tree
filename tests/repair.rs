@@ -10,32 +10,14 @@
 
 #![cfg(feature = "std")]
 
+mod common;
+
+use common::nuke_manifest;
 use lsm_tree::{AbstractTree, Config, KvSeparationOptions, MAX_SEQNO, SequenceNumberCounter};
 use test_log::test;
 
 fn key(i: u64) -> String {
     format!("k{i:05}")
-}
-
-/// Removes every `v{N}` manifest file and the `current` pointer from a tree
-/// directory, simulating a manifest loss while leaving the SSTs intact.
-///
-/// Keep in sync with the copy in `tools/sst-dump/tests/repair_smoke.rs` (a
-/// separate crate, so the helper cannot be shared directly): both encode the
-/// manifest file-naming convention (`v{N}` + `current`).
-fn nuke_manifest(dir: &std::path::Path) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let is_version = name
-            .strip_prefix('v')
-            .is_some_and(|rest| rest.parse::<u64>().is_ok());
-        if is_version || name == "current" {
-            std::fs::remove_file(entry.path())?;
-        }
-    }
-    Ok(())
 }
 
 fn count_sst_files(dir: &std::path::Path) -> std::io::Result<usize> {

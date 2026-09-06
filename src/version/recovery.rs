@@ -147,6 +147,22 @@ fn parse_blob_restrictions_section(
     Ok(map)
 }
 
+/// Parses the optional `retention_floor` section: one `u64 LE`, the highest
+/// snapshot seqno the version can no longer serve. Read strictly (exactly
+/// eight bytes): a floor read too LOW would let a reopened tree answer a
+/// snapshot from data it never saw, which is the very outcome the floor
+/// exists to refuse. Absent section is handled by the caller (legitimate: a
+/// snapshot written before the floor existed) and never reaches here.
+fn parse_retention_floor_section(mut bytes: &[u8]) -> crate::Result<SeqNo> {
+    const ERR: crate::Error = crate::Error::InvalidHeader("retention_floor section");
+    let r = &mut bytes;
+    let floor = r.read_u64::<LittleEndian>().map_err(|_| ERR)?;
+    if !r.is_empty() {
+        return Err(ERR);
+    }
+    Ok(floor)
+}
+
 /// Reads and validates the CURRENT version pointer file.
 ///
 /// The file format is: `version_id: u64 | checksum: u128 | checksum_type: u8`
@@ -325,6 +341,13 @@ pub struct Recovery {
     /// so a removed file's stale frontier must not attach to a later file
     /// under the same id.
     pub blob_restrictions: crate::HashMap<BlobFileId, u64>,
+    /// Highest snapshot seqno the recovered version can no longer serve,
+    /// from the snapshot's `retention_floor` section (`0` when the snapshot
+    /// predates it) and overwritten by each replayed edit that carries one.
+    /// Seeds the reopened history's boundary so a snapshot a past GC
+    /// compaction or `clear` invalidated is refused, not answered from newer
+    /// data.
+    pub retention_floor: SeqNo,
     /// Per-section counters describing how many records were dropped
     /// during this recovery. Always zero under
     /// [`ManifestRecoveryMode::AbsoluteConsistency`] (any corruption
@@ -435,6 +458,12 @@ impl Recovery {
             .map(|(id, key)| (*id, key.clone()))
             .collect();
         self.blob_restrictions = edit.blob_restrictions.iter().copied().collect();
+
+        // Carried only when the edit raised it; the value is the version's
+        // absolute floor, not a delta.
+        if let Some(floor) = edit.retention_floor {
+            self.retention_floor = floor;
+        }
 
         self.curr_version_id = edit.new_version_id;
         Ok(())
@@ -1249,6 +1278,16 @@ pub fn recover(
         crate::HashMap::default()
     };
 
+    // The retention floor, absent on snapshots written before it existed
+    // (→ 0: every snapshot servable, the pre-floor behaviour). Read strictly
+    // when present, since a floor read too low serves data a snapshot never
+    // saw.
+    let retention_floor = if archive.section("retention_floor").is_some() {
+        parse_retention_floor_section(&archive.read_section("retention_floor")?)?
+    } else {
+        0
+    };
+
     let mut recovery = Recovery {
         tree_type: {
             if archive.section("tree_type").is_none() {
@@ -1271,6 +1310,7 @@ pub fn recover(
         gc_stats,
         restrictions,
         blob_restrictions,
+        retention_floor,
         stats: RecoveryStats {
             tables_dropped_to_tail,
             tables_dropped_to_corruption,

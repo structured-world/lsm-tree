@@ -611,6 +611,16 @@ pub struct Config {
     /// on every upgrade, degenerating to the full-rewrite-per-version behaviour.
     pub(crate) manifest_log_rotate_bytes: u64,
 
+    /// Retention floor a manifest REPAIR seeds the rebuilt version with: the
+    /// highest snapshot seqno the repaired tree refuses to serve. The lost
+    /// manifest was the only record of the floor a past GC compaction or
+    /// `clear` established, and the tables cannot stand in for it, so the
+    /// deployment that ran those compactions (and knows the watermark it
+    /// passed) supplies it here. Defaults to `0`: a repaired tree serves
+    /// every snapshot, which is right only if history was never collected.
+    /// Set via [`Config::repair_retention_floor`].
+    pub(crate) repair_retention_floor: crate::SeqNo,
+
     /// Compaction I/O rate limit in bytes per second.
     ///
     /// Caps the rate at which the compaction worker is allowed to issue
@@ -792,6 +802,7 @@ impl Default for Config {
             #[cfg(feature = "std")]
             recovery_progress: None,
             manifest_log_rotate_bytes: 1024 * 1024,
+            repair_retention_floor: 0,
             compaction_rate_limit: 0,
 
             #[cfg(feature = "std")]
@@ -1630,6 +1641,32 @@ impl Config {
     #[must_use]
     pub fn manifest_log_rotate_bytes(mut self, bytes: u64) -> Self {
         self.manifest_log_rotate_bytes = bytes;
+        self
+    }
+
+    /// Sets the retention floor a manifest repair seeds the rebuilt tree with
+    /// (default `0`): after [`repair`](Self::repair) /
+    /// [`open_or_repair`](Self::open_or_repair) every snapshot at or below
+    /// `floor` is refused with
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention),
+    /// exactly as the tree refused it before the manifest was lost.
+    ///
+    /// A normal open needs no help: the manifest carries the floor every
+    /// retention-advancing install established (a GC compaction, `clear`, a
+    /// table drop, a filtering compaction; see
+    /// [`AbstractTree::retention_floor`](crate::AbstractTree::retention_floor)).
+    /// A repair rebuilds the manifest from the tables, which do not record it
+    /// (a GC compaction zeroes the seqnos of the rows it settles), so only the
+    /// deployment knows it: record
+    /// [`retention_floor()`](crate::AbstractTree::retention_floor) in your own
+    /// durable state (it already folds in every operation that raised the
+    /// boundary, so no per-operation bookkeeping is needed) and pass the last
+    /// recorded value here. Left at `0`, a repaired tree serves every
+    /// snapshot, which is correct only if history was never collected. Has no
+    /// effect on an open that finds a manifest.
+    #[must_use]
+    pub fn repair_retention_floor(mut self, floor: crate::SeqNo) -> Self {
+        self.repair_retention_floor = floor;
         self
     }
 

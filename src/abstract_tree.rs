@@ -565,6 +565,11 @@ pub trait AbstractTree: sealed::Sealed {
     /// Returns an iterator that scans through the entire tree.
     ///
     /// Avoid using this function, or limit it as otherwise it may scan a lot of items.
+    ///
+    /// A snapshot the history no longer retains (see
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno)) yields
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// as the iterator's first and only item.
     fn iter(
         &self,
         seqno: SeqNo,
@@ -576,6 +581,11 @@ pub trait AbstractTree: sealed::Sealed {
     /// Returns an iterator over a prefixed set of items.
     ///
     /// Avoid using an empty prefix as it may scan a lot of items (unless limited).
+    ///
+    /// A snapshot the history no longer retains (see
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno)) yields
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// as the iterator's first and only item.
     fn prefix<K: AsRef<[u8]>>(
         &self,
         prefix: K,
@@ -586,6 +596,11 @@ pub trait AbstractTree: sealed::Sealed {
     /// Returns an iterator over a range of items.
     ///
     /// Avoid using full or unbounded ranges as they may scan a lot of items (unless limited).
+    ///
+    /// A snapshot the history no longer retains (see
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno)) yields
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// as the iterator's first and only item.
     fn range<K: AsRef<[u8]>, R: RangeBounds<K>>(
         &self,
         range: R,
@@ -601,6 +616,12 @@ pub trait AbstractTree: sealed::Sealed {
     /// so a consumer can jump a live iterator to any key (`RocksDB` `Seek` /
     /// `SeekForPrev`) — enabling data-dependent scans (joins, skip-scan) without
     /// reopening per-SST readers per jump.
+    ///
+    /// A snapshot the history no longer retains (see
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno)) yields
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// as the iterator's first and only item (also through `peek_key`); seeks
+    /// on such an iterator are no-ops.
     fn range_seekable<K: AsRef<[u8]>, R: RangeBounds<K>>(
         &self,
         range: R,
@@ -619,6 +640,11 @@ pub trait AbstractTree: sealed::Sealed {
     ///
     /// The interval source is pulled lazily, so intervals may be produced on
     /// demand (e.g. computed from rows already returned).
+    ///
+    /// A snapshot the history no longer retains (see
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno)) yields
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// as the iterator's first and only item.
     fn batch_range_scan<K: AsRef<[u8]>, R: RangeBounds<K> + 'static, I: IntoIterator<Item = R>>(
         &self,
         intervals: I,
@@ -685,6 +711,16 @@ pub trait AbstractTree: sealed::Sealed {
     /// - `seqno_threshold == 0` certifies nothing as collapsible, so **no folding
     ///   or GC happens** — `major_compact(target, 0)` only restructures tables and
     ///   leaves a merge-only key's full operand chain intact.
+    ///
+    /// The same watermark prunes the version history: every version older
+    /// than the newest one installed below `seqno_threshold` is released
+    /// (and the tables only those versions referenced become deletable).
+    /// Afterwards a snapshot at or below the oldest retained version's seqno
+    /// (see [`oldest_retained_seqno`](Self::oldest_retained_seqno)) can no
+    /// longer be read and fails with
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention),
+    /// which is why the watermark must not exceed the oldest snapshot still in
+    /// use.
     ///
     /// # Errors
     ///
@@ -946,6 +982,81 @@ pub trait AbstractTree: sealed::Sealed {
     /// Returns the highest sequence number that is flushed to disk.
     fn get_highest_persisted_seqno(&self) -> Option<SeqNo>;
 
+    /// Returns the seqno of the oldest version the history still retains:
+    /// the lower bound of the readable snapshot window.
+    ///
+    /// A read at snapshot `seqno` is served from the newest retained version
+    /// installed below it, so a snapshot is servable iff it is `0` (sees
+    /// nothing from any version) or strictly above this seqno; a read at
+    /// `0 < seqno <= oldest_retained_seqno()` fails with
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention).
+    /// The boundary advances when [`major_compact`](Self::major_compact)
+    /// prunes the history up to its `seqno_threshold` and when
+    /// [`clear`](Self::clear) drains it, so a caller holding a long-lived
+    /// snapshot (a lagging consumer, a point-in-time query) can validate it
+    /// here before reading and report "history collected" instead of an
+    /// unexpected error mid-scan. A fresh tree reports `0`.
+    ///
+    /// The boundary survives a reopen. The install that discards what older
+    /// snapshots saw records it in the same version edit: after a GC
+    /// compaction with watermark `w` the reopened boundary is `w - 1`, capped
+    /// at the compaction's own install seqno (the retained pre-compaction
+    /// version that served reads between the live front and `w` does not
+    /// survive a restart), after a `clear`, a table drop or a compaction
+    /// whose filter transformed rows it is that install's seqno. A manifest rebuilt by
+    /// [`Config::repair`](crate::Config::repair) cannot know what the lost
+    /// manifest recorded and seeds the boundary from
+    /// [`Config::repair_retention_floor`](crate::Config::repair_retention_floor)
+    /// (default `0`: every snapshot served).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # let folder = tempfile::tempdir()?;
+    /// use lsm_tree::{AbstractTree, Config, Error, SequenceNumberCounter};
+    ///
+    /// let seqno = SequenceNumberCounter::default();
+    /// let tree = Config::new(folder, seqno.clone(), Default::default()).open()?;
+    /// assert_eq!(tree.oldest_retained_seqno(), 0);
+    ///
+    /// tree.insert("a", "v1", seqno.next());
+    /// tree.flush_active_memtable(0)?;
+    /// let stale = seqno.get();
+    /// tree.insert("a", "v2", seqno.next());
+    /// tree.flush_active_memtable(0)?;
+    ///
+    /// // A watermark above every live snapshot lets compaction prune the
+    /// // history; the boundary moves past the stale snapshot.
+    /// tree.major_compact(u64::MAX, seqno.get())?;
+    /// let oldest = tree.oldest_retained_seqno();
+    /// assert!(stale <= oldest);
+    /// assert!(matches!(
+    ///     tree.get("a", stale),
+    ///     Err(Error::SnapshotBelowRetention { .. })
+    /// ));
+    /// assert_eq!(tree.get("a", oldest + 1)?.as_deref(), Some(b"v2".as_slice()));
+    /// #
+    /// # Ok::<(), lsm_tree::Error>(())
+    /// ```
+    fn oldest_retained_seqno(&self) -> SeqNo;
+
+    /// Returns the PERSISTED retention boundary: the highest snapshot seqno
+    /// the tree will refuse after a reopen.
+    ///
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno) is the LIVE
+    /// boundary, which the in-memory version history may hold below this
+    /// one: a table drop with no GC watermark keeps its pre-drop version
+    /// retained (and serving) until the restart, while the manifest already
+    /// records the drop's install seqno here. The two agree after a reopen.
+    ///
+    /// This is the value a deployment records for a later manifest repair
+    /// ([`Config::repair_retention_floor`](crate::Config::repair_retention_floor)):
+    /// it already folds in every operation that advanced the boundary (GC
+    /// compactions, `clear`, table drops, filtering compactions), so no
+    /// caller-side bookkeeping of watermarks is needed. `0` until the first
+    /// such install.
+    fn retention_floor(&self) -> SeqNo;
+
     /// Scans the entire tree, returning the number of items.
     ///
     /// ###### Caution
@@ -1127,7 +1238,17 @@ pub trait AbstractTree: sealed::Sealed {
     ///
     /// # Errors
     ///
-    /// Will return `Err` if an IO error occurs.
+    /// Will return `Err` if an IO error occurs, or
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// when the history no longer retains a version for `seqno` (see
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno)). The same applies
+    /// to every read that resolves a snapshot: [`get_pinned`](Self::get_pinned),
+    /// [`contains_key`](Self::contains_key), [`size_of`](Self::size_of),
+    /// [`multi_get`](Self::multi_get), [`len`](Self::len),
+    /// [`is_empty`](Self::is_empty), [`first_key_value`](Self::first_key_value),
+    /// [`last_key_value`](Self::last_key_value),
+    /// [`approximate_range_stats`](Self::approximate_range_stats) and
+    /// [`approximate_range_cardinality`](Self::approximate_range_cardinality).
     fn get<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<UserValue>>;
 
     /// Retrieves an item from the tree as a [`PinnableSlice`](crate::PinnableSlice).

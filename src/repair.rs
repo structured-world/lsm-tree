@@ -6141,7 +6141,21 @@ fn publish_repaired_manifest(
     // Seeded with the punched prefixes' garbage: those frames can never be
     // observed by a future compaction, so an empty map would pin every punched
     // file's stale count below its whole-file metadata totals forever.
-    let version = Version::from_levels(version_id, tree_type, levels, blob_file_list, blob_frag);
+    //
+    // The retention floor comes from the caller (`Config::repair_retention_floor`).
+    // The lost manifest was the only record of which snapshots a past GC
+    // compaction or `clear` invalidated, and the tables cannot stand in for
+    // it: a GC compaction zeroes the seqnos of the rows it settles, so a
+    // table's highest seqno reads as `0` exactly on the trees where history
+    // WAS collected. Nor may the floor be guessed high (say, at the highest
+    // persisted seqno): the external-WAL reconciliation that follows a repair
+    // restores intermediate snapshots and reads them back, so a guessed floor
+    // would refuse history the caller has just made whole. Only the
+    // deployment that ran the compactions knows the watermark; it supplies
+    // it, and the default (`0`) serves everything, as before the floor
+    // existed.
+    let version = Version::from_levels(version_id, tree_type, levels, blob_file_list, blob_frag)
+        .with_retention_floor(config.repair_retention_floor);
 
     // The LAST cancellation boundary: per-file checks only run before a file
     // starts, so a cancel requested during the final file's verification or

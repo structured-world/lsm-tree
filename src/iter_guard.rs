@@ -91,3 +91,49 @@ pub trait SeekableGuardIter: DoubleEndedIterator<Item = IterGuardImpl> + Send {
     /// next seek target before advancing any of them.
     fn peek_key(&mut self) -> Option<crate::Result<UserKey>>;
 }
+
+/// A [`SeekableGuardIter`] that failed before it could open its snapshot
+/// (the history no longer retains a version for the requested seqno).
+///
+/// It carries the failure as its single item, from either end, so the
+/// consumer meets it through the same per-row `Result` it already handles;
+/// seeks are accepted and ignored, since there is no pipeline to reposition.
+/// [`peek_key`](SeekableGuardIter::peek_key) consumes the error, as it does
+/// on the live iterator (`crate::Error` is not `Clone`).
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "reached from tree / blob_tree as crate::iter_guard::FailedSeekable"
+)]
+pub(crate) struct FailedSeekable {
+    err: Option<crate::Error>,
+}
+
+impl FailedSeekable {
+    pub(crate) fn new(err: crate::Error) -> Self {
+        Self { err: Some(err) }
+    }
+}
+
+impl Iterator for FailedSeekable {
+    type Item = IterGuardImpl;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.err.take().map(crate::tree::error_guard)
+    }
+}
+
+impl DoubleEndedIterator for FailedSeekable {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.next()
+    }
+}
+
+impl SeekableGuardIter for FailedSeekable {
+    fn seek_to(&mut self, _key: &[u8]) {}
+
+    fn seek_to_for_prev(&mut self, _key: &[u8]) {}
+
+    fn peek_key(&mut self) -> Option<crate::Result<UserKey>> {
+        self.err.take().map(Err)
+    }
+}

@@ -64,7 +64,7 @@ fn prefix_bloom_basic_prefix_scan() -> lsm_tree::Result<()> {
 
     // Prefix scan should find matching keys
     let results: Vec<_> = tree
-        .create_prefix("user:1:", 5, None)
+        .create_prefix("user:1:", 5, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0.as_ref(), b"user:1:email");
@@ -72,13 +72,13 @@ fn prefix_bloom_basic_prefix_scan() -> lsm_tree::Result<()> {
 
     // Different prefix
     let results: Vec<_> = tree
-        .create_prefix("order:", 5, None)
+        .create_prefix("order:", 5, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
 
     // Non-existent prefix
     let results: Vec<_> = tree
-        .create_prefix("nonexist:", 5, None)
+        .create_prefix("nonexist:", 5, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
@@ -105,7 +105,7 @@ fn prefix_bloom_skips_segments() -> lsm_tree::Result<()> {
     // Prefix scan for "user:" should return correct results
     // and skip the "order:" segment via prefix bloom
     let results: Vec<_> = tree
-        .create_prefix("user:", 4, None)
+        .create_prefix("user:", 4, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0.as_ref(), b"user:1:name");
@@ -114,7 +114,7 @@ fn prefix_bloom_skips_segments() -> lsm_tree::Result<()> {
     // Prefix scan for "order:" should return correct results
     // and skip the "user:" segment via prefix bloom
     let results: Vec<_> = tree
-        .create_prefix("order:", 4, None)
+        .create_prefix("order:", 4, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
 
@@ -140,7 +140,7 @@ fn prefix_bloom_after_compaction() -> lsm_tree::Result<()> {
 
     // Prefix scan still works after compaction
     let results: Vec<_> = tree
-        .create_prefix("a:", 4, None)
+        .create_prefix("a:", 4, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0.as_ref(), b"a:1");
@@ -168,7 +168,7 @@ fn prefix_bloom_without_extractor_still_works() -> lsm_tree::Result<()> {
             t.flush_active_memtable(0)?;
 
             let results: Vec<_> = t
-                .create_prefix("user:", 2, None)
+                .create_prefix("user:", 2, None)?
                 .collect::<Result<Vec<_>, _>>()?;
             assert_eq!(results.len(), 2);
         }
@@ -194,25 +194,25 @@ fn prefix_bloom_hierarchical_prefixes() -> lsm_tree::Result<()> {
     // Scan at different prefix levels
     // "adj:" matches all adjacency keys
     let results: Vec<_> = tree
-        .create_prefix("adj:", 5, None)
+        .create_prefix("adj:", 5, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 4);
 
     // "adj:out:" matches outgoing adjacency
     let results: Vec<_> = tree
-        .create_prefix("adj:out:", 5, None)
+        .create_prefix("adj:out:", 5, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 3);
 
     // "adj:out:42:" matches specific node's outgoing edges
     let results: Vec<_> = tree
-        .create_prefix("adj:out:42:", 5, None)
+        .create_prefix("adj:out:42:", 5, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
 
     // "node:" matches node properties
     let results: Vec<_> = tree
-        .create_prefix("node:", 5, None)
+        .create_prefix("node:", 5, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 1);
 
@@ -235,7 +235,7 @@ fn prefix_bloom_with_memtable_and_disk() -> lsm_tree::Result<()> {
 
     // Prefix scan should find both disk and memtable results
     let results: Vec<_> = tree
-        .create_prefix("x:", 4, None)
+        .create_prefix("x:", 4, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0.as_ref(), b"x:1");
@@ -279,14 +279,14 @@ fn prefix_bloom_unpinned_filter() -> lsm_tree::Result<()> {
 
     // Prefix scan on unpinned filters exercises the load_block fallback
     let results: Vec<_> = tree
-        .create_prefix("a:", 4, None)
+        .create_prefix("a:", 4, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].0.as_ref(), b"a:1");
 
     // Non-matching prefix should be skipped via unpinned bloom
     let results: Vec<_> = tree
-        .create_prefix("z:", 4, None)
+        .create_prefix("z:", 4, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
@@ -358,7 +358,7 @@ fn prefix_bloom_many_disjoint_segments() -> lsm_tree::Result<()> {
     for i in 0u64..10 {
         let prefix = format!("ns{i}:");
         let results: Vec<_> = tree
-            .create_prefix(&prefix, 10, None)
+            .create_prefix(&prefix, 10, None)?
             .collect::<Result<Vec<_>, _>>()?;
         assert_eq!(
             results.len(),
@@ -369,7 +369,7 @@ fn prefix_bloom_many_disjoint_segments() -> lsm_tree::Result<()> {
 
     // A prefix that doesn't exist should match nothing
     let results: Vec<_> = tree
-        .create_prefix("nonexist:", 10, None)
+        .create_prefix("nonexist:", 10, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
@@ -425,19 +425,19 @@ fn prefix_bloom_skip_on_compacted_levels() -> lsm_tree::Result<()> {
 
     // Scanning "data:" should find all 500 keys.
     let results: Vec<_> = tree
-        .create_prefix("data:", seqno, None)
+        .create_prefix("data:", seqno, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 500);
 
     // Scanning "data:2:" should find exactly 100 keys from batch 2.
     let results: Vec<_> = tree
-        .create_prefix("data:2:", seqno, None)
+        .create_prefix("data:2:", seqno, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 100);
 
     // "other:" has no keys and its key_range doesn't overlap — skipped by key_range check.
     let results: Vec<_> = tree
-        .create_prefix("other:", seqno, None)
+        .create_prefix("other:", seqno, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
@@ -447,7 +447,7 @@ fn prefix_bloom_skip_on_compacted_levels() -> lsm_tree::Result<()> {
     // This exercises the Ok(false) bloom-skip branch: key_range says "yes"
     // but bloom correctly says "no".
     let results: Vec<_> = tree
-        .create_prefix("data:3x:", seqno, None)
+        .create_prefix("data:3x:", seqno, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
@@ -470,7 +470,7 @@ fn prefix_bloom_non_boundary_prefix_no_false_negative() -> lsm_tree::Result<()> 
 
     // "adj" is not a colon-terminated boundary — bloom skip must be disabled
     let results: Vec<_> = tree
-        .create_prefix("adj", 3, None)
+        .create_prefix("adj", 3, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(
         results.len(),
@@ -480,7 +480,7 @@ fn prefix_bloom_non_boundary_prefix_no_false_negative() -> lsm_tree::Result<()> 
 
     // "adj:" IS a valid boundary — bloom skip can be used safely
     let results: Vec<_> = tree
-        .create_prefix("adj:", 3, None)
+        .create_prefix("adj:", 3, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
 
@@ -518,18 +518,18 @@ fn prefix_bloom_negative_lookup_in_key_range_gap() -> lsm_tree::Result<()> {
     // With 20 keys at 10 bpk, the bloom is ~200 bits, so in practice it will
     // usually reject such random prefixes, but false positives are still possible.
     let results: Vec<_> = tree
-        .create_prefix("mmm:", 20, None)
+        .create_prefix("mmm:", 20, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
     // Verify the real prefixes still work
     let results: Vec<_> = tree
-        .create_prefix("aaa:", 20, None)
+        .create_prefix("aaa:", 20, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 10);
 
     let results: Vec<_> = tree
-        .create_prefix("zzz:", 20, None)
+        .create_prefix("zzz:", 20, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 10);
 
@@ -571,7 +571,7 @@ fn prefix_bloom_multi_table_run_skipping() -> lsm_tree::Result<()> {
     // skips tables that definitely don't contain the queried prefix.
     for prefix in &["alpha:", "beta:", "gamma:", "delta:"] {
         let results: Vec<_> = tree
-            .create_prefix(prefix, 8, None)
+            .create_prefix(prefix, 8, None)?
             .collect::<Result<Vec<_>, _>>()?;
         assert_eq!(
             results.len(),
@@ -582,7 +582,7 @@ fn prefix_bloom_multi_table_run_skipping() -> lsm_tree::Result<()> {
 
     // Non-existent prefix returns nothing.
     let results: Vec<_> = tree
-        .create_prefix("omega:", 8, None)
+        .create_prefix("omega:", 8, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
@@ -639,24 +639,24 @@ fn prefix_bloom_multi_table_run_bloom_rejection() -> lsm_tree::Result<()> {
     // This exercises the Ok(false) bloom rejection path in the multi-table
     // run filter (not just the key-range guard).
     let results: Vec<_> = tree
-        .create_prefix("b:", 36, None)
+        .create_prefix("b:", 36, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
     // "e:" overlaps table 2's key range [d:1, f:9] but isn't in its bloom.
     let results: Vec<_> = tree
-        .create_prefix("e:", 36, None)
+        .create_prefix("e:", 36, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 0);
 
     // Real prefixes still work through the multi-table run.
     let results: Vec<_> = tree
-        .create_prefix("a:", 36, None)
+        .create_prefix("a:", 36, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 9);
 
     let results: Vec<_> = tree
-        .create_prefix("d:", 36, None)
+        .create_prefix("d:", 36, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 9);
 
@@ -695,13 +695,13 @@ fn prefix_bloom_multi_table_run_multiple_survivors() -> lsm_tree::Result<()> {
     // at write time). All 3 pass key-range and bloom → surviving.len() >= 2
     // → hits the `_ =>` branch that builds a new Run from survivors.
     let results: Vec<_> = tree
-        .create_prefix("ns:", 6, None)
+        .create_prefix("ns:", 6, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 6);
 
     // Narrow prefix: only 1 table survives → demoted to single-table path.
     let results: Vec<_> = tree
-        .create_prefix("ns:b:", 6, None)
+        .create_prefix("ns:b:", 6, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
 
@@ -733,7 +733,7 @@ fn prefix_bloom_overlapping_l0_tables() -> lsm_tree::Result<()> {
 
     // Both flushes contain "user:" keys — prefix scan must find all of them
     let results: Vec<_> = tree
-        .create_prefix("user:", 4, None)
+        .create_prefix("user:", 4, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0.as_ref(), b"user:1:name");
@@ -741,7 +741,7 @@ fn prefix_bloom_overlapping_l0_tables() -> lsm_tree::Result<()> {
 
     // Both flushes contain "order:" keys
     let results: Vec<_> = tree
-        .create_prefix("order:", 4, None)
+        .create_prefix("order:", 4, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
 
@@ -794,7 +794,7 @@ fn prefix_bloom_skip_metrics() -> lsm_tree::Result<()> {
         for c in b'b'..=b'y' {
             let prefix = format!("{}:", c as char);
             let results: Vec<_> = tree
-                .create_prefix(&prefix, seqno, None)
+                .create_prefix(&prefix, seqno, None)?
                 .collect::<Result<Vec<_>, _>>()?;
             assert_eq!(results.len(), 0, "prefix '{prefix}' should match no keys");
         }
@@ -853,7 +853,7 @@ fn prefix_bloom_skip_metrics_zero_without_extractor() -> lsm_tree::Result<()> {
     tree.flush_active_memtable(0)?;
 
     let results: Vec<_> = tree
-        .create_prefix("user:", 2, None)
+        .create_prefix("user:", 2, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 2);
 
@@ -892,13 +892,13 @@ fn prefix_scan_l0_wide_non_matching_table_does_not_affect_results() -> lsm_tree:
     tree.flush_active_memtable(0)?;
 
     let results: Vec<_> = tree
-        .create_prefix("mmm:", 15, None)
+        .create_prefix("mmm:", 15, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 5);
 
     // Verify existing prefixes still work
     let results: Vec<_> = tree
-        .create_prefix("aaa:", 15, None)
+        .create_prefix("aaa:", 15, None)?
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(results.len(), 5);
 

@@ -94,6 +94,11 @@ impl Version {
             }
         }
 
+        // The retention floor only ever rises, and only on a GC compaction /
+        // clear / table drop, so it is carried exactly when it changed.
+        let retention_floor =
+            (self.retention_floor() != prior.retention_floor()).then(|| self.retention_floor());
+
         Ok(VersionEdit {
             new_version_id: self.id(),
             changed_levels,
@@ -102,6 +107,7 @@ impl Version {
             gc_stats,
             restrictions,
             blob_restrictions,
+            retention_floor,
         })
     }
 }

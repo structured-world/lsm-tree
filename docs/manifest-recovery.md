@@ -312,6 +312,34 @@ claiming success would describe a tree that cannot open. Quarantine is not
 a fallback here — it preserves damaged *data*, and this file holds none. A
 retry after the filesystem is fixed completes the drop.
 
+## Retention floor
+
+A live tree refuses a snapshot read below the oldest version its history
+retains (`Error::SnapshotBelowRetention`), and the manifest records that
+boundary as the version's *retention floor* so the refusal holds across a
+reopen: a GC compaction raises it to its watermark minus one (capped at the
+compaction's own install seqno), a `clear`, a table drop or a compaction
+whose filter transformed rows to the install's own seqno. The lost manifest
+was the floor's only durable copy, and the tables cannot stand in for it: a
+GC compaction zeroes the seqnos of the rows it settles, so a table's highest
+seqno reads as `0` precisely on the trees where history was collected.
+
+Nor may the rebuilt manifest guess the floor high (say, at the highest
+persisted seqno): the external-WAL reconciliation that follows a repair
+([external-wal.md](external-wal.md), section 4) restores intermediate
+snapshots and reads them back, so a guessed floor would refuse history the
+caller has just made whole. The floor is therefore **supplied by the caller**:
+`Config::repair_retention_floor(floor)` seeds the rebuilt manifest with it,
+and the reopened tree refuses every snapshot at or below `floor` exactly as it
+did before the manifest was lost. Record `AbstractTree::retention_floor()` in
+the deployment's own durable state (it is the maximum over every operation
+that raised the boundary: GC compactions, `clear`, table drops, filtering
+compactions) and pass the last recorded value; deriving it from GC watermarks
+alone would miss the drops. Left at the default `0`, a repaired tree serves
+every snapshot, which is correct only if history was never collected. No
+resurrection question arises: the floor discards nothing, it only declines to
+answer what cannot be answered honestly.
+
 ## Blob frame validation and salvage
 
 Before a blob file's digest is recorded, its live frame range is walked frame

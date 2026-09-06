@@ -243,6 +243,190 @@ fn super_version_gc_below_watermark_keep() -> crate::Result<()> {
     Ok(())
 }
 
+/// Three versions at seqnos 0, 2, 8 (the history is never pruned here, so
+/// the front keeps the seed version at seqno 0).
+fn three_versions() -> SuperVersions {
+    test_super_versions(vec![
+        SuperVersion {
+            active_memtable: Arc::new(new_memtable(0)),
+            sealed_memtables: Arc::default(),
+            version: Version::new(1, crate::TreeType::Standard),
+            seqno: 0,
+        },
+        SuperVersion {
+            active_memtable: Arc::new(new_memtable(0)),
+            sealed_memtables: Arc::default(),
+            version: Version::new(2, crate::TreeType::Standard),
+            seqno: 2,
+        },
+        SuperVersion {
+            active_memtable: Arc::new(new_memtable(0)),
+            sealed_memtables: Arc::default(),
+            version: Version::new(3, crate::TreeType::Standard),
+            seqno: 8,
+        },
+    ])
+}
+
+/// The snapshot resolves to the NEWEST version installed strictly below it:
+/// a snapshot equal to a version's seqno does not see that version.
+#[test]
+fn get_version_for_snapshot_picks_newest_version_below_seqno() -> crate::Result<()> {
+    let history = three_versions();
+
+    assert_eq!(history.get_version_for_snapshot(1)?.version.id(), 1);
+    assert_eq!(history.get_version_for_snapshot(2)?.version.id(), 1);
+    assert_eq!(history.get_version_for_snapshot(3)?.version.id(), 2);
+    assert_eq!(history.get_version_for_snapshot(8)?.version.id(), 2);
+    assert_eq!(history.get_version_for_snapshot(9)?.version.id(), 3);
+    assert_eq!(
+        history.get_version_for_snapshot(SeqNo::MAX)?.version.id(),
+        3
+    );
+    Ok(())
+}
+
+/// Snapshot 0 is served from the oldest retained version, before and after
+/// the front has moved: nothing is visible at 0 from any version, so the
+/// read must not be refused.
+#[test]
+fn get_version_for_snapshot_at_zero_serves_oldest_retained() -> crate::Result<()> {
+    let fs = MemFs::new();
+    let dir = Path::new("/snapshot/zero");
+    let mut history = three_versions();
+    seed_version_files(dir, &history, &fs)?;
+
+    assert_eq!(history.get_version_for_snapshot(0)?.version.id(), 1);
+
+    // Watermark 5 keeps the newest version below it (seqno 2) and evicts the
+    // seed; snapshot 0 now resolves to the new front instead of failing.
+    history.maintenance(dir, 5, &fs)?;
+    assert_eq!(history.oldest_retained_seqno(), 2);
+    assert_eq!(history.get_version_for_snapshot(0)?.version.id(), 2);
+    Ok(())
+}
+
+/// After pruning, a snapshot at or below the front's seqno has no version
+/// to be served from: the error names both the request and the boundary,
+/// and the first servable snapshot is exactly `oldest_retained + 1`.
+#[test]
+fn get_version_for_snapshot_below_retention_returns_error() -> crate::Result<()> {
+    let fs = MemFs::new();
+    let dir = Path::new("/snapshot/below");
+    let mut history = three_versions();
+    seed_version_files(dir, &history, &fs)?;
+
+    history.maintenance(dir, 5, &fs)?;
+    let oldest = history.oldest_retained_seqno();
+    assert_eq!(oldest, 2);
+
+    for requested in [1, oldest] {
+        match history.get_version_for_snapshot(requested) {
+            Err(crate::Error::SnapshotBelowRetention {
+                requested: got,
+                oldest_retained,
+            }) => {
+                assert_eq!(got, requested);
+                assert_eq!(oldest_retained, oldest);
+            }
+            Err(other) => panic!("snapshot {requested}: wrong error {other:?}"),
+            Ok(version) => panic!(
+                "snapshot {requested} must be below retention, got version #{}",
+                version.version.id()
+            ),
+        }
+    }
+
+    assert_eq!(
+        history.get_version_for_snapshot(oldest + 1)?.version.id(),
+        2
+    );
+    Ok(())
+}
+
+/// The boundary is the front's seqno: `0` while the seed version survives,
+/// the retained front's seqno after each prune, the back's seqno once the
+/// history is drained to the latest.
+#[test]
+fn oldest_retained_seqno_tracks_the_history_front() -> crate::Result<()> {
+    let fs = MemFs::new();
+    let dir = Path::new("/snapshot/front");
+    let mut history = three_versions();
+    seed_version_files(dir, &history, &fs)?;
+
+    assert_eq!(history.oldest_retained_seqno(), 0);
+
+    // Watermark 1 keeps everything: no version below it has a successor
+    // also below it.
+    history.maintenance(dir, 1, &fs)?;
+    assert_eq!(history.oldest_retained_seqno(), 0);
+
+    history.maintenance(dir, 5, &fs)?;
+    assert_eq!(history.oldest_retained_seqno(), 2);
+
+    history.drain_obsolete_to_latest();
+    assert_eq!(history.oldest_retained_seqno(), 8);
+    assert!(matches!(
+        history.get_version_for_snapshot(8),
+        Err(crate::Error::SnapshotBelowRetention {
+            requested: 8,
+            oldest_retained: 8
+        })
+    ));
+    assert_eq!(history.get_version_for_snapshot(9)?.version.id(), 3);
+    Ok(())
+}
+
+/// The boundary is the FRONT's seqno even when a later version carries a
+/// smaller one (a reopen at a persisted floor followed by an install from a
+/// reset counter): a read below the front must not be served from that
+/// "newer" version just because its seqno happens to sit below the request.
+#[test]
+fn get_version_for_snapshot_checks_the_front_before_searching() -> crate::Result<()> {
+    let history = test_super_versions(vec![
+        SuperVersion {
+            active_memtable: Arc::new(new_memtable(0)),
+            sealed_memtables: Arc::default(),
+            version: Version::new(1, crate::TreeType::Standard),
+            seqno: 10,
+        },
+        SuperVersion {
+            active_memtable: Arc::new(new_memtable(0)),
+            sealed_memtables: Arc::default(),
+            version: Version::new(2, crate::TreeType::Standard),
+            seqno: 3,
+        },
+    ]);
+
+    assert_eq!(history.oldest_retained_seqno(), 10);
+    assert!(matches!(
+        history.get_version_for_snapshot(5),
+        Err(crate::Error::SnapshotBelowRetention {
+            requested: 5,
+            oldest_retained: 10
+        })
+    ));
+    assert_eq!(history.get_version_for_snapshot(11)?.version.id(), 2);
+    Ok(())
+}
+
+/// A history seeded from a recovered version starts at that version's
+/// retention floor, so the reopened boundary is the persisted one.
+#[test]
+fn new_history_seeds_the_front_at_the_retention_floor() {
+    let version = Version::new(7, crate::TreeType::Standard).with_retention_floor(42);
+    let history = SuperVersions::new(
+        version,
+        &default_comparator(),
+        SyncMode::Normal,
+        7,
+        1024 * 1024,
+    );
+    assert_eq!(history.oldest_retained_seqno(), 42);
+    assert!(history.get_version_for_snapshot(42).is_err());
+    assert!(history.get_version_for_snapshot(43).is_ok());
+}
+
 #[test]
 fn super_version_gc_below_watermark_shadowed() -> crate::Result<()> {
     let fs = MemFs::new();

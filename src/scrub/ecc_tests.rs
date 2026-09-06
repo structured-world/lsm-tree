@@ -1521,6 +1521,7 @@ fn heal_scans_the_current_view_when_the_captured_one_went_stale() -> crate::Resu
         &*tree.config.fs,
         tree.runtime_config.load_full(),
         tree.config.encryption.clone(),
+        crate::version::RetentionEffect::Keep,
     )?;
 
     // Rot one payload byte (RS-correctable) in the LAST data block — well above
