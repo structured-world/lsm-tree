@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788712228088,
+  "lastUpdate": 1788778580713,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -21606,6 +21606,84 @@ window.BENCHMARK_DATA = {
             "value": 761905.118911732,
             "unit": "ops/sec",
             "extra": "P50: 1.1us | P99: 5.4us | P99.9: 8.3us\nthreads: 1 | elapsed: 0.26s | num: 200000 | iterations: 3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "79a69250bacedf7cccb09c25732fbef802ee188e",
+          "message": "perf(tree): keep the point-read snapshot lookup inlinable (#620)\n\n## Summary\n\n`Tree::snapshot_for_read` gained a `Result` in #617 and kept the\nlocked-history walk in the same body, which made it large enough to stay\na call. Every point read then moved a `Result<SnapshotRef>` (an\n`arc-swap` guard or a whole `SuperVersion`, plus the error payload)\nacross the call boundary, costing about 1%.\n\nSplit it so the common path stays inlinable:\n\n- `snapshot_for_read` keeps only the lock-free mirror load plus one\ncompare, marked `#[inline]`.\n- The locked-history walk moves into a sibling\n`historical_snapshot_for_read`, marked `#[inline(never)]`. Not\n`#[cold]`: a historical read (`AS OF` queries, a lagging consumer) is a\nnormal operation, just not the common one.\n\nNo behaviour change: the retention contract from #617, its error and its\ntests are untouched.\n\n## Measurements\n\n`benches/batch_ops.rs`, group `get_pinned`, seven interleaved A/B\nrounds, minimum per side. Both sides built from the pinned\n`[profile.bench]` (`lto = \"thin\"`, `codegen-units = 1`) on an M1 Max.\nThe machine was noisy, so single rounds are not usable (one reported 980\nns); the per-side minimum across rounds is the noise-resistant\nstatistic.\n\n| arm | v5.8.5 | after #617 | this PR |\n|---|---|---|---|\n| `get_pinned/disk_hit` | 536.45 ns | 542.08 ns (+1.05%) | 536.67 ns\n(+0.04%) |\n| `get_pinned/get_regular` | 517.79 ns | 520.30 ns (+0.48%) | 518.52 ns\n(+0.14%) |\n\nChecked and found no signal, as expected (these paths pay the retention\ncheck once per scan or per install, not per item): `blob_scan_prefetch`\nwith prefetch on and off (three rounds, spread of about 1% in both\ndirections), `flush` at zstd1 and zstd22 for 1k and 40k rows, both\nreal-fs and memfs (one round).\n\n`benches/compaction.rs` was deliberately not run: it drives\n`major_compact(_, 0)`, and at watermark 0 the retention-floor branch\nreturns immediately, so the bench cannot observe the change.\n\n## Testing\n\n`cargo nextest run --workspace --all-features` 3288/3288, `cargo test\n--doc --all-features` 80/80, `cargo clippy --workspace --all-targets`\n(default and `--all-features`) with `-D warnings`, `cargo doc --no-deps`\n(default and `--all-features`) 0 warnings, no-std check 0 errors, `cargo\nfmt --check` clean.\n\nCloses #619\n\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai\n-->\n\n## Summary by CodeRabbit\n\n* **Performance**\n* Improved the efficiency of reading recent snapshots while preserving\nexisting behavior for historical snapshots.\n* **Bug Fixes**\n  * Maintained existing snapshot resolution and error-handling behavior.\n\n<!-- end of auto-generated comment: release notes by coderabbit.ai -->",
+          "timestamp": "2026-09-07T13:54:06+03:00",
+          "tree_id": "941672d5c9414d79a1337fd20ea71e63468f2dcb",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/79a69250bacedf7cccb09c25732fbef802ee188e"
+        },
+        "date": 1788778548248,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 3740029.29228342,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.4us | P99.9: 3.4us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1350209.3661647362,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 2.0us | P99.9: 4.1us\nthreads: 1 | elapsed: 0.15s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readrandom",
+            "value": 929983.0674727964,
+            "unit": "ops/sec",
+            "extra": "P50: 0.9us | P99: 4.0us | P99.9: 6.4us\nthreads: 1 | elapsed: 0.22s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readseq",
+            "value": 3921365.6391120143,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 3.0us | P99.9: 5.4us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 505714.9736600379,
+            "unit": "ops/sec",
+            "extra": "P50: 1.7us | P99: 4.9us | P99.9: 7.8us\nthreads: 1 | elapsed: 0.40s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 249420.7881866014,
+            "unit": "ops/sec",
+            "extra": "P50: 3.6us | P99: 7.7us | P99.9: 10.1us\nthreads: 1 | elapsed: 0.80s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "overwrite",
+            "value": 1390631.9107887377,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 2.0us | P99.9: 4.0us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 1202843.9392564052,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 1.4us | P99.9: 2.2us\nthreads: 1 | elapsed: 0.17s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 768996.0272780885,
+            "unit": "ops/sec",
+            "extra": "P50: 1.1us | P99: 4.2us | P99.9: 6.6us\nthreads: 1 | elapsed: 0.26s | num: 200000 | iterations: 3"
           }
         ]
       }
