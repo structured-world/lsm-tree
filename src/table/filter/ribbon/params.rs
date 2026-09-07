@@ -40,6 +40,12 @@ pub struct Params {
 impl Params {
     pub const MAX_W: usize = 128;
 
+    /// Fingerprint width ceiling. One solution row is one `u64`, which is
+    /// what the BuRR layer above builds (`BurrParams::r` is a `u8` validated
+    /// to `1..=64`) and what the wire decoder accepts, so the solver stores a
+    /// single word per row and never a multi-word stride.
+    pub const MAX_R: usize = 64;
+
     pub fn new(m: usize, w: usize, r: usize, mode: Mode) -> Result<Self, ParamError> {
         let params = Self {
             m,
@@ -134,6 +140,12 @@ impl Params {
         if self.r == 0 {
             return Err(ParamError::ZeroFingerprintBits);
         }
+        if self.r > Self::MAX_R {
+            return Err(ParamError::FingerprintTooWide {
+                r: self.r,
+                max: Self::MAX_R,
+            });
+        }
         if self.retry_limit == 0 {
             return Err(ParamError::ZeroRetryLimit);
         }
@@ -150,16 +162,13 @@ impl Params {
         self.m - self.w + 1
     }
 
-    pub fn fingerprint_words(&self) -> usize {
-        self.r.div_ceil(64)
-    }
-
-    pub fn fingerprint_last_word_mask(&self) -> u64 {
-        let rem = self.r % 64;
-        if rem == 0 {
+    /// Mask of the low `r` bits: one row of the solution matrix is exactly
+    /// one `u64`, since [`Self::MAX_R`] caps the fingerprint at a word.
+    pub fn fingerprint_mask(&self) -> u64 {
+        if self.r == 64 {
             u64::MAX
         } else {
-            (1u64 << rem) - 1
+            (1u64 << self.r) - 1
         }
     }
 }

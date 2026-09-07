@@ -2,11 +2,12 @@ use super::super::super::hashing::StandardEquation;
 use super::*;
 
 fn eq_at(start: usize) -> StandardEquation {
-    // coeff_lo / coeff_hi are irrelevant for threshold computation.
+    // coeff / fingerprint are irrelevant for threshold computation.
     StandardEquation {
         start,
         coeff_lo: 1,
         coeff_hi: 0,
+        fingerprint: 0,
     }
 }
 

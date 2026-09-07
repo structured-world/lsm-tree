@@ -10,9 +10,9 @@ const RIBBON_FILTER_FORMAT_VERSION: u8 = 1;
 
 /// On-the-wire / in-memory snapshot of a built `RibbonFilter`.
 ///
-/// `z` is the band-solution matrix as a flat `Vec<u64>`. Length is
-/// `params.m * params.fingerprint_words()` and the on-disk byte length
-/// is `z.len() * 8`. We use a plain `Vec<u64>` rather than `BitVec<u64>`
+/// `z` is the band-solution matrix as a flat `Vec<u64>`, one word per row,
+/// so its length is `params.m` and the on-disk byte length is `z.len() * 8`.
+/// We use a plain `Vec<u64>` rather than `BitVec<u64>`
 /// because `bitvec`'s `u64: BitStore` impl is gated on
 /// `target_has_atomic = "64"` — on 32-bit targets (i686, riscv32, etc.)
 /// the bound fails and the crate doesn't build. Ribbon's algorithm
@@ -43,10 +43,9 @@ impl RibbonFilter {
 
     /// Borrowed access to the raw solution-matrix words.
     ///
-    /// Length is `m * stride_words`. Each chunk of `stride_words` u64s
-    /// is one row's fingerprint bits in LSB-first order. Used by the
-    /// BuRR wire-format serializer to write the matrix as packed
-    /// little-endian bytes.
+    /// Length is `m`: one u64 per row, holding that row's fingerprint bits
+    /// in the low `r` positions. Used by the BuRR wire-format serializer to
+    /// write the matrix as packed little-endian bytes.
     pub(crate) fn z_raw_words(&self) -> &[u64] {
         &self.z
     }
@@ -73,17 +72,12 @@ impl RibbonFilter {
             .validate()
             .map_err(FilterReprError::InvalidParams)?;
 
-        let stride_words = repr.params.fingerprint_words();
-        let expected_words = repr
-            .params
-            .m
-            .checked_mul(stride_words)
-            .ok_or(FilterReprError::StorageLengthOverflow)?;
-
-        if repr.z.len() != expected_words {
+        // One word per row: `Params::MAX_R` caps the fingerprint at 64 bits,
+        // and `validate` above has already rejected anything wider.
+        if repr.z.len() != repr.params.m {
             return Err(FilterReprError::InvalidStorageWords {
                 found: repr.z.len(),
-                expected: expected_words,
+                expected: repr.params.m,
             });
         }
 

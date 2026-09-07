@@ -146,13 +146,11 @@ impl BurrFilter {
                   add a branch on the probe hot path and dominate per-iter cost."
     )]
     pub fn contains_hash(&self, hash: u64) -> bool {
-        // BurrParams::with_fp_rate / with_bpk both clamp r to 1..=64, so
-        // stride is always 1. Single u64 buffer for fingerprint, scalar
-        // u64 accumulator. The debug_assert pins the invariant — if the
-        // format ever grows to r > 64 the probe path must be updated
-        // at the same time.
+        // BurrParams::with_fp_rate / with_bpk both clamp r to 1..=64, so a
+        // solution row is one word and the fingerprint is a scalar. The
+        // debug_assert pins the invariant — if the format ever grows to
+        // r > 64 the probe path must be updated at the same time.
         debug_assert!(self.params.r <= 64, "BuRR params pin r <= 64");
-        let mut fingerprint_buf = [0_u64; 1];
         for layer in &self.layers {
             let layer_params = match Params::new(
                 layer.m,
@@ -166,10 +164,8 @@ impl BurrFilter {
                 Err(_) => return true,
             };
 
-            fingerprint_buf[0] = 0;
-            let equation =
-                standard_equation_from_hash(hash, layer.seed, &layer_params, &mut fingerprint_buf);
-            let fingerprint = fingerprint_buf[0];
+            let equation = standard_equation_from_hash(hash, layer.seed, &layer_params);
+            let fingerprint = equation.fingerprint;
 
             let z_words = layer.ribbon.z_raw_words();
             // Prefetch the [start, start+w) coefficient window before the
@@ -230,7 +226,6 @@ impl BurrFilter {
         } else {
             (1u64 << self.params.r) - 1
         };
-        let mut fingerprint_buf = [0_u64; 1];
         for layer in &self.layers {
             let layer_params = match Params::new(
                 layer.m,
@@ -243,9 +238,7 @@ impl BurrFilter {
                 Err(_) => return None,
             };
 
-            fingerprint_buf[0] = 0;
-            let equation =
-                standard_equation_from_hash(hash, layer.seed, &layer_params, &mut fingerprint_buf);
+            let equation = standard_equation_from_hash(hash, layer.seed, &layer_params);
 
             // The first layer that does NOT bump this key is the layer that
             // holds it (the builder kept it at exactly that layer). Same

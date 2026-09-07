@@ -207,16 +207,12 @@ impl BurrBuilder {
                 .with_seed(layer_seed);
 
             // Compute equations directly from hashes — skip hash_one.
-            let stride = layer_r.div_ceil(64);
-            let mut fp_throwaway = vec![0_u64; stride];
             let mut equations: Vec<StandardEquation> = Vec::with_capacity(remaining.len());
             for hash in &remaining {
-                fp_throwaway.fill(0);
                 let eq = super::super::hashing::standard_equation_from_hash(
                     *hash,
                     layer_seed,
                     &equation_params,
-                    &mut fp_throwaway,
                 );
                 equations.push(eq);
             }
@@ -357,18 +353,8 @@ fn build_layer_ribbon(
     partition: &mut LayerPartition,
 ) -> Result<RibbonFilter, BurrBuildError> {
     let (layer_seed, m) = (equation_params.seed, equation_params.m);
-    // One scratch buffer for the whole helper, refilled per key, mirroring the
-    // layer loop above: the repartition below asks for an equation per kept
-    // key, and allocating one there would be an allocation per key per pass.
-    let mut fingerprint = alloc::vec![0_u64; equation_params.r.div_ceil(64)];
-    let equation_of = |hash: u64, scratch: &mut [u64]| {
-        scratch.fill(0);
-        super::super::hashing::standard_equation_from_hash(
-            hash,
-            layer_seed,
-            equation_params,
-            scratch,
-        )
+    let equation_of = |hash: u64| {
+        super::super::hashing::standard_equation_from_hash(hash, layer_seed, equation_params)
     };
     loop {
         let ribbon_error = match &partition.kept_values {
@@ -404,7 +390,7 @@ fn build_layer_ribbon(
                 ribbon_error,
             });
         };
-        let equation = equation_of(unplaceable, &mut fingerprint);
+        let equation = equation_of(unplaceable);
         let block = equation.start / usize::from(b);
         #[expect(
             clippy::cast_possible_truncation,
@@ -422,7 +408,7 @@ fn build_layer_ribbon(
         *threshold = offset;
         let (kept, newly_bumped): (Vec<u64>, Vec<u64>) = core::mem::take(&mut partition.kept)
             .into_iter()
-            .partition(|hash| !is_bumped(&equation_of(*hash, &mut fingerprint), thresholds, b));
+            .partition(|hash| !is_bumped(&equation_of(*hash), thresholds, b));
         partition.kept = kept;
         partition.bumped.extend(newly_bumped);
     }
