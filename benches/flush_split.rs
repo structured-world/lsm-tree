@@ -28,6 +28,10 @@ use lsm_tree::config::{CompressionPolicy, FilterPolicy, LocatorPolicy};
 use lsm_tree::{AbstractTree, AnyTree, CompressionType, Config, SequenceNumberCounter};
 use std::time::{Duration, Instant};
 
+#[path = "util/percentiles.rs"]
+mod percentiles;
+use percentiles::report_percentiles;
+
 fn build_unflushed_tree(
     keys: u64,
     compression: CompressionType,
@@ -77,17 +81,24 @@ fn bench_split(c: &mut Criterion) {
         ("none_bare_1000", CompressionType::None, false, false),
     ] {
         group.bench_function(label, |b| {
+            // Each iteration is one whole flush, so the per-iteration durations
+            // are the per-flush latencies. Criterion reports only mean and CI;
+            // the tail is what an arm switching off a build step moves most.
+            let mut samples = Vec::new();
             b.iter_custom(|iters| {
                 let mut total = Duration::ZERO;
                 for _ in 0..iters {
                     let tree = build_unflushed_tree(1_000, compression, filters, locator);
                     let start = Instant::now();
                     tree.flush_active_memtable(0).expect("flush");
-                    total += start.elapsed();
+                    let elapsed = start.elapsed();
+                    samples.push(elapsed);
+                    total += elapsed;
                     std::hint::black_box(&tree);
                 }
                 total
             });
+            report_percentiles(label, samples);
         });
     }
 

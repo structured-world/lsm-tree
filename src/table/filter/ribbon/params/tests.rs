@@ -159,7 +159,7 @@ fn start_range_is_m_minus_w_plus_one() {
 }
 
 #[test]
-fn validate_rejects_a_fingerprint_wider_than_one_word() {
+fn validate_fingerprint_width_when_wider_than_one_word_rejects() {
     let err = Params::new(256, 64, 65, Mode::Standard).expect_err("r=65 should fail");
     assert_eq!(
         err,
@@ -171,13 +171,13 @@ fn validate_rejects_a_fingerprint_wider_than_one_word() {
 }
 
 #[test]
-fn fingerprint_mask_full_when_r_is_a_whole_word() {
+fn fingerprint_mask_when_r_is_a_whole_word_is_full() {
     let p = Params::new(128, 64, 64, Mode::Standard).unwrap();
     assert_eq!(p.fingerprint_mask(), u64::MAX);
 }
 
 #[test]
-fn fingerprint_mask_low_bits_when_r_is_narrower_than_a_word() {
+fn fingerprint_mask_when_r_is_narrower_than_a_word_has_low_bits() {
     let p = Params::new(128, 64, 5, Mode::Standard).unwrap();
     assert_eq!(p.fingerprint_mask(), 0b11111);
 }

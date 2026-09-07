@@ -159,11 +159,16 @@ fn burr_filter_construction(c: &mut Criterion) {
                 keys.push(hash64(&key));
             }
 
-            b.iter(|| {
-                let params = BurrParams::with_fp_rate(n, 0.01).expect("params");
-                let builder = BurrBuilder::new(params).expect("builder");
-                let filter: BurrFilter = builder.build_from_hashes(&keys).expect("build");
-                std::hint::black_box(filter.layer_count());
+            // Percentiles, like the probe benches: one iteration is one whole
+            // build, so the tail is the tail of a real flush or compaction
+            // stall, which the mean hides.
+            b.iter_custom(|iters| {
+                measure_with_percentiles(&label, iters, || {
+                    let params = BurrParams::with_fp_rate(n, 0.01).expect("params");
+                    let builder = BurrBuilder::new(params).expect("builder");
+                    let filter: BurrFilter = builder.build_from_hashes(&keys).expect("build");
+                    std::hint::black_box(filter.layer_count());
+                })
             });
         });
     }

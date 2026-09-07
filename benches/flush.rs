@@ -20,25 +20,9 @@ use lsm_tree::config::CompressionPolicy;
 use lsm_tree::{AbstractTree, AnyTree, CompressionType, Config, SequenceNumberCounter};
 use std::time::{Duration, Instant};
 
-/// Reports per-flush tail latency (P50/P95/P99) to stderr — Criterion's
-/// summary only surfaces mean/CI, and each iteration here is one whole flush.
-fn report_percentiles(label: &str, mut samples: Vec<Duration>) {
-    if samples.is_empty() {
-        return;
-    }
-    samples.sort_unstable();
-    let pick = |p: f64| {
-        let idx = (((samples.len() - 1) as f64) * p).round() as usize;
-        samples[idx.min(samples.len() - 1)]
-    };
-    eprintln!(
-        "  [{label}] n={} P50={:?} P95={:?} P99={:?}",
-        samples.len(),
-        pick(0.50),
-        pick(0.95),
-        pick(0.99),
-    );
-}
+#[path = "util/percentiles.rs"]
+mod percentiles;
+use percentiles::report_percentiles;
 
 /// Two working-set sizes: 1k isolates the flush's FIXED cost (file create,
 /// table recover-after-write, fsyncs, manifest edit append) that dominates the
