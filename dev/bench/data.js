@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788778580713,
+  "lastUpdate": 1788799467511,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -21682,6 +21682,84 @@ window.BENCHMARK_DATA = {
           {
             "name": "readwhilewriting",
             "value": 768996.0272780885,
+            "unit": "ops/sec",
+            "extra": "P50: 1.1us | P99: 4.2us | P99.9: 6.6us\nthreads: 1 | elapsed: 0.26s | num: 200000 | iterations: 3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3c7b5024a05edd6dfc6ec6503faf76cb394d3160",
+          "message": "perf(filter): solve the ribbon in registers, one word per row (#622)\n\n## Summary\n\nBuilding a BuRR filter cost about 180 ns per key, and the rate barely\nmoved with the key count (182 µs at 1000 keys, 17.4 ms at 100k, 216 ms\nat 1M), so this was a fixed tax on every flush and every compaction\nrather than a small-input artifact.\n\nThe solver was written for a fingerprint that can span several 64-bit\nwords and paid for that width on every key, even though the width is\nunreachable: `BurrParams::new` rejects any `r` outside `1..=64` and the\nwire decoder validates the same range, so a solution row is one `u64`\nand always has been. The generality cost a heap allocation per key (the\nrow right-hand side was a `Vec` cloned from the fingerprint scratch), a\nsecond one per occupied row in back-substitution (a `Vec` collecting the\nset bits above the diagonal), and slice copies plus a one-element\n`xor_words` on every band step and every back-substitution bit, which\npushed the running row value through memory instead of a register.\n\nThis makes the solver's types match the contract already enforced above\nit:\n\n- `Params::MAX_R = 64`, enforced by `validate` with a new\n`ParamError::FingerprintTooWide`.\n- `fingerprint_words` and `fingerprint_last_word_mask` collapse into one\n`fingerprint_mask`.\n- `StandardEquation` carries the fingerprint by value, so the probe path\ndrops its out-parameter buffer too.\n- The band walk and back-substitution accumulate in a `u64` and store\nonce per row. Back-substitution is 62% of a build, and its inner loop\nused to XOR straight into the solution buffer, making every set bit a\nstore the next bit had to reload.\n- The bits above the diagonal are walked in place instead of collected.\n\nThe on-disk layout is untouched: `z` was already one word per row.\n\n## Compatibility of the narrowed range\n\n`Params::validate` now refuses `r > 64`, which it used to accept.\nNothing in this crate can produce such a filter: `BurrParams::new`\nrejects that range and the BuRR wire decoder validates it again, so no\npersisted artifact carries one. The only construct that could is a\n`RibbonFilterRepr` captured through the `ribbon-serde` feature, which\nthis crate does not consume.\n\nSuch a repr is now refused twice and by name: `validate` reports\n`ParamError::FingerprintTooWide` naming the offending `r`, and its row\ncount no longer matches `m`. It cannot be silently misread as a narrow\none, which is the property that matters.\n\n`RIBBON_FILTER_FORMAT_VERSION` is deliberately not bumped. The version\nguards the encoding, and raising it would reject every `r <= 64` repr,\nthe only kind any supported path produces, in order to give a different\nerror on a width nothing can build. The reasoning is recorded at\n`Params::MAX_R` so it does not have to be rediscovered.\n\n## Measurements\n\nM1 Max, interleaved A/B rounds, verdict by the per-side minimum. Both\nsides built from the pinned `[profile.bench]` (`lto = \"thin\"`,\n`codegen-units = 1`) and from the same `Cargo.lock`, so\n`structured-zstd` is 0.0.49 on both sides of every arm that runs the\ncodec.\n\n| arm | before | after |\n|---|---|---|\n| `burr filter build, 1000 keys` | 182.55 µs | 91.62 µs |\n| `flush_zstd1/1000_memfs` | 887.00 µs | 715.70 µs |\n| `flush_zstd1/40000_memfs` | 25.739 ms | 19.567 ms |\n| `flush_zstd1/1000` (real fs) | 1.3831 ms | 1.2166 ms |\n| `flush_zstd22/1000_memfs` | 9.0293 ms | 8.8692 ms |\n| `overwrite/ours/1000` | 1.2159 ms | 1.1415 ms |\n| `overwrite/rocksdb/1000` (control) | 1.1907 ms | 1.1934 ms |\n\nThe RocksDB arm is the control and does not move, which is what makes\nthe `ours` delta readable. On that head-to-head this machine went from\n1.02x behind RocksDB to 0.96x ahead.\n\nThe zstd level 22 arms improve by about 2%, as expected: there the codec\ndominates and the filter is a fixed share.\n\n### Correctness of the output\n\nThe built filter is byte-identical, not merely equivalent: for the same\n1000-key input the wire bytes are `len=10314 hash=e84464ad353139a4`\nbefore and after.\n\n### Point reads\n\n`get_pinned/disk_hit` reports 535.7 ns before against 549.1 ns after,\ntaken as the minimum over five interleaved rounds. That is not a cost of\nthis change. A build whose only difference from the base is inside\n`build_once_core`, a function the read path never calls, shows the same\nshift, so it is code layout. The machine also would not resolve the\nquestion directly: the filter probe microbench varied by 19% between\nruns of the same binary that day.\n\n## What the flush is made of\n\n`benches/flush_split.rs` is added because the 1000-row flush was a\nsingle number with no way to tell where it went. It runs the same flush\non `MemFs` four times, switching off one more piece each time, so the\ndifferences between arms name the parts. Before this change:\n\n| part | time |\n|---|---|\n| block codec | 174 µs |\n| membership filter build | 187 µs |\n| block-locator ribbon build | 213 µs |\n| block encode, index, memtable rotation, manifest edit | 290 µs |\n\n`benches/bloom.rs` gains a 1000-key construction arm next to the\nexisting 100k and 1M ones, since that is the flush-sized filter.\n\nBoth benches report P50/P95/P99 per operation, since one iteration is\none whole flush or one whole build and the mean hides the tail. The\nflush benches share one reporting helper from `benches/util/`, which is\na subdirectory because a file directly under `benches/` would be\nauto-discovered as a bench target of its own.\n\n## Testing\n\n`cargo nextest run --workspace --all-features` 3288/3288, `cargo test\n--doc --all-features` 80/80, `cargo clippy --workspace --all-targets`\n(default and `--all-features`) with `-D warnings`, `cargo doc --no-deps`\n0 warnings, no-std check 0 errors, `cargo fmt --check` clean.\n\nCloses #621",
+          "timestamp": "2026-09-07T19:42:07+03:00",
+          "tree_id": "4427fb488e65d0c3737d1dbb1384e92749c36da9",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/3c7b5024a05edd6dfc6ec6503faf76cb394d3160"
+        },
+        "date": 1788799432401,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "fillseq",
+            "value": 3675687.6802729536,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.4us | P99.9: 3.4us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1280229.400721673,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.1us | P99.9: 4.2us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readrandom",
+            "value": 940947.3443748957,
+            "unit": "ops/sec",
+            "extra": "P50: 0.9us | P99: 3.9us | P99.9: 6.4us\nthreads: 1 | elapsed: 0.21s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readseq",
+            "value": 3888949.1892065946,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 2.9us | P99.9: 5.4us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 508663.8280969983,
+            "unit": "ops/sec",
+            "extra": "P50: 1.7us | P99: 4.9us | P99.9: 7.8us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 248079.67846928723,
+            "unit": "ops/sec",
+            "extra": "P50: 3.7us | P99: 7.8us | P99.9: 10.0us\nthreads: 1 | elapsed: 0.81s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "overwrite",
+            "value": 1323992.942667458,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 2.0us | P99.9: 4.1us\nthreads: 1 | elapsed: 0.15s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 1266575.427217,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 1.4us | P99.9: 2.2us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 770666.9515565498,
             "unit": "ops/sec",
             "extra": "P50: 1.1us | P99: 4.2us | P99.9: 6.6us\nthreads: 1 | elapsed: 0.26s | num: 200000 | iterations: 3"
           }
