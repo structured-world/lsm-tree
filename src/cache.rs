@@ -133,10 +133,16 @@ pub struct Cache {
     // NOTE: rustc_hash performed best: https://fjall-rs.github.io/post/fjall-2-1
     /// In-tree sharded S3-FIFO cache (byte-weighted).
     data: ShardedCache<CacheKey, Item, BlockWeighter, rustc_hash::FxBuildHasher>,
-    /// Opt-in: when false, the row cache (decoded point-read results) is off, so
+    /// When false, the row cache (decoded point-read results) is off, so
     /// `get_row` always misses and `insert_row` is a no-op. Blocks / blobs are
-    /// cached regardless. Off by default to avoid spending the shared capacity on
-    /// rows for workloads that do not benefit (e.g. uniform / scan-heavy).
+    /// cached regardless.
+    ///
+    /// On by default. Rows share the block cache's byte capacity, so the worry
+    /// was that a workload without key reuse would spend capacity on rows at the
+    /// blocks' expense. Measurement says it does not: scan-heavy and
+    /// larger-than-cache arms are unchanged or better, while a repeat point read
+    /// skips the index walk and the data-block decode outright. Turn it off for
+    /// a workload measured to be one of the exceptions.
     row_cache_enabled: bool,
     /// When true (default), index / filter / range-tombstone blocks are admitted
     /// at [`Priority::High`] so heavy data-block churn (working set >> cache)
@@ -167,14 +173,14 @@ impl Cache {
                 BlockWeighter,
                 rustc_hash::FxBuildHasher,
             ),
-            row_cache_enabled: false,
+            row_cache_enabled: true,
             metadata_priority: true,
         }
     }
 
     /// Enables or disables the row cache (decoded point-read results), returning
-    /// the cache for builder-style configuration. Off by default; rows share the
-    /// block cache's byte capacity when enabled.
+    /// the cache for builder-style configuration. On by default; rows share the
+    /// block cache's byte capacity.
     #[must_use]
     pub fn with_row_cache(mut self, enabled: bool) -> Self {
         self.row_cache_enabled = enabled;
