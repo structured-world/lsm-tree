@@ -1,0 +1,128 @@
+use crate::config::BenchConfig;
+use crate::db::{fill_sequential_key, make_value};
+use crate::reporter::Reporter;
+use crate::workloads::Workload;
+use lsm_tree::config::CompressionPolicy;
+use lsm_tree::{AbstractTree, AnyTree, CompressionType, Config, SequenceNumberCounter};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+/// A whole write / rewrite / delete / compact / read cycle at maximum
+/// compression, timed end to end.
+///
+/// The other workloads each isolate one operation against a tree that was
+/// prepared for it. This one is deliberately the opposite: it puts a tree
+/// through the sequence a real deployment actually walks, where the interesting
+/// costs are the ones that only appear when the stages meet. A compaction has
+/// to decode blocks that a flush wrote and re-encode them; a read afterwards
+/// goes to files no flush produced. A change that is neutral on each stage
+/// alone can still move this number.
+///
+/// zstd level 22 is pinned here rather than taken from `--compression`, so the
+/// series stays comparable across dashboard runs and always exercises the
+/// codec-heavy end. That is also where the merge pays most: the blocks it
+/// rewrites are re-compressed at that level, not merely copied.
+pub struct Mixed;
+
+/// Level 22 is the codec-bound end of the spectrum, the same one the flush and
+/// compaction benches use for their heavy arm.
+const LEVEL: i32 = 22;
+
+impl Workload for Mixed {
+    fn run(
+        &self,
+        _tree: &AnyTree,
+        config: &BenchConfig,
+        seqno: &AtomicU64,
+        reporter: &mut Reporter,
+    ) -> lsm_tree::Result<()> {
+        // The harness hands in a tree built from --compression, which would
+        // make this series mean a different thing on every invocation. The
+        // cycle needs its own tree at a pinned level, so it builds one.
+        let dir = tempfile::tempdir()?;
+        let tree = Config::new(
+            dir.path(),
+            SequenceNumberCounter::default(),
+            SequenceNumberCounter::default(),
+        )
+        .data_block_compression_policy(CompressionPolicy::all(
+            CompressionType::zstd(LEVEL).expect("level 22 is a valid zstd level"),
+        ))
+        .open()?;
+
+        let mut key = vec![0u8; config.key_size];
+        let value = make_value(config.value_size);
+        let n = config.num;
+
+        // The tree is opened outside the timer: the cycle is what is being
+        // measured, not the cost of creating an empty directory. Everything
+        // from the first insert to the last read is inside it, which is what
+        // makes the reported ops/sec cover the compaction too.
+        reporter.start();
+
+        // Stage 1: every key, then flush. One SST.
+        for idx in 0..n {
+            fill_sequential_key(&mut key, idx);
+            let seq = seqno.fetch_add(1, Ordering::Relaxed);
+            let t = Instant::now();
+            tree.insert(&key[..], &value[..], seq);
+            reporter.record_duration(t.elapsed());
+        }
+        tree.flush_active_memtable(0)?;
+
+        // Stage 2: rewrite every third key and delete every fifth, then flush.
+        // The second SST now disagrees with the first about those keys, which
+        // is what gives the merge in stage 4 real version resolution to do.
+        for idx in (0..n).step_by(3) {
+            fill_sequential_key(&mut key, idx);
+            let seq = seqno.fetch_add(1, Ordering::Relaxed);
+            let t = Instant::now();
+            tree.insert(&key[..], &value[..], seq);
+            reporter.record_duration(t.elapsed());
+        }
+        for idx in (0..n).step_by(5) {
+            fill_sequential_key(&mut key, idx);
+            let seq = seqno.fetch_add(1, Ordering::Relaxed);
+            let t = Instant::now();
+            tree.remove(&key[..], seq);
+            reporter.record_duration(t.elapsed());
+        }
+        tree.flush_active_memtable(0)?;
+
+        // Stage 3: a third SST, overlapping both.
+        for idx in (0..n).step_by(7) {
+            fill_sequential_key(&mut key, idx);
+            let seq = seqno.fetch_add(1, Ordering::Relaxed);
+            let t = Instant::now();
+            tree.insert(&key[..], &value[..], seq);
+            reporter.record_duration(t.elapsed());
+        }
+        tree.flush_active_memtable(0)?;
+
+        // Stage 4: the merge. Timed as one operation because that is what it
+        // is from a deployment's point of view, a single stall whose cost the
+        // per-key stages cannot show.
+        let t = Instant::now();
+        tree.major_compact(u64::MAX, 0)?;
+        reporter.record_duration(t.elapsed());
+
+        // Stage 5: read every key back off the compacted files. Deleted keys
+        // are read too: resolving a tombstone is work, and skipping those reads
+        // would quietly drop a fifth of the keyspace from the measurement.
+        for idx in 0..n {
+            fill_sequential_key(&mut key, idx);
+            let t = Instant::now();
+            let got = tree.get(&key[..], lsm_tree::MAX_SEQNO)?;
+            reporter.record_duration(t.elapsed());
+            // Cheap shape check so a build that silently stopped resolving
+            // versions cannot post a fast number. Stage 2 deleted every fifth
+            // key, but stage 3 ran afterwards and re-inserted every seventh, so
+            // a key divisible by both is back. Last write wins.
+            let deleted = idx % 5 == 0 && idx % 7 != 0;
+            debug_assert_eq!(got.is_none(), deleted, "key {idx}: unexpected visibility");
+        }
+
+        reporter.stop();
+        Ok(())
+    }
+}
