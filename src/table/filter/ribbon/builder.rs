@@ -3,10 +3,7 @@ use alloc::vec::Vec;
 
 use super::error::{BuildError, ConstructionFailure};
 use super::filter::RibbonFilter;
-use super::hashing::{
-    SplitMix64, StandardEquation, for_each_set_bit_u128_parts, standard_equation_from_hash,
-    xor_words,
-};
+use super::hashing::{SplitMix64, StandardEquation, standard_equation_from_hash};
 use super::params::{Mode, Params};
 
 #[derive(Debug, Clone)]
@@ -87,51 +84,37 @@ impl RibbonBuilder {
         seed: u64,
     ) -> Result<RibbonFilter, ConstructionFailure> {
         debug_assert!(m >= self.params.w);
-        if let Some(values) = values {
-            debug_assert_eq!(
-                values.len(),
-                hashes.len(),
-                "retrieval RHS values must be parallel to hashes",
-            );
-            debug_assert_eq!(
-                self.params.fingerprint_words(),
-                1,
-                "retrieval ribbon stores a single-word (r<=64) value",
-            );
-        }
+        debug_assert!(
+            values.is_none_or(|values| values.len() == hashes.len()),
+            "retrieval RHS values must be parallel to hashes",
+        );
 
-        let stride_words = self.params.fingerprint_words();
-        let total_words = m
-            .checked_mul(stride_words)
-            .ok_or(ConstructionFailure::StorageLengthOverflow { m, stride_words })?;
-        let fp_last_mask = self.params.fingerprint_last_word_mask();
+        let fp_mask = self.params.fingerprint_mask();
         let mut occupied = vec![false; m];
         let mut coeff_lo = vec![0u64; m];
         let mut coeff_hi = vec![0u64; m];
-        let mut rhs = vec![0u64; total_words];
+        // One row of the solution matrix is one word: `Params::MAX_R` caps the
+        // fingerprint at 64 bits, so the RHS and the running row value stay in
+        // registers through the whole solve.
+        let mut rhs = vec![0u64; m];
 
-        let mut key_fp = vec![0u64; stride_words];
         let layer_params = Params { m, ..self.params };
 
         for (key_index, hash) in hashes.iter().enumerate() {
-            key_fp.fill(0);
             let equation: StandardEquation =
-                standard_equation_from_hash(*hash, seed, &layer_params, &mut key_fp);
+                standard_equation_from_hash(*hash, seed, &layer_params);
 
             let mut i = equation.start;
             let mut c_lo = equation.coeff_lo;
             let mut c_hi = equation.coeff_hi;
-            let mut b = key_fp.clone();
-            if let Some(values) = values {
-                // Retrieval ribbon: replace the hash-derived fingerprint
-                // RHS with the caller's r-bit value. The band (coeff/start)
-                // above is still hash-derived, so the solve is unchanged;
-                // only what it solves *for* differs. stride is 1 for r<=64
-                // (asserted above), so the value lives in word 0, masked to
-                // r bits (identity for an already-fitting value).
-                b.fill(0);
-                b[0] = values[key_index] & fp_last_mask;
-            }
+            // Retrieval ribbon: the caller's r-bit value replaces the
+            // hash-derived fingerprint as the RHS. The band (coeff/start) is
+            // still hash-derived, so the solve is unchanged; only what it
+            // solves *for* differs.
+            let mut b = match values {
+                None => equation.fingerprint,
+                Some(values) => values[key_index] & fp_mask,
+            };
 
             if i >= m {
                 return Err(ConstructionFailure::OutOfBounds {
@@ -146,16 +129,16 @@ impl RibbonBuilder {
                     occupied[i] = true;
                     coeff_lo[i] = c_lo;
                     coeff_hi[i] = c_hi;
-                    rhs[i * stride_words..(i + 1) * stride_words].copy_from_slice(&b);
+                    rhs[i] = b;
                     break;
                 }
 
                 c_lo ^= coeff_lo[i];
                 c_hi ^= coeff_hi[i];
-                xor_words(&mut b, &rhs[i * stride_words..(i + 1) * stride_words]);
+                b ^= rhs[i];
 
                 if c_lo == 0 && c_hi == 0 {
-                    if b.iter().all(|&x| x == 0) {
+                    if b == 0 {
                         break;
                     }
                     return Err(ConstructionFailure::InconsistentEquation {
@@ -187,19 +170,14 @@ impl RibbonBuilder {
             }
         }
 
-        let mut z = vec![0u64; total_words];
+        let mut z = vec![0u64; m];
         if matches!(self.params.mode, Mode::Homogeneous) {
             let mut rng = SplitMix64::new(seed ^ 0xD1B5_4A32_D192_ED03);
-            for (i, is_occupied) in occupied.iter().enumerate().take(m) {
+            for (slot, is_occupied) in z.iter_mut().zip(occupied.iter()) {
                 if *is_occupied {
                     continue;
                 }
-                let row_start = i * stride_words;
-                let row_end = row_start + stride_words;
-                for word in &mut z[row_start..row_end] {
-                    *word = rng.next_u64();
-                }
-                z[row_end - 1] &= fp_last_mask;
+                *slot = rng.next_u64() & fp_mask;
             }
         }
 
@@ -207,33 +185,36 @@ impl RibbonBuilder {
             if !occupied[i] {
                 continue;
             }
-            let row_start = i * stride_words;
-            let row_end = row_start + stride_words;
-            z[row_start..row_end].copy_from_slice(&rhs[row_start..row_end]);
-            let upper_lo = coeff_lo[i] & !1u64;
-            let upper_hi = coeff_hi[i];
-            // Capacity hint of at most `w - 1` set bits above the diagonal;
-            // clamp-to-zero so `w == 0` yields an empty hint, never underflow.
-            let mut row_offsets = Vec::with_capacity(self.params.w.saturating_sub(1));
-            for_each_set_bit_u128_parts(upper_lo, upper_hi, |offset| {
-                row_offsets.push(offset);
-            });
-            for offset in row_offsets {
+            // The row value is accumulated in a register and stored once. The
+            // set bits above the diagonal are walked in place: collecting them
+            // into a `Vec` was a heap allocation per row, and XORing straight
+            // into `z[i]` made every bit a store the next one had to reload.
+            // Each bit names a row strictly below this one (the diagonal bit is
+            // masked off), so every source is already final.
+            let mut row = rhs[i];
+            let mut upper_lo = coeff_lo[i] & !1u64;
+            let mut upper_hi = coeff_hi[i];
+            while upper_lo != 0 || upper_hi != 0 {
+                let offset = if upper_lo != 0 {
+                    let bit = upper_lo.trailing_zeros() as usize;
+                    upper_lo &= upper_lo - 1;
+                    bit
+                } else {
+                    let bit = upper_hi.trailing_zeros() as usize;
+                    upper_hi &= upper_hi - 1;
+                    64 + bit
+                };
                 let row_index = i + offset;
-                if row_index >= m {
+                let Some(other) = z.get(row_index) else {
                     return Err(ConstructionFailure::OutOfBounds {
                         key_index: None,
                         row_index,
                         m,
                     });
-                }
-                let other_start = row_index * stride_words;
-                let (left, right) = z.split_at_mut(other_start);
-                let row = &mut left[row_start..row_end];
-                let other = &right[..stride_words];
-                xor_words(row, other);
+                };
+                row ^= *other;
             }
-            z[row_end - 1] &= fp_last_mask;
+            z[i] = row & fp_mask;
         }
         let mut built_params = self.params;
         built_params.m = m;

@@ -159,41 +159,25 @@ fn start_range_is_m_minus_w_plus_one() {
 }
 
 #[test]
-fn fingerprint_words_round_up_for_non_multiple_of_64() {
+fn validate_fingerprint_width_when_wider_than_one_word_rejects() {
+    let err = Params::new(256, 64, 65, Mode::Standard).expect_err("r=65 should fail");
     assert_eq!(
-        Params::new(128, 64, 1, Mode::Standard)
-            .unwrap()
-            .fingerprint_words(),
-        1
-    );
-    assert_eq!(
-        Params::new(128, 64, 64, Mode::Standard)
-            .unwrap()
-            .fingerprint_words(),
-        1
-    );
-    assert_eq!(
-        Params::new(128, 64, 65, Mode::Standard)
-            .unwrap()
-            .fingerprint_words(),
-        2
-    );
-    assert_eq!(
-        Params::new(256, 64, 128, Mode::Standard)
-            .unwrap()
-            .fingerprint_words(),
-        2
+        err,
+        ParamError::FingerprintTooWide {
+            r: 65,
+            max: Params::MAX_R
+        }
     );
 }
 
 #[test]
-fn fingerprint_last_word_mask_full_when_r_multiple_of_64() {
+fn fingerprint_mask_when_r_is_a_whole_word_is_full() {
     let p = Params::new(128, 64, 64, Mode::Standard).unwrap();
-    assert_eq!(p.fingerprint_last_word_mask(), u64::MAX);
+    assert_eq!(p.fingerprint_mask(), u64::MAX);
 }
 
 #[test]
-fn fingerprint_last_word_mask_low_bits_when_r_not_multiple_of_64() {
+fn fingerprint_mask_when_r_is_narrower_than_a_word_has_low_bits() {
     let p = Params::new(128, 64, 5, Mode::Standard).unwrap();
-    assert_eq!(p.fingerprint_last_word_mask(), 0b11111);
+    assert_eq!(p.fingerprint_mask(), 0b11111);
 }

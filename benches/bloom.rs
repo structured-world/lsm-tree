@@ -144,7 +144,10 @@ fn fast_block_index(c: &mut Criterion) {
 fn burr_filter_construction(c: &mut Criterion) {
     let mut rng = rand::rng();
 
-    for n in [100_000_usize, 1_000_000] {
+    // 1k is the flush-sized filter: an L0 SST from a small memtable builds one
+    // of these, and its cost is a fixed charge on every flush. 100k and 1M are
+    // the compaction-sized ones.
+    for n in [1_000_usize, 100_000, 1_000_000] {
         let label = format!("burr filter build, {n} keys @ FPR=1%");
         c.bench_function(&label, |b| {
             // Pre-hash a key universe so the bench measures BuRR build cost,
@@ -156,11 +159,16 @@ fn burr_filter_construction(c: &mut Criterion) {
                 keys.push(hash64(&key));
             }
 
-            b.iter(|| {
-                let params = BurrParams::with_fp_rate(n, 0.01).expect("params");
-                let builder = BurrBuilder::new(params).expect("builder");
-                let filter: BurrFilter = builder.build_from_hashes(&keys).expect("build");
-                std::hint::black_box(filter.layer_count());
+            // Percentiles, like the probe benches: one iteration is one whole
+            // build, so the tail is the tail of a real flush or compaction
+            // stall, which the mean hides.
+            b.iter_custom(|iters| {
+                measure_with_percentiles(&label, iters, || {
+                    let params = BurrParams::with_fp_rate(n, 0.01).expect("params");
+                    let builder = BurrBuilder::new(params).expect("builder");
+                    let filter: BurrFilter = builder.build_from_hashes(&keys).expect("build");
+                    std::hint::black_box(filter.layer_count());
+                })
             });
         });
     }

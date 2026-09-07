@@ -428,10 +428,9 @@ fn walk_first_layer(bytes: &[u8], hash: u64, expected_type: u8) -> crate::Result
             .map_err(|_| crate::Error::InvalidHeader("BurrFilter"))?,
     );
 
-    // r <= 64 → stride_words == 1. We mirror the in-memory probe
-    // invariants without storing stride at all; if r > 64 ever lands
-    // the validation above already rejected it.
-    let mut fingerprint_buf = [0_u64; 1];
+    // r <= 64 → one solution row is one word. We mirror the in-memory probe
+    // invariants without storing a stride at all; if r > 64 ever lands the
+    // validation above already rejected it.
     let mut pos = HEADER_LEN;
 
     for layer_idx in 0..num_layers {
@@ -491,10 +490,8 @@ fn walk_first_layer(bytes: &[u8], hash: u64, expected_type: u8) -> crate::Result
         let seed = derive_layer_seed(root_seed, layer_idx);
         let layer_params = layer_params_base.with_seed(seed);
 
-        fingerprint_buf[0] = 0;
-        let equation: StandardEquation =
-            standard_equation_from_hash(hash, seed, &layer_params, &mut fingerprint_buf);
-        let fingerprint = fingerprint_buf[0];
+        let equation: StandardEquation = standard_equation_from_hash(hash, seed, &layer_params);
+        let fingerprint = equation.fingerprint;
 
         // Prefetch the [start, start+w) coefficient window (w u64 rows = w*8
         // bytes) before the threshold check so the hash-random cold miss on the
@@ -594,14 +591,12 @@ pub(crate) fn recover_value_from_bytes(bytes: &[u8], hash: u64) -> crate::Result
 /// re-hashing.
 #[inline]
 pub(crate) fn contains_hash(decoded: &DecodedFilter<'_>, hash: u64) -> bool {
-    // r is validated to 1..=64 in decode, so stride_words is always 1
-    // for the currently-deployed wire format. We use a single stack u64
-    // for both fingerprint and acc to keep this hot path allocation-
-    // free. If the format ever grows to r > 64 the assertion below
-    // catches the mismatch — the probe path must be updated at the
-    // same time.
+    // r is validated to 1..=64 in decode, so a solution row is one word for
+    // the currently-deployed wire format and both the fingerprint and the
+    // accumulator stay in registers. If the format ever grows to r > 64 the
+    // assertion below catches the mismatch — the probe path must be updated
+    // at the same time.
     debug_assert_eq!(decoded.stride_words, 1, "BuRR wire format pins r <= 64");
-    let mut fingerprint_buf = [0_u64; 1];
 
     for layer in &decoded.layers {
         let layer_params = match Params::new(
@@ -618,10 +613,9 @@ pub(crate) fn contains_hash(decoded: &DecodedFilter<'_>, hash: u64) -> bool {
             Err(_) => return true,
         };
 
-        fingerprint_buf[0] = 0;
         let equation: StandardEquation =
-            standard_equation_from_hash(hash, layer.seed, &layer_params, &mut fingerprint_buf);
-        let fingerprint = fingerprint_buf[0];
+            standard_equation_from_hash(hash, layer.seed, &layer_params);
+        let fingerprint = equation.fingerprint;
 
         // Prefetch the [start, start+w) coefficient window (w u64 rows = w*8
         // bytes) before the threshold check so the hash-random cold miss on the

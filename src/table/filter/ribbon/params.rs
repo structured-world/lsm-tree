@@ -40,6 +40,25 @@ pub struct Params {
 impl Params {
     pub const MAX_W: usize = 128;
 
+    /// Fingerprint width ceiling. One solution row is one `u64`, which is
+    /// what the BuRR layer above builds (`BurrParams::r` is a `u8` validated
+    /// to `1..=64`) and what the wire decoder accepts, so the solver stores a
+    /// single word per row and never a multi-word stride.
+    ///
+    /// A wider `r` was accepted here before, and a `RibbonFilterRepr` captured
+    /// through the `ribbon-serde` feature could in principle carry one, stored
+    /// as `m * r.div_ceil(64)` words. Such a repr is now refused, twice over
+    /// and by name: [`Self::validate`] reports
+    /// [`ParamError::FingerprintTooWide`](super::error::ParamError::FingerprintTooWide)
+    /// with the offending `r`, and the row count no longer matches `m`. It can
+    /// therefore never be misread as a narrow one, which is the property that
+    /// matters. The repr version is deliberately NOT bumped for this: the
+    /// version guards the encoding, and rejecting every `r <= 64` repr — the
+    /// only kind any supported path produces — to give a different error on a
+    /// width nothing in this crate can build would trade a real case for a
+    /// hypothetical one.
+    pub const MAX_R: usize = 64;
+
     pub fn new(m: usize, w: usize, r: usize, mode: Mode) -> Result<Self, ParamError> {
         let params = Self {
             m,
@@ -134,6 +153,12 @@ impl Params {
         if self.r == 0 {
             return Err(ParamError::ZeroFingerprintBits);
         }
+        if self.r > Self::MAX_R {
+            return Err(ParamError::FingerprintTooWide {
+                r: self.r,
+                max: Self::MAX_R,
+            });
+        }
         if self.retry_limit == 0 {
             return Err(ParamError::ZeroRetryLimit);
         }
@@ -150,16 +175,13 @@ impl Params {
         self.m - self.w + 1
     }
 
-    pub fn fingerprint_words(&self) -> usize {
-        self.r.div_ceil(64)
-    }
-
-    pub fn fingerprint_last_word_mask(&self) -> u64 {
-        let rem = self.r % 64;
-        if rem == 0 {
+    /// Mask of the low `r` bits: one row of the solution matrix is exactly
+    /// one `u64`, since [`Self::MAX_R`] caps the fingerprint at a word.
+    pub fn fingerprint_mask(&self) -> u64 {
+        if self.r == 64 {
             u64::MAX
         } else {
-            (1u64 << rem) - 1
+            (1u64 << self.r) - 1
         }
     }
 }

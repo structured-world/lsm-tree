@@ -7,27 +7,9 @@ pub(crate) struct StandardEquation {
     pub(crate) start: usize,
     pub(crate) coeff_lo: u64,
     pub(crate) coeff_hi: u64,
-}
-
-#[inline]
-pub(crate) fn xor_words(dst: &mut [u64], rhs: &[u64]) {
-    for (d, r) in dst.iter_mut().zip(rhs.iter()) {
-        *d ^= *r;
-    }
-}
-
-#[inline]
-pub(crate) fn for_each_set_bit_u128_parts(mut lo: u64, mut hi: u64, mut f: impl FnMut(usize)) {
-    while lo != 0 {
-        let bit = lo.trailing_zeros() as usize;
-        f(bit);
-        lo &= lo - 1;
-    }
-    while hi != 0 {
-        let bit = hi.trailing_zeros() as usize;
-        f(64 + bit);
-        hi &= hi - 1;
-    }
+    /// Hash-derived right-hand side, masked to the low `r` bits. Zero in
+    /// homogeneous mode, which solves against an all-zero RHS.
+    pub(crate) fingerprint: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,17 +48,20 @@ pub(crate) fn start_position_from_stream(next_word: u64, m: usize, w: usize) -> 
 /// The LSM filter framework hands in keys already hashed to a stable
 /// `u64` (xxh3 / `crate::hash::hash64`), so the ribbon never hashes keys
 /// itself — this is the sole equation entry point.
+///
+/// The fingerprint travels in the returned struct rather than through an
+/// out-parameter: `r` is capped at 64 by [`Params::validate`], so it is one
+/// word, and both the build solve and the probe want it in a register.
 #[expect(
     clippy::inline_always,
     reason = "called per layer on the BuRR filter probe hot path; inlining lets LLVM fold the \
-              SplitMix stream into the caller and eliminate the &mut [u64] fingerprint pointer"
+              SplitMix stream into the caller"
 )]
 #[inline(always)]
 pub(crate) fn standard_equation_from_hash(
     base_hash: u64,
     seed: u64,
     params: &Params,
-    fingerprint: &mut [u64],
 ) -> StandardEquation {
     let stream_seed = (base_hash ^ seed).wrapping_mul(MIX_CONST);
     let mut stream = SplitMix64::new(stream_seed);
@@ -101,20 +86,16 @@ pub(crate) fn standard_equation_from_hash(
         (lo | 1, stream.next_u64() & hi_mask)
     };
 
-    if matches!(params.mode, Mode::Homogeneous) {
-        fingerprint.fill(0);
+    let fingerprint = if matches!(params.mode, Mode::Homogeneous) {
+        0
     } else {
-        for word in fingerprint.iter_mut() {
-            *word = stream.next_u64();
-        }
-        if let Some(last) = fingerprint.last_mut() {
-            *last &= params.fingerprint_last_word_mask();
-        }
-    }
+        stream.next_u64() & params.fingerprint_mask()
+    };
 
     StandardEquation {
         start,
         coeff_lo,
         coeff_hi,
+        fingerprint,
     }
 }

@@ -82,9 +82,8 @@ fn params_from_expected_items_rejects_overhead_out_of_range() {
 #[test]
 fn equation_start_in_range_and_pivot_forced() {
     let params = Params::new(128, 17, 13, Mode::Standard).expect("params must be valid");
-    let mut fp = vec![0u64; params.fingerprint_words()];
 
-    let eq = standard_equation_from_hash(0x0123_4567_89AB_CDEF, 42, &params, &mut fp);
+    let eq = standard_equation_from_hash(0x0123_4567_89AB_CDEF, 42, &params);
 
     assert!(eq.start < params.start_range());
     assert_eq!(eq.coeff_lo & 1, 1);
@@ -93,35 +92,30 @@ fn equation_start_in_range_and_pivot_forced() {
 #[test]
 fn equation_masks_fingerprint_to_r_bits() {
     let params = Params::new(64, 8, 9, Mode::Standard).expect("params must be valid");
-    let mut fp = vec![0u64; params.fingerprint_words()];
 
-    let _ = standard_equation_from_hash(0xDEAD_BEEF_CAFE_F00D, 7, &params, &mut fp);
+    let eq = standard_equation_from_hash(0xDEAD_BEEF_CAFE_F00D, 7, &params);
 
-    assert_eq!(fp[0] & !params.fingerprint_last_word_mask(), 0);
+    assert_eq!(eq.fingerprint & !params.fingerprint_mask(), 0);
 }
 
 #[test]
 fn equation_is_deterministic_for_seed_and_hash() {
     let params = Params::new(96, 16, 20, Mode::Standard).expect("params must be valid");
-    let mut fp_a = vec![0u64; params.fingerprint_words()];
-    let mut fp_b = vec![0u64; params.fingerprint_words()];
 
     let h = 0x1122_3344_5566_7788;
-    let eq_a = standard_equation_from_hash(h, 999, &params, &mut fp_a);
-    let eq_b = standard_equation_from_hash(h, 999, &params, &mut fp_b);
+    let eq_a = standard_equation_from_hash(h, 999, &params);
+    let eq_b = standard_equation_from_hash(h, 999, &params);
 
     assert_eq!(eq_a, eq_b);
-    assert_eq!(fp_a, fp_b);
 }
 
 #[test]
 fn homogeneous_pipeline_has_zero_fingerprint() {
     let params = Params::new(128, 16, 9, Mode::Homogeneous).expect("params must be valid");
-    let mut fp = vec![0u64; params.fingerprint_words()];
 
-    let _ = standard_equation_from_hash(0xABCD_1234_5678_9ABC, 11, &params, &mut fp);
+    let eq = standard_equation_from_hash(0xABCD_1234_5678_9ABC, 11, &params);
 
-    assert!(fp.iter().all(|&w| w == 0));
+    assert_eq!(eq.fingerprint, 0);
 }
 
 #[test]
@@ -130,8 +124,7 @@ fn width_128_pipeline_sets_bits_in_both_halves() {
 
     let mut saw_hi = false;
     for seed in 0..500u64 {
-        let mut fp = vec![0u64; params.fingerprint_words()];
-        let eq = standard_equation_from_hash(0xF00D_BA11_0BAD_F00D, seed, &params, &mut fp);
+        let eq = standard_equation_from_hash(0xF00D_BA11_0BAD_F00D, seed, &params);
 
         if eq.coeff_hi != 0 {
             saw_hi = true;
@@ -258,8 +251,7 @@ fn serde_rejects_incorrect_storage_word_length() {
         .expect("build should succeed");
 
     let mut repr = filter.to_repr();
-    let expected_words = repr.params.m * repr.params.fingerprint_words();
-    let wrong_words = expected_words - 1;
+    let wrong_words = repr.params.m - 1;
     repr.z = vec![0_u64; wrong_words];
 
     let err = super::RibbonFilter::from_repr(repr)
