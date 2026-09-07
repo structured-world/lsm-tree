@@ -3824,23 +3824,44 @@ impl Tree {
     /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
     /// when the history no longer retains a version for `seqno`. The fast path
     /// cannot hit it: a snapshot above the latest version is always served.
+    ///
+    /// Kept to the mirror load plus one compare so it inlines into the point
+    /// reads; the locked history walk lives in
+    /// [`historical_snapshot_for_read`](Self::historical_snapshot_for_read),
+    /// which is deliberately NOT inlined. Folding the two together made this
+    /// function large enough to stay a call, and a call returning
+    /// `Result<SnapshotRef>` (an `arc-swap` guard or a `SuperVersion`, plus
+    /// the error payload) costs the caller a measurable move per read.
+    #[inline]
     pub(crate) fn snapshot_for_read(
         &self,
         seqno: SeqNo,
     ) -> crate::Result<crate::version::SnapshotRef> {
-        use crate::version::SnapshotRef;
-
         #[cfg(feature = "std")]
         {
             let latest = self.latest_super_version.load();
             if seqno > latest.seqno {
-                return Ok(SnapshotRef::Latest(latest));
+                return Ok(crate::version::SnapshotRef::Latest(latest));
             }
         }
+        self.historical_snapshot_for_read(seqno)
+    }
+
+    /// The locked-history half of [`snapshot_for_read`](Self::snapshot_for_read):
+    /// a point-in-time read that the latest-version mirror cannot serve.
+    ///
+    /// `#[inline(never)]` keeps it out of every point read's instruction
+    /// stream. It is NOT `#[cold]`: a historical read is a normal operation
+    /// (`AS OF` queries, a lagging consumer), just not the common one.
+    #[inline(never)]
+    fn historical_snapshot_for_read(
+        &self,
+        seqno: SeqNo,
+    ) -> crate::Result<crate::version::SnapshotRef> {
         self.version_history
             .read()
             .get_version_for_snapshot(seqno)
-            .map(SnapshotRef::Owned)
+            .map(crate::version::SnapshotRef::Owned)
     }
 
     /// Normalizes a user-provided range into owned `Bound<Slice>` values.
