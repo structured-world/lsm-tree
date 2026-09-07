@@ -144,7 +144,10 @@ fn fast_block_index(c: &mut Criterion) {
 fn burr_filter_construction(c: &mut Criterion) {
     let mut rng = rand::rng();
 
-    for n in [100_000_usize, 1_000_000] {
+    // 1k is the flush-sized filter: an L0 SST from a small memtable builds one
+    // of these, and its cost is a fixed charge on every flush. 100k and 1M are
+    // the compaction-sized ones.
+    for n in [1_000_usize, 100_000, 1_000_000] {
         let label = format!("burr filter build, {n} keys @ FPR=1%");
         c.bench_function(&label, |b| {
             // Pre-hash a key universe so the bench measures BuRR build cost,
