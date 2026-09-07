@@ -5,6 +5,14 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    ignore:
+      # The codec is upgraded deliberately, never on a schedule. It sits on the
+      # write and read hot paths, so each version is taken together with its own
+      # before/after on the compression arms, and a release is sometimes skipped
+      # outright. Left to the grouped minor-and-patch rule it would instead be
+      # auto-approved and auto-merged the moment CI went green, since a 0.0.x
+      # step reads as a patch update to the version-type check.
+      - dependency-name: "structured-zstd"
     groups:
       minor-and-patch:
         patterns:
