@@ -641,9 +641,12 @@ impl SuperVersions {
     /// The comparison is spelled twice. Point reads under `std` take
     /// [`Tree::snapshot_for_read`](crate::Tree)'s mirrored-latest fast path,
     /// which answers `seqno > latest.seqno` without reaching this function.
-    /// The two must move together: relaxing the strict `<` here alone would
-    /// leave point reads and iterator reads disagreeing about which
-    /// compaction has happened yet.
+    /// The constraint between them runs ONE WAY: the fast path must only claim
+    /// a snapshot this resolver would answer with the latest version anyway.
+    /// Widening it (to `>=`, say) breaks that on its own, since iterators come
+    /// here directly and would still get the previous version. Changing this
+    /// resolver alone does not, because the fast path fires only above
+    /// `latest.seqno`, where both spellings pick the latest regardless.
     ///
     /// Snapshot `0` is served from the oldest retained version. No entry has a
     /// seqno below `0`, so nothing is visible at that snapshot from any

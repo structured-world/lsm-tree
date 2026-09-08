@@ -1206,15 +1206,22 @@ impl AbstractTree for Tree {
         // at `seqno` (no entries newer than the snapshot, and a consistent set of
         // tables + memtables even during a concurrent flush / compaction).
         //
-        // "The same visibility as a read" is meant literally, and only for the
-        // duration of THIS call: it walks the tables of the version a read at
-        // `seqno` resolves to right now, so the SST and memtable halves of one
-        // estimate cannot come from different points in time. It says nothing
-        // about a later read. At a forward-looking `seqno` (`MAX_SEQNO`, say)
-        // the clone is taken and the lock released, and a compaction that
-        // installs afterwards is what the next read at that same seqno
-        // resolves to: the estimate describes a physical layout compaction is
-        // free to change the moment this returns.
+        // What "the same visibility as a read" does and does not mean here.
+        //
+        // It picks the FILE SET a read at `seqno` resolves to, rather than the
+        // current one, and filters the memtables by `seqno`. It is not a
+        // per-row mask: a table whose seqno range straddles `seqno` is
+        // classified `Partial` and then apportioned whole by byte offsets, so
+        // its share can include rows the snapshot cannot read. The estimate is
+        // an estimate, and this is one of the ways it is approximate.
+        //
+        // Nor does resolving once freeze the tree. The clone pins the version's
+        // tables, but the active memtable behind it is the live one every
+        // writer mutates, so a write landing mid-call can be counted by the
+        // memtable half after the table half was read. And at a forward-looking
+        // `seqno` (`MAX_SEQNO`, say) a compaction installing after the clone is
+        // what the NEXT read at that seqno resolves to: the layout described
+        // here is one compaction is free to change the moment this returns.
         let comparator = self.config.comparator.as_ref();
         let super_version = self
             .version_history
@@ -3855,9 +3862,14 @@ impl Tree {
     ///
     /// The fast path above is the SECOND spelling of that routing comparison,
     /// not a shortcut around it: `seqno > latest.seqno` is the resolver's
-    /// `version.seqno < seqno` with the sides swapped. Change one and the other
-    /// has to change with it, or point reads and iterator reads start
-    /// disagreeing about which compaction a snapshot can see.
+    /// `version.seqno < seqno` with the sides swapped. It may only claim a
+    /// snapshot the resolver would answer with the latest version anyway.
+    /// Widening it (to `>=`, say) breaks that by itself, because iterators call
+    /// the resolver directly and would still get the previous version, so point
+    /// reads and iterator reads would disagree about which compaction a
+    /// snapshot can see. The constraint does not run the other way: the
+    /// resolver can be changed alone, since this path fires only above
+    /// `latest.seqno`, where both spellings pick the latest either way.
     ///
     /// # Errors
     ///
