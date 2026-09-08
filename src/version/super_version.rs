@@ -104,6 +104,41 @@ pub enum RetentionEffect {
     DropsData,
 }
 
+impl RetentionEffect {
+    /// What an install owes older snapshots, from what its run actually did.
+    ///
+    /// Every install that runs a merge stream derives its effect here rather
+    /// than restating the rule: a flush and a compaction disagreeing about it
+    /// is how a floor came to promise data the output no longer held.
+    ///
+    /// `collected_below_watermark` says the run lost or rewrote a version
+    /// because of `watermark`. `GcBelow(watermark)` is exact rather than
+    /// conservative because of an invariant the callers uphold: everything
+    /// they report happens STRICTLY BELOW the watermark. The fold, merge
+    /// resolution, weak-delete annihilation and bottom-level eviction are each
+    /// gated on the head's own seqno; applied range tombstones are strictly
+    /// below it and so are the entries they cover; bottommost seqno zeroing
+    /// rewrites only below it. A run that reports a loss at or above the
+    /// watermark would break that and needs `DropsData`, not this.
+    ///
+    /// A user compaction filter is the one thing that acts regardless of any
+    /// watermark, since a removal at watermark 0 still drops the row, so its
+    /// verdict outranks everything else.
+    pub(crate) fn of_run(
+        filter_transformed: bool,
+        collected_below_watermark: bool,
+        watermark: SeqNo,
+    ) -> Self {
+        if filter_transformed {
+            Self::DropsData
+        } else if collected_below_watermark {
+            Self::GcBelow(watermark)
+        } else {
+            Self::Keep
+        }
+    }
+}
+
 pub struct SuperVersions {
     versions: VecDeque<SuperVersion>,
 

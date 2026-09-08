@@ -53,6 +53,14 @@ pub(super) struct BottommostSeqnoZeroer<I> {
     idx: usize,
     active: ActiveTombstoneSet,
     tombstones_sorted: bool,
+    /// The merge stream's collected-history balance, shared so a zeroing can
+    /// report itself: rewriting a seqno changes what a snapshot resolves to
+    /// without changing how many entries came out, which is the one kind of
+    /// history loss the balance cannot derive on its own.
+    gc_balance: alloc::sync::Arc<portable_atomic::AtomicU64>,
+    /// Whether a zeroing has already been reported, so the shared counter is
+    /// touched once per run rather than once per entry.
+    zeroed_any: bool,
 }
 
 impl<I> BottommostSeqnoZeroer<I> {
@@ -62,6 +70,7 @@ impl<I> BottommostSeqnoZeroer<I> {
         tombstones: Vec<RangeTombstone>,
         gc_seqno_threshold: SeqNo,
         comparator: SharedComparator,
+        gc_balance: alloc::sync::Arc<portable_atomic::AtomicU64>,
     ) -> Self {
         Self {
             inner,
@@ -72,6 +81,8 @@ impl<I> BottommostSeqnoZeroer<I> {
             idx: 0,
             active: ActiveTombstoneSet::new_with_comparator(comparator),
             tombstones_sorted: false,
+            gc_balance,
+            zeroed_any: false,
         }
     }
 
@@ -115,6 +126,17 @@ impl<I: Iterator<Item = crate::Result<InternalValue>>> Iterator for BottommostSe
                     && !self.covered(kv.key.user_key.as_ref())
                 {
                     kv.key.seqno = 0;
+                    // The version comes out at a seqno it never had, so a
+                    // snapshot between 0 and its real seqno would now resolve
+                    // to a value that did not exist at that snapshot. The entry
+                    // count is unchanged, so the install's balance cannot see
+                    // this: report it here. Once is enough, the install only
+                    // asks whether anything happened.
+                    if !self.zeroed_any {
+                        self.zeroed_any = true;
+                        self.gc_balance
+                            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 Some(Ok(kv))
             }

@@ -4,19 +4,19 @@
 //! A compaction must not drop a version that the recorded retention floor still
 //! promises to serve.
 //!
-//! The fold in `CompactionStream` decides by the seqno of the NEXT-OLDER
-//! sibling: when that one is below the GC threshold, the rest of the key is
+//! The fold in `CompactionStream` used to decide by the seqno of the NEXT-OLDER
+//! sibling: when that one was below the GC threshold, the rest of the key was
 //! drained. So for a key whose versions straddle the threshold, the newest
-//! version BELOW it is discarded even though a read above the floor resolves to
-//! exactly that version.
+//! version BELOW it was discarded even though a read above the floor resolves
+//! to exactly that version.
 //!
-//! While the process lives this is invisible: such a read is routed to the
+//! While the process lives that was invisible: such a read is routed to the
 //! retained `SuperVersion` and reads the pre-compaction tables. A reopen removes
 //! that routing — the history is seeded at the persisted floor and every read
-//! resolves against the latest version — so the answer becomes a silent
+//! resolves against the latest version — so the answer became a silent
 //! "absent" rather than either the value or `SnapshotBelowRetention`.
 
-use lsm_tree::{AbstractTree, Config, SeqNo, SequenceNumberCounter};
+use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
 
 #[test]
 fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::Result<()> {
@@ -55,14 +55,17 @@ fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::R
         "precondition: snapshot 9 resolves to the version at seqno 2",
     );
 
-    // Compact with a GC threshold of 8. The floor this records is 7, so a read
-    // at 9 stays servable by the engine's own contract.
+    // Compact with a GC threshold of 8. The fold keeps BOTH versions: the one
+    // at 10 is above the watermark, and the one at 2 is the newest below it, so
+    // the fold drops nothing. The bottom level still rewrites the seqno of the
+    // one at 2 down to 0, which is a change of its own, so the install records
+    // the watermark-derived floor of 7. A read at 9 stays well above it.
     tree.major_compact(u64::MAX, 8)?;
 
     let floor = tree.retention_floor();
-    assert!(
-        floor < 9,
-        "the floor must still admit a read at 9, got floor {floor}",
+    assert_eq!(
+        floor, 7,
+        "the bottom level zeroed a seqno, so the watermark-derived floor applies",
     );
 
     // Live process: the retained version still routes this read to the old
@@ -80,9 +83,9 @@ fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::R
     // boundary. The read is still above it, so the engine has promised to serve
     // it: it must answer with the value, and must never answer "absent".
     let floor = reopened.retention_floor();
-    assert!(
-        floor < 9,
-        "the persisted floor must still admit a read at 9, got floor {floor}",
+    assert_eq!(
+        floor, 7,
+        "the floor the compaction recorded must survive the reopen",
     );
     assert_eq!(
         reopened.get("k", 9)?.as_deref(),
@@ -91,17 +94,9 @@ fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::R
          instead of the version the floor promised",
     );
 
-    // And a read the floor does not admit must be refused, not answered. The
-    // boundary itself is the interesting one: the contract is "at or below the
-    // floor", so `floor` is refused while `floor + 1` is the smallest snapshot
-    // the fold has to keep a version for.
-    assert!(
-        matches!(
-            reopened.get("k", SeqNo::from(1_u64)),
-            Err(lsm_tree::Error::SnapshotBelowRetention { .. })
-        ),
-        "a read below the floor must be refused",
-    );
+    // The boundary: the floor itself is refused, and the smallest admitted
+    // snapshot resolves to the same version, which is the one the fold had to
+    // keep.
     assert!(
         matches!(
             reopened.get("k", floor),

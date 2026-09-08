@@ -982,6 +982,7 @@ impl AbstractTree for Tree {
         frag_map: Option<crate::blob_tree::FragmentationMap>,
         sealed_memtables_to_delete: &[crate::tree::inner::MemtableId],
         gc_watermark: SeqNo,
+        collected_below_watermark: bool,
     ) -> crate::Result<()> {
         log::trace!(
             "Registering {} tables, {} blob files",
@@ -1036,27 +1037,14 @@ impl AbstractTree for Tree {
             // A flush adds a run, but it does not only add: `AbstractTree::flush`
             // feeds the sealed memtables through the same `CompactionStream`
             // with this same watermark, so it collects the versions below it
-            // exactly as a compaction does. The floor has to record that, or a
-            // read the flush already collected the answer for stays admitted
-            // after a reopen and comes back as an absent key rather than a
-            // refusal.
+            // exactly as a compaction does, and owes older snapshots the same
+            // accounting. Same rule, evaluated in the same place, because a
+            // flush and a compaction disagreeing about it is how a floor came
+            // to promise data the output no longer held.
             //
-            // `GcBelow(0)` is `Keep`, so a flush that collects nothing (every
-            // in-crate caller) still moves no floor. The flush stream carries no
-            // user filter and, after the fold's arms were bounded by the
-            // watermark, cannot drop an entry at or above it, so the watermark
-            // is the whole of this install's effect and `DropsData` is
-            // unreachable here.
-            //
-            // The floor is reported for a non-zero watermark whether or not
-            // this run folded anything away, matching the compaction install
-            // and what `GcBelow` states: a snapshot below it MAY have lost what
-            // it depended on, not that it did. Narrowing that to what a run
-            // actually removed has no signal here to read: the plain GC fold
-            // drains without marking a transform, and an empty output does not
-            // mean an empty collection, since a watermark above every version
-            // collects the lot and writes no table at all.
-            crate::version::RetentionEffect::GcBelow(gc_watermark),
+            // `false` for the filter: the flush stream carries no user
+            // compaction filter, so `DropsData` is unreachable here.
+            crate::version::RetentionEffect::of_run(false, collected_below_watermark, gc_watermark),
         )?;
 
         if let Err(e) = version_lock.maintenance(&self.config.path, gc_watermark, &*self.config.fs)
@@ -3177,8 +3165,9 @@ impl Tree {
     /// `miss_keys` contains `(key_index, bloom_hash)` pairs for keys not yet
     /// found, in comparator-sorted order. Keys are looked up individually via
     /// `Table::get`, but sorted order improves I/O locality. The precomputed
-    /// bloom hash in each pair is reused across all table probes. Per-SST
-    /// batched bloom checks and block walks are tracked in `#223`.
+    /// bloom hash in each pair is reused across all table probes, but each key
+    /// is probed on its own: a table is walked once per key, not once per
+    /// batch.
     #[expect(
         clippy::indexing_slicing,
         reason = "miss_keys entries carry batch-local indices; callers must pass a results slice aligned with keys"
@@ -4560,14 +4549,11 @@ impl Tree {
         {
             let version_id = snapshot_id;
             let manifest_path = config.path.join(format!("v{version_id}"));
-            // Open the manifest with a default runtime snapshot:
-            // ECC awareness is captured per-Block via the header
-            // (`ECC_PARITY` flag) so the reader doesn't actually
-            // need to know which ECC mode the writer used. The
-            // captured runtime here is a placeholder; once we want
-            // runtime-driven decisions on the read path (e.g.
-            // checksum_algo dispatch per #298) we'll seed it from
-            // Config + persisted format-version fields.
+            // Open the manifest with a default runtime snapshot: ECC
+            // awareness is captured per-Block via the header
+            // (`ECC_PARITY` flag), so the reader does not need to know
+            // which ECC mode the writer used and nothing on this path
+            // reads the runtime.
             let mut archive_reader = crate::manifest_blocks::reader::ManifestArchiveReader::open(
                 &manifest_path,
                 &*config.fs,

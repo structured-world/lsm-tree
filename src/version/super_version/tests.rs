@@ -3,6 +3,48 @@ use crate::comparator::default_comparator;
 use crate::fs::{Fs, FsOpenOptions, MemFs};
 use test_log::test;
 
+#[test]
+fn of_run_without_a_loss_or_a_filter_verdict_keeps() {
+    // The watermark alone says nothing: a run handed one that collected
+    // nothing owes older snapshots nothing either.
+    assert!(matches!(
+        RetentionEffect::of_run(false, false, 500),
+        RetentionEffect::Keep
+    ));
+    assert!(matches!(
+        RetentionEffect::of_run(false, false, 0),
+        RetentionEffect::Keep
+    ));
+}
+
+#[test]
+fn of_run_with_a_loss_below_the_watermark_reports_that_watermark() {
+    assert!(matches!(
+        RetentionEffect::of_run(false, true, 500),
+        RetentionEffect::GcBelow(500)
+    ));
+    // `GcBelow(0)` is `Keep` downstream, so a watermark of 0 stays harmless
+    // even when the run reports a loss it could only have made at 0.
+    assert!(matches!(
+        RetentionEffect::of_run(false, true, 0),
+        RetentionEffect::GcBelow(0)
+    ));
+}
+
+#[test]
+fn of_run_with_a_filter_verdict_drops_data_whatever_else_happened() {
+    // A filter acts regardless of any watermark, so its verdict outranks both
+    // the watermark and whether the folds collected anything.
+    assert!(matches!(
+        RetentionEffect::of_run(true, false, 0),
+        RetentionEffect::DropsData
+    ));
+    assert!(matches!(
+        RetentionEffect::of_run(true, true, 500),
+        RetentionEffect::DropsData
+    ));
+}
+
 fn new_memtable(id: u64) -> Memtable {
     Memtable::new(id, default_comparator())
 }

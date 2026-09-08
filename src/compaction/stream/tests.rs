@@ -1267,6 +1267,161 @@ mod merge_operator_tests {
 
         Ok(())
     }
+
+    /// A merge resolution swallows the base inline, so the key's tail is
+    /// already empty by the time the fold would drain it. The run still lost a
+    /// version and has to say so, or a reopened tree admits the snapshot that
+    /// resolved to the base and answers it with the merged entry's newer seqno.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_swallows_base_is_positive() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "a", "base", "V",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        // Both versions below the watermark, so the fold runs and consumes the
+        // base into the merged result.
+        let iter = CompactionStream::new(iter, 1_000).with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert!(
+            balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+            "the base folded into the merge result is collected history",
+        );
+    }
+
+    /// The same shape with a single operand and no base: nothing is consumed
+    /// beyond the head, so nothing was collected and the floor must not move.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_lone_merge_operand_is_zero() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "b", "vb", "V",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000).with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    /// The tombstone a merge fold resolves against is consumed by the fold, and
+    /// at the bottom level that is the same neutrality the plain fold already
+    /// excuses: the output no longer carries the tombstone, and the key reads
+    /// absent for every snapshot that used to resolve to it.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_over_a_bottom_level_tombstone_is_zero() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "a", "", "T",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000)
+            .evict_tombstones(true)
+            .with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    /// Off the bottom level the same fold is not neutral: a lower level may hold
+    /// the version the tombstone was hiding, and dropping the tombstone without
+    /// a floor resurrects it for the snapshots the floor would refuse.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_over_a_tombstone_off_the_bottom_level_is_positive() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "a", "", "T",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000).with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert!(
+            balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+            "off the bottom level a folded-away tombstone is collected history",
+        );
+    }
+
+    /// A value under the tombstone makes the fold collection even at the bottom
+    /// level: a snapshot below the tombstone resolved to that value and no
+    /// longer can, since the merged result carries the head's seqno.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_over_a_tombstone_hiding_a_value_is_positive() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "a", "", "T",
+            "a", "val", "V",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000)
+            .evict_tombstones(true)
+            .with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert!(
+            balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+            "a value under the folded tombstone is collected history",
+        );
+    }
+
+    /// An operand between the head and the tombstone is folded into one result
+    /// carrying the head's seqno, so a snapshot that resolved to that operand
+    /// alone loses it. The tombstone excuse covers the tombstone tail only.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_swallowing_an_operand_over_a_tombstone_is_positive() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op2", "M",
+            "a", "op1", "M",
+            "a", "", "T",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000)
+            .evict_tombstones(true)
+            .with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert!(
+            balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+            "an operand consumed into the merged result is collected history",
+        );
+    }
 }
 
 /// Regression: the "is the peeked entry a different key?" check used a bytewise
@@ -1299,4 +1454,200 @@ fn compaction_stream_custom_comparator_weak_tombstone_not_annihilated_across_key
 
     iter_closed!(iter);
     Ok(())
+}
+
+/// Runs the stream to exhaustion and reports how many watermark-driven drops
+/// it counted.
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn collected_count(vec: &[InternalValue], gc_threshold: u64) -> u64 {
+    let iter = vec.iter().cloned().map(Ok);
+    let iter = CompactionStream::new(iter, gc_threshold);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+    balance.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn gc_balance_watermark_collects_nothing_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "new", "V",
+      "a", "old", "V",
+    ];
+
+    // Threshold 998 leaves both versions at or above the watermark, so the
+    // fold keeps them and nothing is collected.
+    assert_eq!(collected_count(&vec, 998), 0);
+}
+
+#[test]
+fn gc_balance_one_version_per_key_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "va", "V",
+      "b", "vb", "V",
+    ];
+
+    // Nothing to fold at any watermark: each key has a single version, so a
+    // run over this input must not claim it collected history.
+    assert_eq!(collected_count(&vec, 1_000), 0);
+    assert_eq!(collected_count(&vec, 0), 0);
+}
+
+#[test]
+fn gc_balance_watermark_drops_a_version_is_positive() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "new", "V",
+      "a", "old", "V",
+    ];
+
+    // Threshold 1000 puts both below the watermark, so the older one is
+    // collected and the run has to say so.
+    assert_eq!(collected_count(&vec, 1_000), 1);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_lone_bottom_level_tombstone_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "T",
+      "b", "vb", "V",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    let iter = CompactionStream::new(iter, 0).evict_tombstones(true);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    // The tombstone shadows nothing, so dropping it answers every snapshot the
+    // way keeping it would. That is not collected history and must not raise a
+    // floor, least of all at a watermark of 0. The balance counts every
+    // consumed version, so this arm has to excuse itself explicitly.
+    assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_tombstone_only_chain_at_the_bottom_level_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "T",
+      "a", "", "T",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    // Both tombstones below the watermark at the bottom level: the eviction arm
+    // takes the head and drains the rest of the chain.
+    let iter = CompactionStream::new(iter, 1_000).evict_tombstones(true);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    // The key read as absent at every snapshot before the drop and reads absent
+    // after it, exactly as for a lone tombstone. Dropping a whole chain of them
+    // is the same neutrality and must not cost a floor.
+    assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_tombstone_tail_under_an_emitted_head_at_the_bottom_level_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "val", "V",
+      "a", "", "T",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    let iter = CompactionStream::new(iter, 1_000).evict_tombstones(true);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    // Every snapshot below the value read "absent" through the tombstone and
+    // reads "absent" from nothing after the fold. Nothing observable changed,
+    // so no floor is owed.
+    assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_tombstone_tail_off_the_bottom_level_is_positive() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "val", "V",
+      "a", "", "T",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    // NOT the bottom level: a lower level may still hold a version the drained
+    // tombstone was hiding, so dropping it without a floor would resurrect that
+    // version for the snapshots the floor refuses.
+    let iter = CompactionStream::new(iter, 1_000);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    assert!(
+        balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+        "off the bottom level a dropped tombstone is collected history",
+    );
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_tombstone_chain_over_a_value_is_positive() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "T",
+      "a", "", "T",
+      "a", "val", "V",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    let iter = CompactionStream::new(iter, 1_000).evict_tombstones(true);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    // A value anywhere under the chain makes the drop collection: a snapshot
+    // below the oldest tombstone resolved to it and no longer can.
+    assert!(
+        balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+        "a chain that also swallowed a value is collected history",
+    );
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_abandoned_after_one_item_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "va", "V",
+      "b", "vb", "V",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    let mut iter = CompactionStream::new(iter, 1_000);
+    let balance = iter.gc_balance();
+
+    // Take one and walk away, which is what a compaction stopped by its signal
+    // does before installing what it wrote. The peek that looked ahead at "b"
+    // must not leave that version on the balance: this run collected nothing.
+    iter.next()
+        .expect("first item")
+        .expect("stream must not error");
+    drop(iter);
+
+    assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
 }

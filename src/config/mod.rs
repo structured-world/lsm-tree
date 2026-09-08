@@ -667,6 +667,13 @@ pub struct Config {
     #[cfg(all(test, feature = "std"))]
     pub(crate) fail_one_subcompaction: Arc<core::sync::atomic::AtomicBool>,
 
+    /// Test-only failpoint: when armed, the serial merge raises the stop signal
+    /// after writing its first item and disarms itself, so the interrupted-merge
+    /// path is reachable without racing a tree drop against an in-flight
+    /// compaction. Behind `cfg(test)`, never compiled into release builds.
+    #[cfg(all(test, feature = "std"))]
+    pub(crate) stop_serial_merge_after_first_item: Arc<core::sync::atomic::AtomicBool>,
+
     /// Test-only failpoint: when armed, a tight-space compaction returns an error
     /// immediately after durably installing (and punching) its FIRST slice, so
     /// the crash-mid-loop recovery path (reopen a tree whose manifest carries a
@@ -814,6 +821,10 @@ impl Default for Config {
             subcompaction_min_bytes: crate::compaction::worker::SUBCOMPACTION_MIN_INPUT_BYTES,
             #[cfg(all(test, feature = "std"))]
             fail_one_subcompaction: Arc::new(core::sync::atomic::AtomicBool::new(false)),
+            #[cfg(all(test, feature = "std"))]
+            stop_serial_merge_after_first_item: Arc::new(core::sync::atomic::AtomicBool::new(
+                false,
+            )),
             #[cfg(all(test, feature = "std"))]
             fail_tight_after_first_slice: Arc::new(core::sync::atomic::AtomicBool::new(false)),
             #[cfg(all(test, feature = "std"))]

@@ -744,14 +744,15 @@ fn ranges_from_boundaries(
     ranges
 }
 
-/// Error returned when a sub-compaction is interrupted by the stop signal, so
-/// the parallel caller re-shows the inputs and skips the atomic install instead
-/// of committing a truncated sub-range.
-#[cfg(feature = "std")]
+/// Error returned when a merge is interrupted by the stop signal, so the caller
+/// re-shows the inputs and skips the install instead of committing a truncated
+/// output. The install swaps every input table for what was written, so a
+/// truncated commit drops the unread tail out of the tree; both the serial and
+/// the parallel path refuse for that reason.
 fn cancelled_compaction() -> crate::Error {
     crate::Error::from(crate::io::Error::new(
         crate::io::ErrorKind::Interrupted,
-        "sub-compaction cancelled by stop signal",
+        "compaction cancelled by stop signal",
     ))
 }
 
@@ -1648,6 +1649,10 @@ fn run_subcompaction(
         merge_iter = merge_iter.with_drop_callback(&mut blob_frag_map);
     }
 
+    // Versions that go in and do not come out: read after `produce` to tell a
+    // run that collected history from one that collected none.
+    let gc_balance = merge_iter.gc_balance();
+
     let mut filter_blob_writer = None;
     // Filter-only transform counter (see `TransformCounters::filter`): read
     // after `produce` to decide the install's retention effect.
@@ -1675,6 +1680,7 @@ fn run_subcompaction(
         version_tombstones,
         opts.mvcc_gc_watermark,
         opts.config.comparator.clone(),
+        Arc::clone(&gc_balance),
     );
 
     // block_parallel = false: this sub-compaction already runs on a pool thread,
@@ -1815,6 +1821,9 @@ fn run_subcompaction(
         })?;
     if filter_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
         produced.mark_filter_transformed();
+    }
+    if gc_balance.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+        produced.mark_collected_below_watermark();
     }
     Ok(produced)
 }
@@ -2535,6 +2544,10 @@ fn merge_tables(
         merge_iter = merge_iter.with_transform_marker(Arc::clone(marker));
     }
 
+    // Versions that go in and do not come out: read after `produce` to tell a
+    // run that collected history from one that collected none.
+    let gc_balance = merge_iter.gc_balance();
+
     // This is used by the compaction filter if it wants to write new blobs
     // TODO: the filter should really pipe new blobs into the compaction stream directly,
     // TODO: but that will probably require to change the protocol between filter <-> compaction stream a bit
@@ -2672,6 +2685,7 @@ fn merge_tables(
             zeroing_tombstones,
             opts.mvcc_gc_watermark,
             opts.config.comparator.clone(),
+            Arc::clone(&gc_balance),
         );
 
         for (idx, item) in merge_iter.enumerate() {
@@ -2698,20 +2712,35 @@ fn merge_tables(
                 .rate_limiter
                 .request_interruptible(io_bytes, || opts.stop_signal.is_stopped())
             {
+                // Same reason as the stop check below: the item was not even
+                // written, so committing here would drop it and everything
+                // after it.
                 log::debug!("Stopping amidst compaction because of stop signal (I/O throttle)");
-                return Ok(());
+                return Err(cancelled_compaction());
             }
 
             compactor.write(item)?;
 
-            // NOTE: When stop_signal fires mid-merge, the loop exits early but
-            // compaction proceeds to commit whatever was written so far. The
-            // resulting CompactionResult will report `Merged` even though not
-            // all input items were processed. This is pre-existing behavior:
-            // partial merge output is valid and committed to the version history.
+            // Test-only failpoint: raise the stop signal after the first written
+            // item, so the interrupted-merge path below is reachable without
+            // racing a tree drop against an in-flight compaction.
+            #[cfg(all(test, feature = "std"))]
+            if opts
+                .config
+                .stop_serial_merge_after_first_item
+                .swap(false, core::sync::atomic::Ordering::SeqCst)
+            {
+                opts.stop_signal.send();
+            }
+
+            // Abort, do not produce. The install swaps EVERY input table named
+            // in the payload for this output, so committing a merge that never
+            // read its input to the end drops the unread tail out of the tree
+            // entirely. The parallel path refuses for the same reason; this one
+            // used to commit and call the result `Merged`.
             if idx % 1_000_000 == 0 && opts.stop_signal.is_stopped() {
                 log::debug!("Stopping amidst compaction because of stop signal");
-                return Ok(());
+                return Err(cancelled_compaction());
             }
         }
 
@@ -2771,6 +2800,9 @@ fn merge_tables(
         })?;
     if filter_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
         produce_output.mark_filter_transformed();
+    }
+    if gc_balance.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+        produce_output.mark_collected_below_watermark();
     }
 
     let tables_out = super::flavour::install_merge(

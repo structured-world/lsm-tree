@@ -8,6 +8,89 @@ use crate::{
 use std::sync::Arc;
 use test_log::test;
 
+/// A serial merge stopped part-way must not commit what it wrote.
+///
+/// The install swaps EVERY input table named in the payload for the output, so
+/// a merge that never read its input to the end would drop the unread tail out
+/// of the tree. The parallel path already refuses for exactly this reason; this
+/// pins the serial one.
+#[test]
+fn interrupted_serial_merge_keeps_every_key() -> crate::Result<()> {
+    use core::sync::atomic::Ordering;
+
+    const N: u64 = 64;
+    let key = |i: u64| format!("key_{i:04}");
+
+    let dir = tempfile::tempdir()?;
+    let config = Config::new(
+        &dir,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    // One table per flush below, and no parallel split, so the merge takes the
+    // serial path this test is about.
+    .compaction_threads(1);
+    let failpoint = config.stop_serial_merge_after_first_item.clone();
+    let tree = config.open()?;
+
+    // Two tables, so the compaction has a real merge to perform and a tail to
+    // leave unread once it stops.
+    for i in 0..N {
+        tree.insert(key(i), "v", i);
+    }
+    tree.flush_active_memtable(0)?;
+    for i in N..(2 * N) {
+        tree.insert(key(i), "v", i);
+    }
+    tree.flush_active_memtable(0)?;
+
+    for i in 0..(2 * N) {
+        assert!(
+            tree.get(key(i), crate::SeqNo::MAX)?.is_some(),
+            "precondition: {} is readable before the compaction",
+            key(i),
+        );
+    }
+
+    // Arm: the merge writes one item, then observes the stop signal.
+    failpoint.store(true, Ordering::SeqCst);
+    let result = tree.major_compact(u64::MAX, 0);
+
+    assert!(
+        result.is_err(),
+        "an interrupted merge must refuse, not commit a truncated output",
+    );
+
+    // Whatever the compaction did, every key must still be there.
+    for i in 0..(2 * N) {
+        assert!(
+            tree.get(key(i), crate::SeqNo::MAX)?.is_some(),
+            "{} was lost by the interrupted compaction",
+            key(i),
+        );
+    }
+
+    // The abort leaves the merge's half-written output unfinalized on disk. A
+    // reopen has to sweep it and come back with the same tree, so the refusal
+    // does not trade data loss for an unopenable directory.
+    drop(tree);
+    let reopened = Config::new(
+        &dir,
+        SequenceNumberCounter::default(),
+        SequenceNumberCounter::default(),
+    )
+    .open()?;
+    for i in 0..(2 * N) {
+        assert!(
+            reopened.get(key(i), crate::SeqNo::MAX)?.is_some(),
+            "{} was lost across the reopen after an interrupted compaction",
+            key(i),
+        );
+    }
+
+    Ok(())
+}
+
 /// Shared key count and formatter for the tight-space crash-recovery tests, so
 /// the writer (in `tight_space_crash_and_reopen`) and the reopen assertion loop
 /// always cover the identical key set.
