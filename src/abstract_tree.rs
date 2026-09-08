@@ -463,6 +463,22 @@ pub trait AbstractTree: sealed::Sealed {
     ///
     /// The function may not return a result, if nothing was flushed.
     ///
+    /// `seqno_threshold` is an MVCC GC watermark, not a hint: the flush folds
+    /// away versions below it exactly as a compaction does, and the install
+    /// raises the PERSISTED retention floor
+    /// ([`retention_floor`](Self::retention_floor)) to match. Pass `0` to
+    /// collect nothing.
+    ///
+    /// That floor is not a live gate. Reads keep being answered from the
+    /// retained version and its sealed memtables for as long as the history
+    /// holds them, so the boundary a caller can observe right now is
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno), which is the
+    /// lower of the two. Once history pruning drops that version, or the tree
+    /// is reopened and only the persisted floor survives, a snapshot below the
+    /// watermark yields
+    /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
+    /// rather than a stale or absent answer.
+    ///
     /// # Errors
     ///
     /// Returns `Err` on an I/O error, or on a memtable residence-verification
@@ -799,6 +815,11 @@ pub trait AbstractTree: sealed::Sealed {
     ) -> crate::Result<Option<FlushToTablesResult>>;
 
     /// Atomically registers flushed tables into the tree, removing their associated sealed memtables.
+    ///
+    /// `gc_watermark` must be the same threshold the stream that produced
+    /// `tables` ran with: the install records it as its retention effect, so
+    /// passing a smaller one admits reads whose answer the flush already
+    /// collected. `0` collects nothing and moves no floor.
     ///
     /// # Errors
     ///

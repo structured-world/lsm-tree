@@ -34,6 +34,8 @@ mod persist;
 pub mod recovery;
 pub mod run;
 mod super_version;
+#[cfg(test)]
+mod tests;
 
 pub use blob_file_list::BlobFileList;
 pub use persist::persist_version;
@@ -293,6 +295,25 @@ impl Version {
                 gc_stats: self.gc_stats.clone(),
                 retention_floor: floor,
             }),
+        }
+    }
+
+    /// Same rule as [`Self::with_retention_floor`], in place: reuses the
+    /// allocation when this handle is the sole owner.
+    ///
+    /// The install path always is, because the version it raises the floor on
+    /// was just built by the edit's own mutator, and rebuilding it there would
+    /// throw that fresh allocation away to change one integer. A handle still
+    /// shared with the prior version falls back to the rebuild, which is what
+    /// the shared case has to do regardless.
+    pub(crate) fn set_retention_floor(&mut self, floor: crate::SeqNo) {
+        if floor <= self.retention_floor {
+            return;
+        }
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.retention_floor = floor;
+        } else {
+            *self = self.with_retention_floor(floor);
         }
     }
 
