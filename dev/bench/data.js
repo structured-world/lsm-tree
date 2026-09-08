@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788854142422,
+  "lastUpdate": 1788865144625,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -22014,6 +22014,90 @@ window.BENCHMARK_DATA = {
             "value": 720786.8279119177,
             "unit": "ops/sec",
             "extra": "P50: 1.2us | P99: 5.5us | P99.9: 27.3us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fbd73dfbca261d9d7d9e09039d847aa37a940672",
+          "message": "fix(compaction): keep the newest version below the GC threshold (#631)\n\n## Summary\n\nA historical read could return a missing key for a key that existed,\nsilently, after a reopen. Shipped in v5.8.6.\n\nThe plain-value fold in `CompactionStream` decided by the seqno of the\n**next-older** sibling: when that one was below the GC threshold, the\nrest of the key was drained. So for a key whose versions straddle the\nthreshold, the newest version *below* it was discarded — and that is\nexactly the version a read just above the recorded retention floor\nresolves to. The merge path two branches up already states the safe\nform: both head and peeked must be below the threshold.\n\nThe fold now applies the same condition. Survivors become every version\nat or above the threshold, plus the newest one below it, which makes\n`RetentionEffect::GcBelow(watermark)` a floor that does not promise data\nthe output no longer holds.\n\nThe two other drops in the same fold are gated the same way, for the\nsame reason (see \"Twins in the same fold\").\n\n## Why it was invisible\n\nA compaction output only ever serves reads at or above its own install\nseqno, which is above every data seqno in its input, and reads below it\nare routed to the retained `SuperVersion` and its pre-compaction tables.\nThe fold was sound only in combination with that routing, and nothing\nwrote that down — which is why reading either module alone does not\nreveal the defect.\n\nA reopen removes the routing. The history is seeded at the persisted\nfloor, every read resolves against the latest version, and the floor is\nthe only boundary left. The coupling is now stated at the fold rule\nitself.\n\n## Impact\n\nThe wrong answer is a **missing key**, not `SnapshotBelowRetention`. A\nconsumer cannot distinguish it from a genuine delete, so there is no\nsignal to act on. Anyone reading history on v5.8.6 is exposed.\n\n## Regression test\n\n`tests/gc_fold_keeps_the_readable_version.rs` fails on the unfixed code.\nA key at seqno 2 and 10, `major_compact` at threshold 8 for a recorded\nfloor of 7, read at snapshot 9. It asserts the answer three times:\nbefore the compaction, while the process lives (which passes on the\nunfixed code, confirming the routing argument), and after a reopen,\nwhich is what returned `None`. It also pins the floor boundary itself: a\nread AT the floor is refused, and `floor + 1`, the smallest admitted\nsnapshot, resolves to the newest version below the watermark.\n\nThe test seeds the sequence generator above the data seqnos, as a real\ndeployment has it. With a default counter and hand-assigned insert\nseqnos the install seqno is 0, every read takes the latest version, and\nthe failure appears before the reopen — a shape that misattributes the\nfault and makes the defect look larger than it is.\n\n## Twins in the same fold\n\nThe fold has three arms that drop a version, and only the plain-value\none was stated correctly. The other two were found in review and are\nfixed here, because they are the same defect: each could discard the\nnewest version below the watermark.\n\n**Bottom-level tombstone eviction.** It took the tombstone and every\nversion it shadows with no seqno test at all, so a value at 9 under a\ntombstone at 10 left the output even at threshold 0, where the contract\ncollects nothing. A read at snapshot 10 resolves to that value: the\ntombstone above it is not visible there yet. The gate is now the\ntombstone's own seqno, the same condition the fold states. The\nkey-boundary and end-of-stream arms stay ungated on purpose: a tombstone\nwith no sibling shadows nothing, so dropping it answers every snapshot\nthe way keeping it does.\n\nThat arm also matched `is_tombstone()`, which is true for a weak\ntombstone as well, silently widening eviction to a value type the branch\nit replaced never covered. It matches `Tombstone` again, and the weak\ncase has its own arm.\n\n**Weak-delete annihilation.** It was gated on the older sibling's seqno\nwhile the comment beside it claimed no gate at all. Neither is right: a\nsnapshot between the put and the weak delete resolves to the put, so the\npair may only leave once the delete itself is below the watermark. It is\nnow an arm of its own beside the tombstone case, with the same\ncondition.\n\nTwo new stream tests fail on the pre-review code —\n`..._bottom_level_tombstone_above_threshold_keeps_the_shadowed_value`\nand `..._weak_tombstone_above_threshold_keeps_the_consumed_value` — and\ntheir below-threshold counterparts keep the collecting behaviour under\ntest.\n\n## Tests that encoded the old rule\n\nTheir expectations are corrected in place with the reasoning written\nbeside them, not quietly adjusted.\n\n- `compaction_stream_filter_1` now expects the sixth entry, and\n`compaction_stream_tombstone_overwrite_gc` expects the tombstone a read\nat the threshold resolves to.\n- `compaction_stream_weak_tombstone_evict` and `..._evict_next_value`\nkeep their intent; their watermark moves past the weak delete's own\nseqno, which is what the rule now asks for.\n- `tree_flush_eviction_2`, `_3` and `_4` likewise: each passed a\nwatermark that cleared the value's seqno but not the tombstone's.\n\n## Space cost\n\nMeasured rather than argued, on two fixtures.\n\nPlain values, 20000 keys with five versions each below the threshold,\n`disk_space()` after a major compaction:\n\n| shape | before | after |\n|---|---|---|\n| every key straddles the threshold | 1 107 678 B | 2 080 933 B |\n| every version below the threshold | 985 897 B | 985 897 B |\n\nThe straddle shape is the worst case and the doubling is the whole of\nit: one extra version per key, on a fixture where exactly one version\nsurvived before. The cost is bounded by the number of distinct keys\nwritten inside the retention window, not by write volume.\n\nTombstones, 20000 keys each written once and deleted, `disk_space()`\nafter a major compaction at watermark 500 000:\n\n| shape | before | after |\n|---|---|---|\n| delete above the watermark | 0 B (4 ms) | 1 604 905 B (15 ms) |\n| delete below the watermark | 0 B (3 ms) | 0 B (3 ms) |\n\nThe first row is the defect rather than a cost: the whole dataset left\nthe bottom level although no delete sat below the watermark. The second\nshows full collection is untouched.\n\nThe alternative in the issue, recording the install seqno instead of the\nwatermark, costs nothing on disk but collapses `GcBelow` into\n`DropsData` and gives up watermark-derived retention entirely: every\nhistorical read below the last install would be refused.\n\n## Related\n\n- #633 — a flush runs the same stream with a watermark and collects\nbelow it, but installs its version with `RetentionEffect::Keep`, so the\nfloor is not moved. Same shape as this defect, on the accounting side\nrather than the fold; out of scope here because it lives in the\nversion-install path.\n\n## Testing\n\n`cargo nextest run --workspace` 2649/2649 and `--all-features`\n3300/3300, `cargo test --doc --all-features` 80/80, clippy with `-D\nwarnings` in both feature configurations, `cargo doc --no-deps` 0\nwarnings, no-std check 0 errors, `cargo fmt --check` clean.\n\nCloses #630",
+          "timestamp": "2026-09-08T13:56:23+03:00",
+          "tree_id": "abdd6b9a84137cca76bddda36ba8a4ec7ab5825e",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/fbd73dfbca261d9d7d9e09039d847aa37a940672"
+        },
+        "date": 1788865104019,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "mixed",
+            "value": 136160.55348922074,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 5.4us | P99.9: 8.7us\nthreads: 1 | elapsed: 3.93s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillseq",
+            "value": 4308785.214489712,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.2us | P99.9: 1.6us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1429919.1886890188,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.7us | P99.9: 2.9us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readrandom",
+            "value": 886105.6782125926,
+            "unit": "ops/sec",
+            "extra": "P50: 1.0us | P99: 3.1us | P99.9: 15.1us\nthreads: 1 | elapsed: 0.23s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readseq",
+            "value": 4493750.473809815,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.9us | P99.9: 2.4us\nthreads: 1 | elapsed: 0.04s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 512057.02135903254,
+            "unit": "ops/sec",
+            "extra": "P50: 1.7us | P99: 3.6us | P99.9: 5.0us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 253990.04421762205,
+            "unit": "ops/sec",
+            "extra": "P50: 3.7us | P99: 4.6us | P99.9: 7.2us\nthreads: 1 | elapsed: 0.79s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "overwrite",
+            "value": 1433626.9604445477,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.8us | P99.9: 2.8us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 1265241.1822669187,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 1.4us | P99.9: 2.6us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 721903.4691544058,
+            "unit": "ops/sec",
+            "extra": "P50: 1.2us | P99: 5.4us | P99.9: 28.1us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3"
           }
         ]
       }
