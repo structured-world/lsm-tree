@@ -434,7 +434,25 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                         watcher.on_dropped(&next);
                     }
                     self.note_transform();
-                    self.drain_key(&user_key)?;
+                    let drained = self.drain_key(&user_key)?;
+                    // The boundary tombstone and an all-tombstone tail under it
+                    // are neutral at the bottom level, the same neutrality the
+                    // plain fold excuses: every snapshot that resolved to one of
+                    // them read the key as absent, and reads it absent from
+                    // nothing afterwards.
+                    //
+                    // Off the bottom level it is not neutral, because a lower
+                    // level may hold the version the tombstone was hiding. And
+                    // a value drained under the tombstone is collection at any
+                    // level: the merged result carries the head's seqno, so the
+                    // snapshot that resolved to that value no longer can.
+                    //
+                    // The operands consumed into the result stay counted for the
+                    // same reason, so this settles the tombstone and its tail
+                    // only.
+                    if self.evict_tombstones && drained.all_tombstones {
+                        self.settle(drained.total + 1);
+                    }
                     break;
                 }
             }

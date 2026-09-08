@@ -1316,6 +1316,112 @@ mod merge_operator_tests {
 
         assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
     }
+
+    /// The tombstone a merge fold resolves against is consumed by the fold, and
+    /// at the bottom level that is the same neutrality the plain fold already
+    /// excuses: the output no longer carries the tombstone, and the key reads
+    /// absent for every snapshot that used to resolve to it.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_over_a_bottom_level_tombstone_is_zero() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "a", "", "T",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000)
+            .evict_tombstones(true)
+            .with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    /// Off the bottom level the same fold is not neutral: a lower level may hold
+    /// the version the tombstone was hiding, and dropping the tombstone without
+    /// a floor resurrects it for the snapshots the floor would refuse.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_over_a_tombstone_off_the_bottom_level_is_positive() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "a", "", "T",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000).with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert!(
+            balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+            "off the bottom level a folded-away tombstone is collected history",
+        );
+    }
+
+    /// A value under the tombstone makes the fold collection even at the bottom
+    /// level: a snapshot below the tombstone resolved to that value and no
+    /// longer can, since the merged result carries the head's seqno.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_over_a_tombstone_hiding_a_value_is_positive() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "a", "", "T",
+            "a", "val", "V",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000)
+            .evict_tombstones(true)
+            .with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert!(
+            balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+            "a value under the folded tombstone is collected history",
+        );
+    }
+
+    /// An operand between the head and the tombstone is folded into one result
+    /// carrying the head's seqno, so a snapshot that resolved to that operand
+    /// alone loses it. The tombstone excuse covers the tombstone tail only.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn gc_balance_merge_fold_swallowing_an_operand_over_a_tombstone_is_positive() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op2", "M",
+            "a", "op1", "M",
+            "a", "", "T",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000)
+            .evict_tombstones(true)
+            .with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert!(
+            balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+            "an operand consumed into the merged result is collected history",
+        );
+    }
 }
 
 /// Regression: the "is the peeked entry a different key?" check used a bytewise
