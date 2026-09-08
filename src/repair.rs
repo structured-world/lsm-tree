@@ -644,9 +644,7 @@ fn repair_recover_params(
     params.encryption.clone_from(&config.encryption);
     #[cfg(zstd_any)]
     {
-        params
-            .zstd_dictionaries
-            .clone_from(&config.zstd_dictionaries);
+        params.zstd_dictionaries = config.current_zstd_dictionaries();
     }
     params
 }

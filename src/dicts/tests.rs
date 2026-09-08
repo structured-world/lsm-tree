@@ -4,7 +4,7 @@ use test_log::test;
 
 fn store() -> (tempfile::TempDir, Arc<dyn Fs>, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let fs: Arc<dyn Fs> = Arc::new(StdFs::default());
+    let fs: Arc<dyn Fs> = Arc::new(StdFs);
     let folder = folder(dir.path());
     (dir, fs, folder)
 }
@@ -79,7 +79,7 @@ fn a_flipped_bit_is_caught_because_the_name_is_the_digest() -> crate::Result<()>
     // must refuse rather than hand the bytes back.
     let path = folder.join(dict.id().to_string());
     let mut raw = std::fs::read(&path).unwrap();
-    raw[0] ^= 0x01;
+    *raw.first_mut().unwrap() ^= 0x01;
     std::fs::write(&path, &raw).unwrap();
 
     let err = read_one(&*fs, &folder, dict.id()).unwrap_err();
@@ -101,7 +101,8 @@ fn a_truncated_dictionary_is_caught_the_same_way() -> crate::Result<()> {
 
     let path = folder.join(dict.id().to_string());
     let raw = std::fs::read(&path).unwrap();
-    std::fs::write(&path, &raw[..raw.len() / 2]).unwrap();
+    let half = raw.get(..raw.len() / 2).unwrap();
+    std::fs::write(&path, half).unwrap();
 
     assert!(matches!(
         read_one(&*fs, &folder, dict.id()),
@@ -111,30 +112,68 @@ fn a_truncated_dictionary_is_caught_the_same_way() -> crate::Result<()> {
 }
 
 #[test]
-fn a_set_reads_back_every_id_it_was_asked_for() -> crate::Result<()> {
+fn the_scan_loads_every_dictionary_the_folder_holds() -> crate::Result<()> {
     let (_dir, fs, folder) = store();
     let a = ZstdDictionary::new(b"aaaaaaaaaaaaaaaaaaaa");
     let b = ZstdDictionary::new(b"bbbbbbbbbbbbbbbbbbbb");
     write(&*fs, &folder, &a, SyncMode::Normal)?;
     write(&*fs, &folder, &b, SyncMode::Normal)?;
 
-    let set = read_set(&*fs, &folder, [a.id(), b.id()])?;
+    let set = read_all(&*fs, &folder)?;
 
     assert_eq!(set.len(), 2);
-    assert_eq!(set.get(a.id()).map(|d| d.raw()), Some(a.raw()));
-    assert_eq!(set.get(b.id()).map(|d| d.raw()), Some(b.raw()));
+    assert_eq!(
+        set.get(a.id()).map(|d| d.raw().to_vec()),
+        Some(a.raw().to_vec())
+    );
+    assert_eq!(
+        set.get(b.id()).map(|d| d.raw().to_vec()),
+        Some(b.raw().to_vec())
+    );
     Ok(())
 }
 
 #[test]
-fn a_set_missing_one_id_fails_rather_than_loading_partially() -> crate::Result<()> {
+fn the_scan_of_an_empty_folder_is_an_empty_set() -> crate::Result<()> {
     let (_dir, fs, folder) = store();
-    let a = ZstdDictionary::new(b"aaaaaaaaaaaaaaaaaaaa");
-    write(&*fs, &folder, &a, SyncMode::Normal)?;
+    assert!(read_all(&*fs, &folder)?.is_empty());
 
-    // A version referencing a dictionary the store lost must not open with the
-    // rest: its tables would fail on the first read instead of at open.
-    assert!(read_set(&*fs, &folder, [a.id(), 999_999]).is_err());
+    fs.create_dir_all(&folder)?;
+    assert!(read_all(&*fs, &folder)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn the_scan_fails_on_a_corrupt_dictionary_rather_than_skipping_it() -> crate::Result<()> {
+    let (_dir, fs, folder) = store();
+    let good = ZstdDictionary::new(b"aaaaaaaaaaaaaaaaaaaa");
+    let bad = ZstdDictionary::new(b"bbbbbbbbbbbbbbbbbbbb");
+    write(&*fs, &folder, &good, SyncMode::Normal)?;
+    write(&*fs, &folder, &bad, SyncMode::Normal)?;
+
+    let path = folder.join(bad.id().to_string());
+    let mut raw = std::fs::read(&path).unwrap();
+    *raw.first_mut().unwrap() ^= 0x01;
+    std::fs::write(&path, &raw).unwrap();
+
+    // Skipping it would turn a detectable corruption into "unknown dictionary
+    // id" on the first table that needs it, far from the cause.
+    assert!(read_all(&*fs, &folder).is_err());
+    Ok(())
+}
+
+#[test]
+fn the_scan_ignores_files_the_engine_does_not_own() -> crate::Result<()> {
+    let (_dir, fs, folder) = store();
+    let dict = ZstdDictionary::new(b"content");
+    write(&*fs, &folder, &dict, SyncMode::Normal)?;
+    std::fs::write(folder.join("notes.txt"), b"mine").unwrap();
+    std::fs::write(folder.join("7.tmp"), b"unpublished").unwrap();
+
+    let set = read_all(&*fs, &folder)?;
+
+    assert_eq!(set.len(), 1, "only the published dictionary is loaded");
+    assert!(set.get(dict.id()).is_some());
     Ok(())
 }
 

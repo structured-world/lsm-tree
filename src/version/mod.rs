@@ -315,6 +315,27 @@ impl Version {
         &self.dicts
     }
 
+    /// The dictionary ids this version's tables actually reference, ascending.
+    ///
+    /// The REGISTERED set ([`Self::dicts`]) is what the tree owes a reader; this
+    /// is what it still needs. They diverge once a compaction rewrites the last
+    /// table that used a dictionary, which is exactly when the file becomes
+    /// collectable.
+    #[must_use]
+    pub fn referenced_dicts(&self) -> Vec<crate::file::DictId> {
+        let mut ids: Vec<crate::file::DictId> = self
+            .iter_tables()
+            .filter_map(|table| match table.metadata.data_block_compression {
+                #[cfg(zstd_any)]
+                crate::CompressionType::ZstdDict { dict_id, .. } => Some(dict_id),
+                _ => None,
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
     /// Registers `id` with this version, returning the extended version.
     ///
     /// Idempotent: an id already present returns this version unchanged, since
@@ -479,7 +500,7 @@ impl Version {
 
         // The recovered set is what the manifest recorded, so it is adopted
         // whole rather than folded in one id at a time.
-        Ok(recovered.with_dicts(recovery.dicts.clone()))
+        Ok(recovered.with_dicts(recovery.dicts))
     }
 
     /// Creates a new pre-populated version.

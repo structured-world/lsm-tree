@@ -956,9 +956,7 @@ impl AbstractTree for Tree {
                 params.encryption.clone_from(&self.config.encryption);
                 #[cfg(zstd_any)]
                 {
-                    params
-                        .zstd_dictionaries
-                        .clone_from(&self.config.zstd_dictionaries);
+                    params.zstd_dictionaries = self.config.current_zstd_dictionaries();
                 }
                 #[cfg(feature = "metrics")]
                 {
@@ -1874,6 +1872,14 @@ impl Tree {
         let folder = crate::dicts::folder(&self.config.path);
         crate::dicts::write(&*self.config.fs, &folder, &dict, self.config.sync_mode)?;
 
+        // Resolvable from this moment on rather than from the next open: the
+        // tables this registration was made for are written right after it, and
+        // reading them back needs the dictionary in the LIVE set.
+        let dicts = self.config.current_zstd_dictionaries().with(dict);
+        self.config
+            .zstd_dictionaries
+            .store(alloc::sync::Arc::new(dicts));
+
         let mut version_lock = self.version_history.write();
         if version_lock
             .latest_version_ref()
@@ -1901,11 +1907,82 @@ impl Tree {
         )
     }
 
-    /// The dictionaries this tree can decompress against.
+    /// The dictionaries this tree can decompress against, as of this call.
     #[cfg(zstd_any)]
     #[must_use]
-    pub fn zstd_dictionaries(&self) -> &crate::compression::ZstdDictionaries {
-        &self.config.zstd_dictionaries
+    pub fn zstd_dictionaries(&self) -> crate::compression::ZstdDictionaries {
+        self.config.current_zstd_dictionaries()
+    }
+
+    /// Drops every dictionary no table references any more, returning how many
+    /// files were removed.
+    ///
+    /// Two stages, because "no table uses it" and "no version mentions it" are
+    /// different questions and only the second makes a file safe to unlink:
+    ///
+    /// 1. The latest version stops REGISTERING an id once none of its tables
+    ///    is compressed against it. That is the version edit; it costs an
+    ///    install and nothing on disk.
+    /// 2. The file goes only when no RETAINED version registers the id any
+    ///    more. A version still in the history can still be read from, and its
+    ///    tables would fail to open without their dictionary.
+    ///
+    /// So the file survives until the versions that named it have been pruned,
+    /// which is the same lifetime rule the tables themselves follow.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the version install and the store's removal failures.
+    #[cfg(zstd_any)]
+    pub fn collect_unreferenced_dictionaries(&self) -> crate::Result<usize> {
+        let mut version_lock = self.version_history.write();
+
+        // Stage 1: unregister what the latest version's tables no longer use.
+        let latest = version_lock.latest_version_ref().version.clone();
+        let referenced = latest.referenced_dicts();
+        let stale: Vec<crate::file::DictId> = latest
+            .dicts()
+            .iter()
+            .copied()
+            .filter(|id| !referenced.contains(id))
+            .collect();
+
+        if !stale.is_empty() {
+            version_lock.upgrade_version(
+                &self.config.path,
+                |current| {
+                    let mut copy = current.clone();
+                    for id in &stale {
+                        copy.version = copy.version.without_dict(*id);
+                    }
+                    Ok(copy)
+                },
+                &self.config.seqno,
+                &self.config.visible_seqno,
+                &*self.config.fs,
+                self.0.runtime_config.load_full(),
+                self.0.config.encryption.clone(),
+                // Dropping a dictionary nothing reads takes away no version a
+                // snapshot could observe: the tables that used it are already
+                // gone, and their disappearance is what raised the floor.
+                crate::version::RetentionEffect::Keep,
+            )?;
+        }
+
+        // Stage 2: unlink the files no retained version names any more.
+        let still_owed = version_lock.registered_dicts();
+        drop(version_lock);
+
+        let folder = crate::dicts::folder(&self.config.path);
+        let mut removed = 0;
+        for id in crate::dicts::read_all(&*self.config.fs, &folder)?.ids() {
+            if still_owed.contains(&id) {
+                continue;
+            }
+            crate::dicts::remove(&*self.config.fs, &folder, id, self.config.sync_mode)?;
+            removed += 1;
+        }
+        Ok(removed)
     }
 
     /// Maps a raw internal entry to its change-data-capture event, routing
@@ -4115,7 +4192,7 @@ impl Tree {
             if let Some(supplied) = config.zstd_dictionary.clone() {
                 dicts = dicts.with(supplied);
             }
-            config.zstd_dictionaries = dicts;
+            config.zstd_dictionaries.store(Arc::new(dicts));
         }
 
         // Check for old version
@@ -5422,9 +5499,7 @@ impl Tree {
                         params.encryption.clone_from(&config.encryption);
                         #[cfg(zstd_any)]
                         {
-                            params
-                                .zstd_dictionaries
-                                .clone_from(&config.zstd_dictionaries);
+                            params.zstd_dictionaries = config.current_zstd_dictionaries();
                         }
                         #[cfg(feature = "metrics")]
                         {

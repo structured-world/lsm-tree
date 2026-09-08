@@ -30,7 +30,7 @@ use std::io::{Read, Write};
 
 /// The dictionary folder of the tree rooted at `tree_path`.
 #[must_use]
-pub(crate) fn folder(tree_path: &Path) -> PathBuf {
+pub fn folder(tree_path: &Path) -> PathBuf {
     tree_path.join(DICTS_FOLDER)
 }
 
@@ -51,7 +51,7 @@ fn path_of(folder: &Path, id: DictId) -> PathBuf {
 /// # Errors
 ///
 /// Propagates the create / write / sync / rename failures of the backend.
-pub(crate) fn write(
+pub fn write(
     fs: &dyn Fs,
     folder: &Path,
     dict: &ZstdDictionary,
@@ -102,7 +102,7 @@ pub(crate) fn write(
 /// id they are filed under, which is this store's integrity check. Otherwise
 /// propagates the open / read failures of the backend, including `NotFound`
 /// when the tree does not hold that dictionary.
-pub(crate) fn read_one(fs: &dyn Fs, folder: &Path, id: DictId) -> crate::Result<ZstdDictionary> {
+pub fn read_one(fs: &dyn Fs, folder: &Path, id: DictId) -> crate::Result<ZstdDictionary> {
     let mut file = fs.open(&path_of(folder, id), &FsOpenOptions::new().read(true))?;
     let mut raw = Vec::new();
     file.read_to_end(&mut raw)?;
@@ -119,25 +119,6 @@ pub(crate) fn read_one(fs: &dyn Fs, folder: &Path, id: DictId) -> crate::Result<
     Ok(dict)
 }
 
-/// Loads every dictionary in `ids` into a set.
-///
-/// # Errors
-///
-/// Propagates [`read_one`]'s failures, so a missing or corrupt dictionary that
-/// a version references fails the open rather than yielding a tree whose tables
-/// cannot be decompressed.
-pub(crate) fn read_set(
-    fs: &dyn Fs,
-    folder: &Path,
-    ids: impl IntoIterator<Item = DictId>,
-) -> crate::Result<ZstdDictionaries> {
-    let mut set = ZstdDictionaries::new();
-    for id in ids {
-        set = set.with(Arc::new(read_one(fs, folder, id)?));
-    }
-    Ok(set)
-}
-
 /// Loads every dictionary the folder holds.
 ///
 /// The READ side scans rather than following the version's id list, so a
@@ -152,7 +133,7 @@ pub(crate) fn read_set(
 /// a corrupt dictionary fails the open rather than silently dropping out of the
 /// set, which would turn into "unknown dictionary id" on the first table that
 /// needs it.
-pub(crate) fn read_all(fs: &dyn Fs, folder: &Path) -> crate::Result<ZstdDictionaries> {
+pub fn read_all(fs: &dyn Fs, folder: &Path) -> crate::Result<ZstdDictionaries> {
     if !fs.exists(folder)? {
         return Ok(ZstdDictionaries::new());
     }
@@ -171,12 +152,7 @@ pub(crate) fn read_all(fs: &dyn Fs, folder: &Path) -> crate::Result<ZstdDictiona
 /// # Errors
 ///
 /// Propagates the backend's removal failures other than `NotFound`.
-pub(crate) fn remove(
-    fs: &dyn Fs,
-    folder: &Path,
-    id: DictId,
-    sync_mode: SyncMode,
-) -> crate::Result<()> {
+pub fn remove(fs: &dyn Fs, folder: &Path, id: DictId, sync_mode: SyncMode) -> crate::Result<()> {
     match fs.remove_file(&path_of(folder, id)) {
         Ok(()) => {}
         Err(e) if e.kind() == crate::io::ErrorKind::NotFound => return Ok(()),
@@ -197,7 +173,7 @@ pub(crate) fn remove(
 /// Propagates the directory read failure. A file that cannot be removed is
 /// logged and skipped rather than failing the open: a leftover temp costs
 /// space, not correctness.
-pub(crate) fn sweep_temps(fs: &dyn Fs, folder: &Path) -> crate::Result<()> {
+pub fn sweep_temps(fs: &dyn Fs, folder: &Path) -> crate::Result<()> {
     if !fs.exists(folder)? {
         return Ok(());
     }

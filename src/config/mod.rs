@@ -712,8 +712,13 @@ pub struct Config {
     /// recorded against this set rather than being compared to a single
     /// configured dictionary, which is what lets one tree hold data written
     /// under more than one.
+    ///
+    /// Shared and swappable, because registration happens on a LIVE tree: a
+    /// plain field would leave a freshly registered dictionary unresolvable
+    /// until the next open, so the very tables the registration was made for
+    /// would fail to read.
     #[cfg(zstd_any)]
-    pub(crate) zstd_dictionaries: crate::compression::ZstdDictionaries,
+    pub(crate) zstd_dictionaries: Arc<arc_swap::ArcSwap<crate::compression::ZstdDictionaries>>,
 
     /// The global sequence number generator.
     ///
@@ -815,7 +820,9 @@ impl Default for Config {
             #[cfg(zstd_any)]
             zstd_dictionary: None,
             #[cfg(zstd_any)]
-            zstd_dictionaries: crate::compression::ZstdDictionaries::new(),
+            zstd_dictionaries: Arc::new(arc_swap::ArcSwap::from_pointee(
+                crate::compression::ZstdDictionaries::new(),
+            )),
 
             comparator: comparator::default_comparator(),
             encryption: None,
@@ -986,6 +993,16 @@ impl Config {
         } else {
             AnyTree::Standard(Tree::open(self)?)
         })
+    }
+
+    /// A snapshot of the dictionaries the tree can currently decompress
+    /// against.
+    ///
+    /// One load per table open, which is where the set is needed; the returned
+    /// value is a handle (one `Arc`), not a copy of the dictionaries.
+    #[cfg(zstd_any)]
+    pub(crate) fn current_zstd_dictionaries(&self) -> crate::compression::ZstdDictionaries {
+        self.zstd_dictionaries.load().as_ref().clone()
     }
 
     /// Validates that every `ZstdDict` entry in compression policies references

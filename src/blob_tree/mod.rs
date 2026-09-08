@@ -1253,9 +1253,7 @@ impl AbstractTree for BlobTree {
                 params.encryption.clone_from(&self.index.config.encryption);
                 #[cfg(zstd_any)]
                 {
-                    params
-                        .zstd_dictionaries
-                        .clone_from(&self.index.config.zstd_dictionaries);
+                    params.zstd_dictionaries = self.index.config.current_zstd_dictionaries();
                 }
                 #[cfg(feature = "metrics")]
                 {

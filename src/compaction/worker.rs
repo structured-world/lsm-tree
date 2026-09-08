@@ -2125,9 +2125,7 @@ fn run_merge_on_read_relocation(
         params.encryption.clone_from(&opts.config.encryption);
         #[cfg(zstd_any)]
         {
-            params
-                .zstd_dictionaries
-                .clone_from(&opts.config.zstd_dictionaries);
+            params.zstd_dictionaries = opts.config.current_zstd_dictionaries();
         }
         #[cfg(feature = "metrics")]
         {

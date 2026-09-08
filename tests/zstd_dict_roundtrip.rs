@@ -732,6 +732,127 @@ mod zstd_dict {
     }
 
     #[test]
+    fn a_dictionary_still_in_use_is_never_collected() -> lsm_tree::Result<()> {
+        // The direction that matters: collection must not take a dictionary
+        // the tables still need, or the tree loses the ability to read itself.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+
+        let tree = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(compression))
+            .zstd_dictionary(Some(Arc::new(dict)))
+            .open()?;
+
+        for i in 0u32..100 {
+            let key = format!("key-{i:05}");
+            let val = format!("value-{i:05}-padding-to-make-it-longer");
+            tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+        }
+        tree.flush_active_memtable(0)?;
+
+        let lsm_tree::AnyTree::Standard(standard) = &tree else {
+            panic!("a standard tree");
+        };
+        assert_eq!(
+            standard.collect_unreferenced_dictionaries()?,
+            0,
+            "the dictionary every table is compressed against is still referenced",
+        );
+
+        for i in 0u32..100 {
+            let key = format!("key-{i:05}");
+            assert!(
+                tree.get(key.as_bytes(), lsm_tree::MAX_SEQNO)?.is_some(),
+                "the tree must still read itself after a collection pass",
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_dictionary_no_table_uses_is_collected() -> lsm_tree::Result<()> {
+        // Write under the dictionary, then rewrite every table WITHOUT it: the
+        // dictionary becomes dead weight and the tree should stop carrying it.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let dict_id = dict.id();
+        let compression = CompressionType::zstd_dict(3, dict_id)?;
+
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(compression))
+                .zstd_dictionary(Some(Arc::new(dict)))
+                .open()?;
+            for i in 0u32..100 {
+                let key = format!("key-{i:05}");
+                tree.insert(
+                    key.as_bytes(),
+                    b"value-written-under-the-dictionary",
+                    i.into(),
+                );
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        // The file is there while a table references it.
+        assert!(dir.path().join("dicts").join(dict_id.to_string()).exists());
+
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(CompressionType::None))
+                .open()?;
+            // Rewrite everything under the no-dictionary policy.
+            tree.major_compact(u64::MAX, 0)?;
+
+            let lsm_tree::AnyTree::Standard(standard) = &tree else {
+                panic!("a standard tree");
+            };
+
+            // Stage 1 only: the latest version stops registering the id, but
+            // the version that named it is STILL RETAINED and can still be read
+            // from, so unlinking the file now would break exactly that read.
+            assert_eq!(
+                standard.collect_unreferenced_dictionaries()?,
+                0,
+                "a dictionary a retained version still names is not unlinked",
+            );
+            assert!(
+                dir.path().join("dicts").join(dict_id.to_string()).exists(),
+                "its file survives while a retained version names it",
+            );
+        }
+
+        // Stage 2: after a reopen the history is one version, and that version
+        // no longer registers the id, so the file is finally collectable.
+        let tree = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(CompressionType::None))
+            .open()?;
+        let lsm_tree::AnyTree::Standard(standard) = &tree else {
+            panic!("a standard tree");
+        };
+        assert_eq!(
+            standard.collect_unreferenced_dictionaries()?,
+            1,
+            "the dictionary no version names any more is collected",
+        );
+        assert!(
+            !dir.path().join("dicts").join(dict_id.to_string()).exists(),
+            "its file is gone",
+        );
+
+        // And the data is still readable: it was rewritten, not lost.
+        for i in 0u32..100 {
+            let key = format!("key-{i:05}");
+            assert_eq!(
+                tree.get(key.as_bytes(), lsm_tree::MAX_SEQNO)?.as_deref(),
+                Some(b"value-written-under-the-dictionary".as_slice()),
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn a_table_naming_a_dictionary_the_tree_lost_reports_that_id() -> lsm_tree::Result<()> {
         // The other direction: when the bytes genuinely are not there, the
         // failure has to name the id the table asked for, so an operator can
