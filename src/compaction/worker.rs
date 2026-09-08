@@ -1648,6 +1648,11 @@ fn run_subcompaction(
         merge_iter = merge_iter.with_drop_callback(&mut blob_frag_map);
     }
 
+    // Watermark-driven drop counter: read after `produce` to tell a run that
+    // collected history from one that collected none.
+    let gc_marker = Arc::new(portable_atomic::AtomicU64::new(0));
+    let merge_iter = merge_iter.with_gc_marker(Arc::clone(&gc_marker));
+
     let mut filter_blob_writer = None;
     // Filter-only transform counter (see `TransformCounters::filter`): read
     // after `produce` to decide the install's retention effect.
@@ -1815,6 +1820,9 @@ fn run_subcompaction(
         })?;
     if filter_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
         produced.mark_filter_transformed();
+    }
+    if gc_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+        produced.mark_collected_below_watermark();
     }
     Ok(produced)
 }
@@ -2535,6 +2543,11 @@ fn merge_tables(
         merge_iter = merge_iter.with_transform_marker(Arc::clone(marker));
     }
 
+    // Watermark-driven drop counter: read after `produce` to tell a run that
+    // collected history from one that collected none.
+    let gc_marker = Arc::new(portable_atomic::AtomicU64::new(0));
+    let merge_iter = merge_iter.with_gc_marker(Arc::clone(&gc_marker));
+
     // This is used by the compaction filter if it wants to write new blobs
     // TODO: the filter should really pipe new blobs into the compaction stream directly,
     // TODO: but that will probably require to change the protocol between filter <-> compaction stream a bit
@@ -2771,6 +2784,9 @@ fn merge_tables(
         })?;
     if filter_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
         produce_output.mark_filter_transformed();
+    }
+    if gc_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+        produce_output.mark_collected_below_watermark();
     }
 
     let tables_out = super::flavour::install_merge(

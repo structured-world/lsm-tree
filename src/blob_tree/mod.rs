@@ -1271,6 +1271,7 @@ impl AbstractTree for BlobTree {
         frag_map: Option<FragmentationMap>,
         sealed_memtables_to_delete: &[MemtableId],
         gc_watermark: SeqNo,
+        collected_below_watermark: bool,
     ) -> crate::Result<()> {
         self.index.register_tables(
             tables,
@@ -1278,6 +1279,7 @@ impl AbstractTree for BlobTree {
             frag_map,
             sealed_memtables_to_delete,
             gc_watermark,
+            collected_below_watermark,
         )
     }
 

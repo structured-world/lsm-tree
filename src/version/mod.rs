@@ -18,16 +18,9 @@ pub mod edit_log;
 // (one missing-module error per call site × N call sites vs the
 // existing std-only call sites failing to compile on their own
 // merits). The `no_std-check` job's metric is "error count must
-// not increase", and adding a feature gate here increases it.
-//
-// Migration plan: when the surrounding `version` submodules
-// (`recovery`, `persist`, `super_version`) are themselves ported
-// to `crate::io` traits + `crate::path` (tracked in the no-std
-// epic #274 with PR #311 / #347 as the first prerequisite),
-// `framing` gets migrated in the same pass so the whole
-// directory transitions to no-std together. See
-// `.github/workflows/coordinode-ci.yml` no-std-check job for the
-// progress meter.
+// not increase", and adding a feature gate here increases it. So
+// gating `framing` only pays off once its callers no longer need
+// `std::io` either.
 mod framing;
 mod optimize;
 mod persist;
@@ -961,10 +954,6 @@ impl Version {
         //
 
         writer.start("format_version")?;
-        // V5 is currently pre-release (no published binary writes it yet),
-        // so the manifest layout under V5 may still be amended in-place.
-        // Once V5 ships, ANY on-disk byte change to the manifest under
-        // V5 must bump FormatVersion to V6. Policy tracked in #351.
         writer.write_u8(FormatVersion::V5.into())?;
 
         writer.start("crate_version")?;

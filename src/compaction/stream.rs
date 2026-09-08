@@ -100,6 +100,17 @@ pub struct CompactionStream<'a, I: Iterator<Item = Item>, F: StreamFilter = NoFi
     /// the same counter the filter adapter ticks. Obsolete-version drops do
     /// NOT tick: the newer version shadowing them lives in the output.
     transform_marker: Option<Arc<portable_atomic::AtomicU64>>,
+
+    /// Ticked whenever the watermark is the reason a version leaves the
+    /// output: the plain fold's drain, a merge fold below the watermark, a
+    /// bottom-level tombstone and what it shadows, a weak-delete
+    /// annihilation. It answers the install's question, which neither counter
+    /// above can: did this run collect any history at all? A run that
+    /// collected none must not raise the retention floor, or it refuses
+    /// snapshots whose data is still there. An empty output is not that
+    /// signal -- a watermark above every version collects the lot and writes
+    /// no table.
+    gc_marker: Option<Arc<portable_atomic::AtomicU64>>,
 }
 
 impl<I: Iterator<Item = Item>> CompactionStream<'_, I, NoFilter> {
@@ -123,6 +134,7 @@ impl<I: Iterator<Item = Item>> CompactionStream<'_, I, NoFilter> {
             rt_idx: 0,
             rt_sorted: false,
             transform_marker: None,
+            gc_marker: None,
         }
     }
 }
@@ -145,6 +157,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
             rt_idx: self.rt_idx,
             rt_sorted: self.rt_sorted,
             transform_marker: self.transform_marker,
+            gc_marker: self.gc_marker,
         }
     }
 
@@ -158,6 +171,15 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
     #[must_use]
     pub fn with_transform_marker(mut self, marker: Arc<portable_atomic::AtomicU64>) -> Self {
         self.transform_marker = Some(marker);
+        self
+    }
+
+    /// Wires the counter of watermark-driven drops (see the `gc_marker`
+    /// field), which the install reads to tell a run that collected history
+    /// from one that collected none.
+    #[must_use]
+    pub fn with_gc_marker(mut self, marker: Arc<portable_atomic::AtomicU64>) -> Self {
+        self.gc_marker = Some(marker);
         self
     }
 
@@ -333,6 +355,9 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                             watcher.on_dropped(&next);
                         }
                         self.note_transform();
+                        // Applied range tombstones are strictly below the
+                        // watermark, so a drop they cause is collected history.
+                        self.note_collected();
                     } else {
                         base_value = Some(next.value);
                     }
@@ -369,6 +394,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                     watcher.on_dropped(e);
                 }
                 self.note_transform();
+                self.note_collected();
             }
             !covered
         });
@@ -410,8 +436,23 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
         }
     }
 
+    /// Records that the watermark is the reason a version left the output
+    /// (see the `gc_marker` field).
+    fn note_collected(&self) {
+        if let Some(marker) = &self.gc_marker {
+            marker.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     /// Drains the remaining versions of the given key.
+    ///
+    /// Every arm that calls this reached it because the head sits below the
+    /// watermark, so anything drained here is collected history and the
+    /// counter is ticked from this one place rather than at each arm. A lone
+    /// entry drains nothing and ticks nothing, which is what the merge fold's
+    /// single-operand paths need.
     fn drain_key(&mut self, key: &UserKey) -> crate::Result<()> {
+        let mut drained = false;
         loop {
             let Some(next) = self.inner.next_if(|kv| {
                 if let Ok(kv) = kv {
@@ -426,10 +467,14 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                     true
                 }
             }) else {
+                if drained {
+                    self.note_collected();
+                }
                 return Ok(());
             };
 
             next?;
+            drained = true;
         }
     }
 }
@@ -566,6 +611,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                                     watcher.on_dropped(&merged);
                                 }
                                 self.note_transform();
+                                self.note_collected();
                                 continue;
                             }
                             // Skip zeroing for partial merges (MergeOperand) to avoid duplicate keys
@@ -624,6 +670,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                     watcher.on_dropped(&head);
                 }
                 self.note_transform();
+                self.note_collected();
                 continue;
             }
 

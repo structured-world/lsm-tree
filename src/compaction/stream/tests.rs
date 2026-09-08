@@ -1300,3 +1300,80 @@ fn compaction_stream_custom_comparator_weak_tombstone_not_annihilated_across_key
     iter_closed!(iter);
     Ok(())
 }
+
+/// Runs the stream to exhaustion and reports how many watermark-driven drops
+/// it counted.
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn collected_count(vec: &[InternalValue], gc_threshold: u64) -> u64 {
+    let marker = Arc::new(portable_atomic::AtomicU64::new(0));
+    let iter = vec.iter().cloned().map(Ok);
+    let iter = CompactionStream::new(iter, gc_threshold).with_gc_marker(Arc::clone(&marker));
+    for item in iter {
+        item.expect("stream must not error");
+    }
+    marker.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn the_gc_marker_stays_zero_when_the_watermark_collects_nothing() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "new", "V",
+      "a", "old", "V",
+    ];
+
+    // Threshold 998 leaves both versions at or above the watermark, so the
+    // fold keeps them and nothing is collected.
+    assert_eq!(collected_count(&vec, 998), 0);
+}
+
+#[test]
+fn the_gc_marker_stays_zero_for_one_version_per_key() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "va", "V",
+      "b", "vb", "V",
+    ];
+
+    // Nothing to fold at any watermark: each key has a single version, so a
+    // run over this input must not claim it collected history.
+    assert_eq!(collected_count(&vec, 1_000), 0);
+    assert_eq!(collected_count(&vec, 0), 0);
+}
+
+#[test]
+fn the_gc_marker_counts_a_version_the_watermark_dropped() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "new", "V",
+      "a", "old", "V",
+    ];
+
+    // Threshold 1000 puts both below the watermark, so the older one is
+    // collected and the run has to say so.
+    assert_eq!(collected_count(&vec, 1_000), 1);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn the_gc_marker_ignores_a_lone_tombstone_the_bottom_level_drops() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "T",
+      "b", "vb", "V",
+    ];
+
+    let marker = Arc::new(portable_atomic::AtomicU64::new(0));
+    let iter = vec.iter().cloned().map(Ok);
+    let iter = CompactionStream::new(iter, 0)
+        .evict_tombstones(true)
+        .with_gc_marker(Arc::clone(&marker));
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    // The tombstone shadows nothing, so dropping it answers every snapshot the
+    // way keeping it would. That is not collected history and must not raise a
+    // floor, least of all at a watermark of 0.
+    assert_eq!(marker.load(core::sync::atomic::Ordering::Relaxed), 0);
+}

@@ -543,10 +543,15 @@ pub trait AbstractTree: sealed::Sealed {
                 .collect::<Vec<_>>(),
             self.tree_config().comparator.clone(),
         );
+        // Counts the versions the watermark drops, so the install can tell a
+        // flush that collected history from one that collected none and only
+        // raise the retention floor for the former.
+        let gc_marker = alloc::sync::Arc::new(portable_atomic::AtomicU64::new(0));
         // RT suppression is not needed here: flush writes both entries and RTs
         // to the output tables. Suppression happens at read time, not write time.
         let stream = CompactionStream::new(merger, seqno_threshold)
-            .with_merge_operator(self.tree_config().merge_operator.clone());
+            .with_merge_operator(self.tree_config().merge_operator.clone())
+            .with_gc_marker(alloc::sync::Arc::clone(&gc_marker));
 
         drop(version_history);
 
@@ -572,6 +577,7 @@ pub trait AbstractTree: sealed::Sealed {
                 None,
                 &sealed_ids,
                 seqno_threshold,
+                gc_marker.load(core::sync::atomic::Ordering::Relaxed) > 0,
             )?;
         }
 
@@ -817,9 +823,11 @@ pub trait AbstractTree: sealed::Sealed {
     /// Atomically registers flushed tables into the tree, removing their associated sealed memtables.
     ///
     /// `gc_watermark` must be the same threshold the stream that produced
-    /// `tables` ran with: the install records it as its retention effect, so
-    /// passing a smaller one admits reads whose answer the flush already
-    /// collected. `0` collects nothing and moves no floor.
+    /// `tables` ran with, and `collected_below_watermark` whether that stream
+    /// actually dropped a version because of it. Together they are the
+    /// install's retention effect: understating either admits reads whose
+    /// answer the flush already collected, overstating `collected_below_watermark`
+    /// refuses reads whose data is still on disk.
     ///
     /// # Errors
     ///
@@ -831,6 +839,7 @@ pub trait AbstractTree: sealed::Sealed {
         frag_map: Option<crate::blob_tree::FragmentationMap>,
         sealed_memtables_to_delete: &[crate::tree::inner::MemtableId],
         gc_watermark: SeqNo,
+        collected_below_watermark: bool,
     ) -> crate::Result<()>;
 
     /// Clears the active memtable atomically.

@@ -125,6 +125,159 @@ fn a_flush_that_collects_below_the_watermark_refuses_reads_below_it_after_a_reop
 }
 
 #[test]
+fn a_flush_that_collects_nothing_leaves_the_floor_alone() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let open = || -> lsm_tree::Result<lsm_tree::AnyTree> {
+        Config::new(
+            dir.path(),
+            SequenceNumberCounter::new(100),
+            SequenceNumberCounter::new(100),
+        )
+        .open()
+    };
+
+    let tree = open()?;
+
+    // One version per key: there is no history to fold at any watermark, so
+    // this flush takes nothing away from any snapshot.
+    tree.insert("a", "va", 2);
+    tree.insert("b", "vb", 3);
+
+    tree.flush_active_memtable(50)?;
+
+    assert_eq!(
+        tree.retention_floor(),
+        0,
+        "a flush that collected nothing must not claim a floor",
+    );
+
+    drop(tree);
+    let reopened = open()?;
+
+    assert_eq!(reopened.retention_floor(), 0);
+    // The reads the watermark would have refused are still answerable, and
+    // must be answered: their data was never collected.
+    assert_eq!(reopened.get("a", 3)?.as_deref(), Some(&b"va"[..]));
+    assert_eq!(reopened.get("b", 4)?.as_deref(), Some(&b"vb"[..]));
+
+    Ok(())
+}
+
+#[test]
+fn an_rt_only_flush_leaves_the_floor_alone() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let open = || -> lsm_tree::Result<lsm_tree::AnyTree> {
+        Config::new(
+            dir.path(),
+            SequenceNumberCounter::new(100),
+            SequenceNumberCounter::new(100),
+        )
+        .open()
+    };
+
+    let tree = open()?;
+
+    // Land a value in an SST first, so there is history the floor could
+    // wrongly refuse.
+    tree.insert("k", "v", 2);
+    tree.flush_active_memtable(0)?;
+
+    // Now a memtable holding only a range tombstone: it produces no tables, so
+    // nothing goes through the fold at all.
+    tree.remove_range("x", "y", 40);
+    tree.flush_active_memtable(50)?;
+
+    assert_eq!(
+        tree.retention_floor(),
+        0,
+        "a flush with no entries to fold must not claim a floor",
+    );
+
+    drop(tree);
+    let reopened = open()?;
+
+    assert_eq!(reopened.retention_floor(), 0);
+    assert_eq!(
+        reopened.get("k", 3)?.as_deref(),
+        Some(&b"v"[..]),
+        "the pre-existing version stays readable at a snapshot below the watermark",
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_compaction_that_collects_nothing_leaves_the_floor_alone() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let open = || -> lsm_tree::Result<lsm_tree::AnyTree> {
+        Config::new(
+            dir.path(),
+            SequenceNumberCounter::new(100),
+            SequenceNumberCounter::new(100),
+        )
+        .open()
+    };
+
+    let tree = open()?;
+
+    // One version per key across two tables: the compaction merges them but
+    // has no history to fold, so it collects nothing at any watermark.
+    tree.insert("a", "va", 2);
+    tree.flush_active_memtable(0)?;
+    tree.insert("b", "vb", 3);
+    tree.flush_active_memtable(0)?;
+
+    tree.major_compact(u64::MAX, 50)?;
+
+    assert_eq!(
+        tree.retention_floor(),
+        0,
+        "a compaction that collected nothing must not claim a floor",
+    );
+
+    drop(tree);
+    let reopened = open()?;
+
+    assert_eq!(reopened.retention_floor(), 0);
+    assert_eq!(reopened.get("a", 3)?.as_deref(), Some(&b"va"[..]));
+    assert_eq!(reopened.get("b", 4)?.as_deref(), Some(&b"vb"[..]));
+
+    Ok(())
+}
+
+#[test]
+fn a_compaction_that_collects_history_still_raises_the_floor() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let tree = Config::new(
+        dir.path(),
+        SequenceNumberCounter::new(100),
+        SequenceNumberCounter::new(100),
+    )
+    .open()?;
+
+    // Two versions of one key, both below the watermark: the fold keeps the
+    // newer and collects the older, so the floor must move.
+    tree.insert("k", "old", 2);
+    tree.flush_active_memtable(0)?;
+    tree.insert("k", "new", 5);
+    tree.flush_active_memtable(0)?;
+
+    tree.major_compact(u64::MAX, 50)?;
+
+    assert_eq!(
+        tree.retention_floor(),
+        49,
+        "a compaction that collected history records the watermark-derived floor",
+    );
+
+    Ok(())
+}
+
+#[test]
 fn a_flush_at_watermark_zero_leaves_the_floor_alone() -> lsm_tree::Result<()> {
     let dir = tempfile::tempdir()?;
 

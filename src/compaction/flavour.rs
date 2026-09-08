@@ -294,6 +294,11 @@ pub(super) struct ProducedOutput {
     /// (see [`RetentionEffect::DropsData`](crate::version::RetentionEffect::DropsData))
     /// instead of the watermark-derived floor.
     filter_transformed: bool,
+    /// Whether the merge stream dropped a version because it sat below the GC
+    /// watermark. A run that dropped none collected no history, so its install
+    /// must not raise the retention floor: doing so refuses snapshots whose
+    /// data is still on disk.
+    collected_below_watermark: bool,
 }
 
 #[cfg_attr(
@@ -336,6 +341,12 @@ impl ProducedOutput {
         self.filter_transformed = true;
     }
 
+    /// Records that the merge stream collected history below the GC watermark
+    /// (called by the producer, which owns the GC counter).
+    pub(super) fn mark_collected_below_watermark(&mut self) {
+        self.collected_below_watermark = true;
+    }
+
     /// Marks this produced-but-not-installed output's freshly written files as
     /// deleted. Used when a sibling sub-compaction fails and the shared
     /// [`install_merge`] is skipped: each already-finished sub-compaction has
@@ -368,6 +379,7 @@ impl ProducedOutput {
             consumed_through: crate::HashMap::default(),
             // A relocation reuses the source's rows verbatim.
             filter_transformed: false,
+            collected_below_watermark: false,
         }
     }
 }
@@ -409,6 +421,7 @@ pub(super) fn install_merge(
     let mut tables_to_delete = Vec::new();
     let mut blob_frag_map = FragmentationMap::default();
     let mut filter_transformed = false;
+    let mut collected_below_watermark = false;
 
     for out in outputs {
         created_tables.extend(out.created_tables);
@@ -417,18 +430,25 @@ pub(super) fn install_merge(
         tables_to_delete.extend(out.tables_to_delete);
         out.blob_frag_map.merge_into(&mut blob_frag_map);
         filter_transformed |= out.filter_transformed;
+        collected_below_watermark |= out.collected_below_watermark;
     }
 
-    // What this install does to older snapshots. The merge stream GC'd below
-    // the watermark, so the watermark-derived floor covers that; a user
-    // compaction filter removes or rewrites rows regardless of the watermark
-    // (a `Remove` at watermark 0 still drops the row from the output), so an
-    // output the filter transformed invalidates every snapshot up to the
-    // install itself.
+    // What this install does to older snapshots, read off what the run
+    // actually did rather than off the watermark it was handed.
+    //
+    // A user compaction filter removes or rewrites rows regardless of the
+    // watermark (a `Remove` at watermark 0 still drops the row), so an output
+    // it transformed invalidates every snapshot up to the install itself.
+    // Otherwise the watermark-derived floor covers what the merge stream
+    // collected -- but only if it collected anything: a run that dropped no
+    // version below the watermark took nothing away from any snapshot, and
+    // claiming a floor there refuses reads whose data is still on disk.
     let retention = if filter_transformed {
         crate::version::RetentionEffect::DropsData
-    } else {
+    } else if collected_below_watermark {
         crate::version::RetentionEffect::GcBelow(opts.mvcc_gc_watermark)
+    } else {
+        crate::version::RetentionEffect::Keep
     };
 
     let tables_out = created_tables.len();
@@ -754,6 +774,7 @@ impl CompactionFlavour for RelocatingCompaction {
             consumed_through: self.consumed_through,
             // The producer owns the filter counter and marks this after.
             filter_transformed: false,
+            collected_below_watermark: false,
         })
     }
 }
@@ -865,6 +886,7 @@ impl CompactionFlavour for StandardCompaction {
             consumed_through: crate::HashMap::default(),
             // The producer owns the filter counter and marks this after.
             filter_transformed: false,
+            collected_below_watermark: false,
         })
     }
 }
