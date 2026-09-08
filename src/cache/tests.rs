@@ -27,10 +27,14 @@ fn row_cache_when_given_a_block_subslice_stores_a_detached_copy() {
         start..start + block.len()
     };
 
-    let value = block.slice(0..8);
+    // Longer than the slice type's inline threshold (20 bytes on 64-bit, 16 on
+    // 32-bit). A shorter subslice is copied into the handle itself, so it would
+    // never point at the block and the test would prove nothing about the case
+    // it exists for: a value large enough to be kept as a view.
+    let value = block.slice(0..64);
     assert!(
         block_range.contains(&(value.as_ptr() as usize)),
-        "precondition: a subslice points into the block's own buffer",
+        "precondition: a subslice past the inline threshold points into the block's own buffer",
     );
 
     cache.insert_row(
@@ -57,7 +61,7 @@ fn row_cache_when_given_a_block_subslice_stores_a_detached_copy() {
     );
 
     // And the copy has to be a faithful one.
-    assert_eq!(&*got.value, &[7_u8; 8][..]);
+    assert_eq!(&*got.value, &[7_u8; 64][..]);
 }
 
 #[test]

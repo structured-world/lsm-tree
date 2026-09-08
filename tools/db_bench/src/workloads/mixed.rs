@@ -31,6 +31,28 @@ impl Workload for Mixed {
         seqno: &AtomicU64,
         reporter: &mut Reporter,
     ) -> lsm_tree::Result<()> {
+        // This workload states, per key, whether it expects a value or a
+        // tombstone, and asserts it. That contract needs one key per index.
+        // `fill_sequential_key` truncates the index to the key width, so a key
+        // smaller than 8 bytes aliases indices past its range: two indices then
+        // share a key, the later write wins, and an index-keyed expectation is
+        // simply wrong rather than violated. Say so instead of failing an
+        // assertion that would look like an engine fault.
+        if config.key_size < 8 {
+            let distinct = 1_u64 << (config.key_size * 8);
+            if config.num > distinct {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "the mixed workload needs one key per index, but --key-size {} encodes \
+                         only {} distinct keys for --num {}; raise --key-size or lower --num",
+                        config.key_size, distinct, config.num,
+                    ),
+                )
+                .into());
+            }
+        }
+
         // The harness hands in a tree built from --compression, which would
         // make this series mean a different thing on every invocation. Only the
         // codec is overridden, though: the tree is otherwise built from the same

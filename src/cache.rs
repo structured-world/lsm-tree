@@ -76,6 +76,18 @@ impl From<(u8, u64, u64, u64)> for CacheKey {
     }
 }
 
+/// What a cached row costs the cache: key bytes + value bytes + a fixed term for
+/// the `InternalKey` scalars (seqno + `value_type`) and the entry's own
+/// bookkeeping.
+///
+/// Shared by the weigher and by `insert_row`'s admission pre-check so the two
+/// cannot drift: a pre-check that charged less than the weigher would copy a
+/// value the cache then refuses, and one that charged more would skip a row that
+/// would have fit.
+const fn row_weight(key_len: usize, value_len: usize) -> u64 {
+    key_len as u64 + value_len as u64 + 16
+}
+
 #[derive(Clone)]
 struct BlockWeighter;
 
@@ -91,9 +103,7 @@ impl Weighter<CacheKey, Item> for BlockWeighter {
             // Key + value; the size field is an inline scalar. The prefetch's
             // admission budget charges itself the same way, so the two agree.
             Blob(key, _, b) => (key.len() + b.len()) as u64,
-            // Key bytes + value bytes + a fixed term for the InternalKey scalars
-            // (seqno + value_type) and the entry's own bookkeeping.
-            Item::Row(iv) => iv.key.user_key.len() as u64 + iv.value.len() as u64 + 16,
+            Item::Row(iv) => row_weight(iv.key.user_key.len(), iv.value.len()),
             // Weighed by the resident decompressed prefix + covered key; the
             // shared `Arc<ResumeState>` scratch is approximated by a small fixed
             // term rather than counted per entry.
@@ -370,6 +380,16 @@ impl Cache {
         // that ratio. Copying the value out costs one small allocation per
         // MISS, on a path that has just walked the index and decoded a block,
         // and it makes the charge equal to what is actually retained.
+        //
+        // Unless the row cannot be admitted at all. A row heavier than one shard
+        // is refused by the insert below, and a value that big is re-read as
+        // often as any other, so copying it first would burn an allocation and a
+        // memcpy on every one of those reads to produce something immediately
+        // discarded. The copy does not change the weight, so projecting it here
+        // is exact.
+        if row_weight(iv.key.user_key.len(), iv.value.len()) > self.data.max_entry_weight() {
+            return;
+        }
         iv.value = crate::UserValue::from(&*iv.value);
         self.data.insert(
             (TAG_ROW, id.tree_id(), id.table_id(), key_hash).into(),
