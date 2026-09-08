@@ -188,8 +188,9 @@ matching entry (and add one for a new subsystem).
   floor (`SuperVersions::new`), not the seqno anything was installed at, so an
   output installed at `I = 100` under a floor of `20` answers a read at
   `R = 50` after a restart. The floor, not the install seqno, is the boundary
-  from then on: everything at or below it is refused, everything above it is
-  answered from the surviving tables. A fold must therefore be sound against
+  from then on: `0 < R <= floor` is refused, everything above it is answered
+  from the surviving tables, and snapshot `0` keeps its own rule from the entry
+  above (always served, always empty). A fold must therefore be sound against
   the floor ALONE, not merely against the routing; a fold that leaned on the
   routing is the shape that produced the "GC fold drops the readable version"
   defect.
