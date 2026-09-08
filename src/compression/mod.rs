@@ -72,12 +72,17 @@ pub trait CompressionProvider {
 #[cfg(feature = "zstd")]
 pub type ZstdBackend = zstd_backend::ZstdProvider;
 
-/// Pre-trained zstd dictionary for improved compression of small blocks.
+/// A zstd dictionary to compress small blocks against.
 ///
 /// Zstd dictionaries significantly improve compression ratios for blocks
 /// in the 4–64 KiB range typical of LSM-trees, especially when data has
 /// recurring patterns (e.g., structured keys, repeated prefixes,
 /// JSON/MessagePack values).
+///
+/// Training happens outside this crate: [`ZstdDictionary::new`] takes the
+/// dictionary bytes, it does not derive them from samples. Produce them with
+/// `zstd --train` (or any zstd dictionary trainer), or hand it representative
+/// content directly as a raw content dictionary.
 ///
 /// The dictionary is identified by a 32-bit ID derived from its content
 /// (truncated xxh3 hash). This ID is stored alongside compressed blocks
@@ -88,8 +93,9 @@ pub type ZstdBackend = zstd_backend::ZstdProvider;
 /// ```ignore
 /// use lsm_tree::ZstdDictionary;
 ///
-/// let samples: &[u8] = &training_data;
-/// let dict = ZstdDictionary::new(samples);
+/// // Already-trained dictionary bytes, e.g. read from the file
+/// // `zstd --train` wrote.
+/// let dict = ZstdDictionary::new(&dictionary_bytes);
 /// ```
 #[cfg(zstd_any)]
 pub struct ZstdDictionary {
