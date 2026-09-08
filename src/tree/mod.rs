@@ -1202,9 +1202,10 @@ impl AbstractTree for Tree {
         let mut key_count: u64 = 0;
 
         // Use ONE snapshot at the requested seqno for both the SST and memtable
-        // contributions, so the estimate reflects the same visibility as a read
-        // at `seqno` (no entries newer than the snapshot, and a consistent set of
-        // tables + memtables even during a concurrent flush / compaction).
+        // contributions, so the estimate reflects a read's visibility at
+        // `seqno`: no entries newer than the snapshot, and one consistent TABLE
+        // set even during a concurrent flush or compaction. The memtable half
+        // is approximate, for the reason two paragraphs down.
         //
         // What "the same visibility as a read" does and does not mean here.
         //
@@ -3829,11 +3830,13 @@ impl Tree {
 
     /// The snapshot for one point read, without a clone when it is the latest.
     ///
-    /// Lock-free fast path: when reading at or beyond the latest installed
+    /// Lock-free fast path: when reading STRICTLY ABOVE the latest installed
     /// version (always the case for `MAX_SEQNO`, and the common case), the
     /// mirrored latest [`SuperVersion`] is exactly what `get_version_for_snapshot`
     /// would return (it yields the latest iff `latest.seqno < seqno`), so
     /// load it without taking the history `RwLock` or cloning a deque entry.
+    /// At equality the fast path does not fire: `seqno == latest.seqno` falls
+    /// through to the resolver, which selects the version before it.
     /// Recent inserts stay visible because they mutate the shared
     /// `active_memtable` behind a stable Arc; the back only changes on
     /// flush / compaction, which refresh this mirror under the write lock.
@@ -3846,13 +3849,19 @@ impl Tree {
     /// mirror (`arc-swap` is std-only) and always clones out of the locked
     /// history, as before.
     ///
-    /// What every caller of this gets, and may assume: the memtables and tables
-    /// of ONE version, the one whose seqno is the highest still strictly below
-    /// `seqno`. Not the newest tables that exist. While the history that
-    /// installed it is live, that means a compaction which installed at or
-    /// above `seqno` is invisible here, which is the routing the compaction
-    /// folds are written against (see
+    /// What every caller with a NON-ZERO `seqno` gets, and may assume: the
+    /// memtables and tables of ONE version, the one whose seqno is the highest
+    /// still strictly below `seqno`. Not the newest tables that exist. While
+    /// the history that installed it is live, that means a compaction which
+    /// installed at or above `seqno` is invisible here, which is the routing
+    /// the compaction folds are written against (see
     /// [`get_version_for_snapshot`](crate::version::SuperVersions::get_version_for_snapshot)).
+    ///
+    /// Snapshot `0` is outside that rule and served by its own: no version is
+    /// strictly below it, so the resolver hands back the OLDEST retained one,
+    /// which after pruning can be an output installed far above `0`. Nothing
+    /// is visible at seqno `0` whatever the file set, which is why the
+    /// exception is harmless and why it is stated rather than papered over.
     ///
     /// The qualifier matters. A recovered history holds ONE version carrying
     /// the persisted retention floor as its seqno, so after a reopen this

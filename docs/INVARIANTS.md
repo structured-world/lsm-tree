@@ -181,8 +181,10 @@ matching entry (and add one for a new subsystem).
 - **While the history that installed it is live, a compaction output only has
   to serve reads STRICTLY ABOVE its own install seqno.** Strictly: at `R == I`
   neither spelling of the comparison selects the output, since both are `<`
-  with the sides arranged differently. A read at snapshot `R` resolves to the
-  version whose seqno is highest still strictly below `R`, so an output
+  with the sides arranged differently. A read at snapshot `R > 0` resolves to
+  the version whose seqno is highest still strictly below `R` (snapshot `0` has
+  no version below it and is served from the oldest retained one, which changes
+  nothing: no entry is visible at seqno `0`), so an output
   installed at seqno `I` is reachable only from `R > I`; a read at or below `I`
   is routed to the version current at that seqno and answered from THAT
   version's tables, for as long as it is retained. Those are not necessarily
