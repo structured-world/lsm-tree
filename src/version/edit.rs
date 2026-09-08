@@ -55,15 +55,23 @@
 //! [blob_restriction_count : u32 LE]        (appended section, see below)
 //!   repeat: id u64 LE | frontier u64 LE
 //! [retention_floor    : u64 LE]            (appended section, see below)
+//! [dict_count         : u32 LE]            (appended section, see below)
+//!   repeat: id u32 LE
 //! ```
 //!
-//! The two bracketed sections were appended after the format shipped and are
+//! The three bracketed sections were appended after the format shipped and are
 //! written only when they carry something: the blob frontiers when the list is
-//! non-empty, the retention floor when it changed in this edit. A payload that
-//! ends before either decodes as "absent", so older edit logs replay unchanged.
-//! Because the blob-frontier section has no presence marker of its own, an
-//! edit that carries a retention floor always writes the blob section first
-//! (with a zero count when empty), so the decoder can tell the two apart.
+//! non-empty, the retention floor when it changed in this edit, the dictionary
+//! ids when the registered set changed. A payload that ends before any of them
+//! decodes as "absent", so older edit logs replay unchanged.
+//!
+//! None of the three has a presence marker of its own, so they are positional
+//! and a later one is written only with every earlier one present: an edit
+//! carrying a retention floor writes the blob section first (a zero count when
+//! empty), and one carrying dictionary ids writes both (the floor re-stated at
+//! its current value when this edit did not change it, which replays as the
+//! no-op it is). That is what lets the decoder tell a floor from a blob count
+//! from a dictionary count.
 //!
 //! The per-table / per-blob record bodies are byte-identical to the snapshot
 //! encoding in [`Version::encode_into`](super::Version::encode_into) (plus the
@@ -154,6 +162,12 @@ pub struct VersionEdit {
     /// GC compaction, a `clear` or a table drop raises it, so the common edit
     /// carries nothing here.
     pub retention_floor: Option<u64>,
+    /// The version's FULL set of registered dictionary ids, or `None` when the
+    /// set is unchanged from the prior version. Carried whole rather than as a
+    /// delta so that a replay lands on the set the version actually had,
+    /// exactly as the restriction sets above: an edit that drops a dictionary
+    /// has to be able to say the id is gone.
+    pub dicts: Option<Vec<crate::file::DictId>>,
 }
 
 /// `checksum_type` byte written for XXH3-128 (matches the snapshot encoder).
@@ -224,7 +238,10 @@ impl VersionEdit {
         // marker either, so whenever it is written the blob section is written
         // too (a zero count when empty): the decoder reads "blob section, then
         // floor" positionally and must not mistake a floor for a blob count.
-        if !self.blob_restrictions.is_empty() || self.retention_floor.is_some() {
+        if !self.blob_restrictions.is_empty()
+            || self.retention_floor.is_some()
+            || self.dicts.is_some()
+        {
             out.write_u32::<LittleEndian>(u32_len(self.blob_restrictions.len())?)?;
             for (id, frontier) in &self.blob_restrictions {
                 out.write_u64::<LittleEndian>(*id)?;
@@ -233,6 +250,20 @@ impl VersionEdit {
         }
         if let Some(floor) = self.retention_floor {
             out.write_u64::<LittleEndian>(floor)?;
+        }
+        if let Some(dicts) = &self.dicts {
+            // Reachable only with a floor already written: `Version::diff`
+            // re-states the unchanged floor whenever it carries dictionaries,
+            // because this section is positional and cannot be told from a
+            // floor otherwise.
+            debug_assert!(
+                self.retention_floor.is_some(),
+                "a dictionary section needs the floor written before it",
+            );
+            out.write_u32::<LittleEndian>(u32_len(dicts.len())?)?;
+            for id in dicts {
+                out.write_u32::<LittleEndian>(*id)?;
+            }
         }
         Ok(())
     }
@@ -358,6 +389,20 @@ impl VersionEdit {
             Some(r.read_u64::<LittleEndian>().map_err(|_| ERR)?)
         };
 
+        // The dictionary ids are the third appended section, under the same
+        // positional rule: written only after the floor, so bytes remaining
+        // here are the id list and nothing else.
+        let dicts = if r.is_empty() {
+            None
+        } else {
+            let count = r.read_u32::<LittleEndian>().map_err(|_| ERR)?;
+            let mut ids = Vec::with_capacity(cap(count));
+            for _ in 0..count {
+                ids.push(r.read_u32::<LittleEndian>().map_err(|_| ERR)?);
+            }
+            Some(ids)
+        };
+
         // A well-formed edit consumes its payload exactly. Trailing bytes mean a
         // corrupt / mis-encoded record (format drift, not power loss — the
         // framing checksum already passed), so reject rather than silently
@@ -375,6 +420,7 @@ impl VersionEdit {
             restrictions,
             blob_restrictions,
             retention_floor,
+            dicts,
         })
     }
 }
