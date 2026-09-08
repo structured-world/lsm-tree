@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788865144625,
+  "lastUpdate": 1788869711558,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -22098,6 +22098,90 @@ window.BENCHMARK_DATA = {
             "value": 721903.4691544058,
             "unit": "ops/sec",
             "extra": "P50: 1.2us | P99: 5.4us | P99.9: 28.1us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9237f69d66492b2d2afd670434bf49b7d2fab986",
+          "message": "fix(tree): record the GC a flush performed, and only what a run collected (#635)\n\n## Summary\n\nA flush that collects below a watermark recorded no retention effect, so\nafter a reopen a read whose answer the flush had already collected came\nback as a missing key instead of being refused.\n\n`AbstractTree::flush` feeds the sealed memtables through the same\n`CompactionStream` a compaction uses, with the same GC threshold, so it\nfolds away the same versions. The install it produces was recorded with\n`RetentionEffect::Keep`, under a comment claiming a flush \"discards no\ndata\", which is only true at watermark 0. The persisted retention floor\ntherefore stayed where it was.\n\nThe install now records `GcBelow` of the watermark it was handed, the\none the stream ran with.\n\n## Why it was invisible\n\nThe same routing that hid #630: while the process lives, a read below\nthe install goes to the retained `SuperVersion` and its sealed\nmemtables, so it still answers correctly. A reopen removes the routing\nand the persisted floor is the only boundary left. The read is still\nadmitted, and the version it resolved to is gone.\n\n## Impact\n\nThe wrong answer is a **missing key**, not `SnapshotBelowRetention`. A\nconsumer cannot distinguish it from a genuine delete, so there is no\nsignal to act on. This is the same defect class as #630, on the\naccounting side rather than in the fold.\n\nExposure is bounded by who passes a non-zero watermark: every in-crate\ncaller passes 0, so the crate's own flushes were never affected. A\nconsumer that uses `flush` / `flush_active_memtable` as the documented\nMVCC GC point was.\n\n## Why `GcBelow(watermark)` and not something narrower\n\n`GcBelow(0)` is `Keep` in `upgrade_version`, so a flush that collects\nnothing still moves no floor and needs no separate branch.\n\n`DropsData` is unreachable on this path. The flush stream carries no\nuser compaction filter (only `with_merge_operator`), and since #631\nevery arm of the fold that drops an entry is gated on the head's own\nseqno being below the watermark. So the flush physically cannot discard\nan entry at or above the watermark, and the watermark is the whole of\nthe install's effect.\n\n## Regression test\n\n`tests/flush_gc_raises_the_retention_floor.rs`, both cases fail-proofed\nagainst the unfixed code:\n\n- Three versions of one key at seqnos 2, 5 and 10, flushed at watermark\n8. The fold drops the version at 2, which is exactly what snapshot 3\nresolved to. The test then pins both sides of the boundary: while the\nprocess lives snapshot 3 is still **answered**, from the retained\nversion and its sealed memtables; after a reopen it must be refused, the\nfloor itself (7) refused, and snapshot 8 still resolve to the version at\n5 — the newest below the watermark, which the fold keeps on purpose.\n- Watermark 0 must move nothing: the floor stays 0 across the reopen and\nthe whole history stays servable. This is what every in-crate flush\nrelies on.\n\nThe counter is seeded above the data seqnos, as a real deployment has\nit, so the install sits above the data and the live-process routing is\ngenuinely exercised rather than bypassed.\n\n## Allocation on the install path\n\nStamping the floor rebuilt the version the edit's own mutator had just\nbuilt: a second `Arc<VersionInner>`, a `Vec<Level>` and its per-level\nrefcount bumps, then the fresh one dropped again, all to change one\ninteger. That path previously ran only on GC compactions; this change\nmakes every collecting flush take it.\n\n`Version::set_retention_floor` writes through `Arc::get_mut` when the\nhandle is the sole owner, which every install path is because the\nmutator just built it, and falls back to the rebuild when it is still\nshared with the prior version. `with_retention_floor` stays as-is for\nthe repair and recovery callers, where the builder form is the right\none.\n\n## Documentation\n\n`AbstractTree::flush` now states that `seqno_threshold` is a GC\nwatermark rather than a hint, and that it raises the **persisted**\nfloor. It also separates that from the live boundary: reads keep being\nanswered from the retained version for as long as the history holds it,\nso what a caller can observe right now is `oldest_retained_seqno`, the\nlower of the two, and the refusal appears once history pruning drops\nthat version or the tree is reopened. `register_tables` states that its\n`gc_watermark` must be the threshold the stream that produced the tables\nran with, since it is recorded as the install's retention effect.\n\n`Version::set_retention_floor` has unit coverage for all three of its\noutcomes in `src/version/tests.rs`, including the shared-handle branch\nthat would otherwise stamp a floor onto the prior version.\n\n## Raising the floor only for a run that collected (#629)\n\nBoth installs reported the watermark they were handed, whether or not\nthe run dropped anything below it. An RT-only flush is the sharpest\ncase: it sends nothing through the fold at all, and still persisted\n`watermark - 1`, so after a reopen a snapshot whose data was never\ncollected is refused.\n\nNothing in the stream could answer \"did this run collect history\". The\ntransform marker deliberately does not tick for obsolete-version drops\n(the newer version shadowing them lives in the output), and an empty\noutput is not the signal either — a watermark above every version\ncollects the lot and writes no table (`tree_flush_eviction_2`).\n\nThe stream now counts watermark-driven drops in a marker of its own. The\ntick sits inside `drain_key`, which every watermark-gated arm reaches\nand which a lone entry leaves untouched, plus the four single-entry\nrange-tombstone drops. Both installs read it — the compaction through\n`ProducedOutput` beside the filter flag, the flush through\n`register_tables` — so the derivation is one rule in one place rather\nthan two:\n\n| run did | effect |\n|---|---|\n| user filter returned non-`Keep` | `DropsData` (acts regardless of any\nwatermark) |\n| fold dropped a version below the watermark | `GcBelow(watermark)` |\n| neither | `Keep` |\n\nRegression tests fail on the unfixed code for both installs: a flush and\na compaction over one version per key, and an RT-only flush, must leave\nthe floor at 0; a compaction that does fold a version away must still\nrecord the watermark-derived floor. Four unit tests pin the counter\nitself, including that a lone bottom-level tombstone does not count — it\nshadows nothing, so dropping it answers every snapshot the way keeping\nit would.\n\nThis also moves the #630 fold test: its compaction keeps both versions\nof the key, so it collects nothing and now records no floor. What it\nguards is unchanged and sharper — the read it protects is served because\nthe version is there, not because a floor happened to sit below it. The\nfloor-boundary assertions moved to a run that actually collects.\n\n`AbstractTree::register_tables` takes one more argument for this.\n\n## Comments in the touched files\n\nThree issue numbers pinned in comments are replaced by what they were\npointing at, and two notes are dropped rather than reworded: a\nmanifest-version bump policy and a no-std migration plan. A comment\nexplains why the code is what it is; it does not hand out future\nobligations.\n\n## Testing\n\n`cargo nextest run --workspace` 2662/2662 and `--all-features`\n3313/3313, `cargo test --doc --all-features` 80/80, clippy with `-D\nwarnings` in both feature configurations, `cargo doc --no-deps` 0\nwarnings in both, no-std check 0 errors, `cargo fmt --check` clean.\n\nCloses #633\nCloses #629",
+          "timestamp": "2026-09-08T15:12:33+03:00",
+          "tree_id": "d80c1b0b7243f6ef908ee2d162ee53b92635e91a",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/9237f69d66492b2d2afd670434bf49b7d2fab986"
+        },
+        "date": 1788869671026,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "mixed",
+            "value": 122694.82833261658,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 6.5us | P99.9: 11.0us\nthreads: 1 | elapsed: 4.36s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillseq",
+            "value": 4362676.067244718,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.2us | P99.9: 1.6us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1408971.200015769,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.9us | P99.9: 2.8us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readrandom",
+            "value": 856112.4744131524,
+            "unit": "ops/sec",
+            "extra": "P50: 1.0us | P99: 3.3us | P99.9: 16.5us\nthreads: 1 | elapsed: 0.23s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readseq",
+            "value": 4423422.179684629,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.9us | P99.9: 2.7us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 489400.01053825044,
+            "unit": "ops/sec",
+            "extra": "P50: 1.8us | P99: 3.8us | P99.9: 6.9us\nthreads: 1 | elapsed: 0.41s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 245280.25840059377,
+            "unit": "ops/sec",
+            "extra": "P50: 3.7us | P99: 7.8us | P99.9: 10.1us\nthreads: 1 | elapsed: 0.82s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "overwrite",
+            "value": 1404649.4261213467,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.9us | P99.9: 4.2us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 1238999.7114245773,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 1.4us | P99.9: 2.5us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 724854.1236512559,
+            "unit": "ops/sec",
+            "extra": "P50: 1.2us | P99: 4.5us | P99.9: 27.0us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3"
           }
         ]
       }
