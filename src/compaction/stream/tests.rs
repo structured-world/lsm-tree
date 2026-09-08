@@ -212,9 +212,66 @@ fn compaction_stream_tombstone_overwrite_gc() -> crate::Result<()> {
         InternalValue::from_components(*b"a", *b"val", 999, ValueType::Value),
         iter.next().unwrap()?,
     );
+    // The tombstone at 998 is the newest version below the threshold, so the
+    // fold keeps it: a read at snapshot 999 resolves to exactly this entry.
+    // Here it happens to be observationally equal to dropping it, since every
+    // older version goes too and an absent key reads the same as a deleted one.
+    // The fold cannot tell those apart from one key's versions, and the rule
+    // that can, keep the newest below the threshold, is the one that also holds
+    // when that version is a value rather than a tombstone.
+    assert_eq!(
+        InternalValue::from_components(*b"a", *b"", 998, ValueType::Tombstone),
+        iter.next().unwrap()?,
+    );
     iter_closed!(iter);
 
     Ok(())
+}
+
+#[test]
+#[expect(clippy::unwrap_used, reason = "test assertion")]
+fn compaction_stream_bottom_level_tombstone_above_threshold_keeps_the_shadowed_value()
+-> crate::Result<()> {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "T",
+      "a", "val", "V",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    // Threshold 0: nothing is collectable, so the bottom level may drop nothing.
+    let mut iter = CompactionStream::new(iter, 0).evict_tombstones(true);
+
+    // A read at snapshot 999 resolves to the value, not to the tombstone above
+    // it. Dropping the pair because the level is the bottom would answer that
+    // read with an absent key, which is indistinguishable from a genuine delete.
+    assert_eq!(
+        InternalValue::from_components(*b"a", *b"", 999, ValueType::Tombstone),
+        iter.next().unwrap()?,
+    );
+    assert_eq!(
+        InternalValue::from_components(*b"a", *b"val", 998, ValueType::Value),
+        iter.next().unwrap()?,
+    );
+    iter_closed!(iter);
+
+    Ok(())
+}
+
+#[test]
+fn compaction_stream_bottom_level_tombstone_below_threshold_takes_the_key_with_it() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "T",
+      "a", "val", "V",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    // Threshold 1000 puts the tombstone itself below the watermark, so it is the
+    // newest version any servable snapshot resolves to, and it reads as absent.
+    let mut iter = CompactionStream::new(iter, 1_000).evict_tombstones(true);
+
+    iter_closed!(iter);
 }
 
 #[test]
@@ -268,6 +325,38 @@ fn compaction_stream_weak_tombstone_no_gc() -> crate::Result<()> {
 }
 
 #[test]
+#[expect(clippy::unwrap_used, reason = "test assertion")]
+fn compaction_stream_weak_tombstone_above_threshold_keeps_the_consumed_value() -> crate::Result<()>
+{
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "W",
+      "a", "old", "V",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    // Threshold 999 records a floor of 998, so snapshot 999 is servable and
+    // resolves to the value: the weak delete above it is not visible there yet.
+    let mut iter = CompactionStream::new(iter, 999);
+
+    // Annihilating the pair on the older sibling's seqno alone would answer that
+    // read with an absent key. The pair leaves together only once the weak
+    // tombstone ITSELF is below the watermark, which is the same condition the
+    // plain-value fold states.
+    assert_eq!(
+        InternalValue::from_components(*b"a", *b"", 999, ValueType::WeakTombstone),
+        iter.next().unwrap()?,
+    );
+    assert_eq!(
+        InternalValue::from_components(*b"a", *b"old", 998, ValueType::Value),
+        iter.next().unwrap()?,
+    );
+    iter_closed!(iter);
+
+    Ok(())
+}
+
+#[test]
 fn compaction_stream_weak_tombstone_evict() {
     #[rustfmt::skip]
     let vec = stream![
@@ -276,7 +365,9 @@ fn compaction_stream_weak_tombstone_evict() {
     ];
 
     let iter = vec.iter().cloned().map(Ok);
-    let mut iter = CompactionStream::new(iter, 999);
+    // 1000 puts the weak tombstone itself below the watermark; at 999 the value
+    // is still the answer to a servable snapshot (see the test above).
+    let mut iter = CompactionStream::new(iter, 1_000);
 
     // NOTE: Weak tombstone is consumed because value is GC'ed
 
@@ -299,7 +390,9 @@ fn compaction_stream_weak_tombstone_evict_next_value() -> crate::Result<()> {
     ));
 
     let iter = vec.iter().cloned().map(Ok);
-    let mut iter = CompactionStream::new(iter, 999);
+    // 1000 puts the weak tombstone itself below the watermark, which is what
+    // lets the pair leave together.
+    let mut iter = CompactionStream::new(iter, 1_000);
 
     // NOTE: Weak tombstone is consumed because value is GC'ed
 
@@ -434,11 +527,17 @@ fn compaction_stream_filter_1() {
 
     let out: Vec<_> = iter.map(Result::unwrap).collect();
 
+    // Six entries, not five: every version at or above the threshold (999 down
+    // to 995) plus the newest one below it (994). This expectation used to stop
+    // at 995, which encoded the fold's older rule of discarding by the seqno of
+    // the next-older sibling. That rule dropped exactly the version a read just
+    // above the recorded retention floor resolves to.
     #[rustfmt::skip]
     assert_eq!(out, stream![
         "a", "9", "V",
         "a", "8", "V",
         "a", "7", "V",
+        "a", "", "T",
         "a", "", "T",
         "a", "", "T",
     ]);
