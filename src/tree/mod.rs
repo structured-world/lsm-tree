@@ -1205,6 +1205,11 @@ impl AbstractTree for Tree {
         // contributions, so the estimate reflects the same visibility as a read
         // at `seqno` (no entries newer than the snapshot, and a consistent set of
         // tables + memtables even during a concurrent flush / compaction).
+        //
+        // "The same visibility as a read" is meant literally: this walks the
+        // tables of the version a read at `seqno` would be routed to, not the
+        // current ones, so an estimate and the read it predicts cannot disagree
+        // about which compaction has happened yet.
         let comparator = self.config.comparator.as_ref();
         let super_version = self
             .version_history
@@ -3829,6 +3834,13 @@ impl Tree {
     /// mirror (`arc-swap` is std-only) and always clones out of the locked
     /// history, as before.
     ///
+    /// What every caller of this gets, and may assume: the memtables and tables
+    /// of ONE version, the newest installed strictly below `seqno`. Not the
+    /// newest tables that exist. A compaction that installed at or above `seqno`
+    /// is invisible here, which is the routing the compaction folds are written
+    /// against (see
+    /// [`get_version_for_snapshot`](crate::version::SuperVersions::get_version_for_snapshot)).
+    ///
     /// # Errors
     ///
     /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
@@ -4325,6 +4337,13 @@ impl Tree {
     /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
     /// when the history no longer retains a version for `seqno`; the error is
     /// raised here, before any I/O, rather than as an iterator item.
+    ///
+    /// The version is resolved ONCE here and moved into the iterator, so the
+    /// whole traversal reads one file set: a compaction installing mid-scan
+    /// neither adds its output nor removes the inputs this iterator holds.
+    /// Combined with the resolver picking a version installed strictly below
+    /// `seqno`, that is what lets a compaction fold discard a version a lower
+    /// snapshot still resolves to.
     #[doc(hidden)]
     pub fn create_range<'a, K: AsRef<[u8]> + 'a, R: RangeBounds<K> + 'a>(
         &self,
@@ -4353,6 +4372,11 @@ impl Tree {
 
     /// Build a [`SeekableTreeIter`](crate::range::SeekableTreeIter) over
     /// `[lo, hi)`. Source collection (Phase 1) runs once; repositions reuse it.
+    ///
+    /// Because the sources are collected once and reused, every reposition
+    /// resolves against the file set of the version taken here, however long
+    /// the iterator lives. That is the same one-version rule the plain range
+    /// iterator states, and it binds for longer.
     ///
     /// # Errors
     ///
@@ -4395,6 +4419,10 @@ impl Tree {
     /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
     /// when the history no longer retains a version for `seqno`; the error is
     /// raised here, before any I/O, rather than as an iterator item.
+    ///
+    /// One version for the whole traversal, as for the range iterator. The
+    /// prefix filter narrows which of ITS tables are consulted; it never
+    /// reaches a table outside the version resolved here.
     #[doc(hidden)]
     pub fn create_prefix<'a, K: AsRef<[u8]> + 'a>(
         &self,

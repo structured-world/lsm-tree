@@ -23,6 +23,19 @@
 //! inputs), so a tombstone in a level that is not part of this compaction still
 //! blocks zeroing — the "beyond output level" case.
 //!
+//! ## Which reads this is allowed to be invisible to
+//!
+//! None above the watermark, which is the whole of the permission. A rewritten
+//! entry answers snapshots between `0` and its real seqno that it never
+//! answered before, and every entry rewritten here is below the watermark, so
+//! the install's `GcBelow(watermark)` floor refuses exactly those snapshots
+//! after a reopen. A snapshot at or above the watermark resolves to the same
+//! entry as before, since a zeroed seqno still loses to any real one.
+//!
+//! That coupling is why the gate is `seqno < gc_seqno_threshold` and not, say,
+//! the output level's own bounds: an entry rewritten at or above the watermark
+//! would change an answer the recorded floor still promises.
+//!
 //! Zeroing the bottom version itself is PITR-safe: it only applies to the
 //! latest entry below the watermark (no snapshot reads below the watermark), and
 //! a newer version (real seqno > 0) always wins the merge over the zeroed one.

@@ -796,6 +796,10 @@ impl AbstractTree for BlobTree {
         let prefix_hash =
             compute_prefix_hash(self.index.config.prefix_extractor.as_ref(), prefix_bytes);
 
+        // Resolved once, and the scan keeps the version alive in the guard it
+        // returns: an indirection this iterator yields is resolved against the
+        // blob files of the same version that held the pointer, so a blob GC
+        // running concurrently cannot reclaim the file the pointer names.
         let super_version = match self.index.get_version_for_snapshot(seqno) {
             Ok(super_version) => super_version,
             Err(e) => return Box::new(core::iter::once(crate::tree::error_guard(e))),
@@ -829,6 +833,9 @@ impl AbstractTree for BlobTree {
         seqno: SeqNo,
         index: Option<(Arc<Memtable>, SeqNo)>,
     ) -> Box<dyn DoubleEndedIterator<Item = IterGuardImpl> + Send + 'static> {
+        // One version for the traversal and for resolving the pointers it
+        // yields, as in `prefix` above; the range bounds only narrow which of
+        // that version's tables are opened.
         let super_version = match self.index.get_version_for_snapshot(seqno) {
             Ok(super_version) => super_version,
             Err(e) => return Box::new(core::iter::once(crate::tree::error_guard(e))),
@@ -1418,6 +1425,10 @@ impl AbstractTree for BlobTree {
     }
 
     fn get<K: AsRef<[u8]>>(&self, key: K, seqno: SeqNo) -> crate::Result<Option<crate::UserValue>> {
+        // The index entry and the blob it points at are read from the same
+        // version: `resolve_key` follows the indirection through this
+        // `super_version`, never through the current one, so the pointer and the
+        // blob file it names cannot come from different points in time.
         let super_version = self.index.snapshot_for_read(seqno)?;
         self.resolve_key(&super_version, key.as_ref(), seqno)
     }

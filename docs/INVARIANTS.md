@@ -84,6 +84,27 @@ matching entry (and add one for a new subsystem).
   `src/compaction/worker.rs` (merge + tombstone handling) and the compaction
   integration tests (`src/compaction/leveled`).
 
+- **Everything an install reports as collected history sits strictly below the
+  GC watermark.** The recorded floor is `GcBelow(watermark)`, which is exact
+  rather than conservative only because of this: a loss reported from at or
+  above the watermark would leave the floor below the data it lost, and the
+  refusal that protects a reader would not be raised. Every reporting path
+  upholds it by gating on a seqno it already has: the plain fold and the
+  merge folds on the head's own seqno, weak-delete annihilation and
+  tombstone-chain eviction likewise, applied range tombstones on
+  `rt.visible_at(watermark)` with the covered entry older still, bottommost
+  seqno zeroing on the rewritten entry's seqno, and merge-on-read relocation
+  on a bitmap built from below-watermark tombstones only. The paths that
+  report nothing (a lone bottom-level tombstone and an all-tombstone tail
+  under it) need no gate, since they change no answer at any snapshot. The one
+  transform that acts regardless of the watermark is the user compaction
+  filter, and for exactly that reason it records a different effect
+  (`DropsData`, floor at the install's own seqno). A new path that can lose a
+  version at or above the watermark must do the same. Stated at
+  `RetentionEffect::of_run` (`src/version/super_version.rs`), which derives the
+  effect, and upheld at the sites listed above (`src/compaction/stream.rs`,
+  `src/compaction/seqno_zeroer.rs`, `src/compaction/flavour.rs`).
+
 - **A weak tombstone is dropped below the lowest live snapshot, or when it
   collapses with its matching value.** Dropping a delete marker that a snapshot
   still needs would resurrect the deleted key for that snapshot. Beyond the
@@ -144,6 +165,23 @@ matching entry (and add one for a new subsystem).
   from any version and is always served empty. Enforced in
   `src/version/super_version.rs` (`get_version_for_snapshot`) and surfaced by
   every read path that resolves a snapshot (`src/tree`, `src/blob_tree`).
+
+- **A compaction output only ever has to serve reads at or above its own
+  install seqno.** A read at snapshot `R` resolves to the newest version
+  installed strictly below `R`, so an output installed at seqno `I` is
+  reachable only from `R > I`; a read below `I` is routed to the version
+  current at that seqno, and answered from the tables that compaction
+  consumed. This is why a fold may discard a version that a lower snapshot
+  still resolves to: that snapshot is not reading this output. A reopen
+  removes the routing (the history restarts as a single version seeded at the
+  persisted floor), so a fold must ALSO be sound on its own, with the floor as
+  the only boundary left; a fold that leaned on the routing alone is the shape
+  that produced the "GC fold drops the readable version" defect. Enforced by
+  `SuperVersions::get_version_for_snapshot`
+  (`src/version/super_version.rs`), the single resolver every read path goes
+  through, and by the iterators holding the version they resolved for the
+  whole traversal, so a concurrent compaction cannot swap the file set
+  underneath one.
 
 - **The retention boundary is durable.** An install that discards what older
   snapshots saw raises the version's *retention floor* in the same version
