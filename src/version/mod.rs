@@ -296,6 +296,25 @@ impl Version {
         }
     }
 
+    /// Same rule as [`Self::with_retention_floor`], in place: reuses the
+    /// allocation when this handle is the sole owner.
+    ///
+    /// The install path always is, because the version it raises the floor on
+    /// was just built by the edit's own mutator, and rebuilding it there would
+    /// throw that fresh allocation away to change one integer. A handle still
+    /// shared with the prior version falls back to the rebuild, which is what
+    /// the shared case has to do regardless.
+    pub(crate) fn set_retention_floor(&mut self, floor: crate::SeqNo) {
+        if floor <= self.retention_floor {
+            return;
+        }
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.retention_floor = floor;
+        } else {
+            *self = self.with_retention_floor(floor);
+        }
+    }
+
     pub fn l0(&self) -> &Level {
         #[expect(clippy::expect_used)]
         self.levels.first().expect("L0 should exist")

@@ -1033,9 +1033,21 @@ impl AbstractTree for Tree {
             &*self.config.fs,
             self.0.runtime_config.load_full(),
             self.0.config.encryption.clone(),
-            // A flush only adds a run; the watermark below prunes the
-            // in-memory history, it discards no data.
-            crate::version::RetentionEffect::Keep,
+            // A flush adds a run, but it does not only add: `AbstractTree::flush`
+            // feeds the sealed memtables through the same `CompactionStream`
+            // with this same watermark, so it collects the versions below it
+            // exactly as a compaction does. The floor has to record that, or a
+            // read the flush already collected the answer for stays admitted
+            // after a reopen and comes back as an absent key rather than a
+            // refusal.
+            //
+            // `GcBelow(0)` is `Keep`, so a flush that collects nothing (every
+            // in-crate caller) still moves no floor. The flush stream carries no
+            // user filter and, after the fold's arms were bounded by the
+            // watermark, cannot drop an entry at or above it, so the watermark
+            // is the whole of this install's effect and `DropsData` is
+            // unreachable here.
+            crate::version::RetentionEffect::GcBelow(gc_watermark),
         )?;
 
         if let Err(e) = version_lock.maintenance(&self.config.path, gc_watermark, &*self.config.fs)

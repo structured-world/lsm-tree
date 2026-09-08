@@ -393,10 +393,8 @@ impl SuperVersions {
             RetentionEffect::GcBelow(watermark) => Some((watermark - 1).min(seqno)),
             RetentionEffect::DropsData => Some(seqno),
         };
-        if let Some(floor) = floor
-            && floor > next_version.version.retention_floor()
-        {
-            next_version.version = next_version.version.with_retention_floor(floor);
+        if let Some(floor) = floor {
+            next_version.version.set_retention_floor(floor);
         }
 
         self.persist_change(
