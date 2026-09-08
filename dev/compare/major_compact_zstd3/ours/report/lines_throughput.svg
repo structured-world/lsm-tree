@@ -9,46 +9,30 @@ Average throughput (Melem/s)
 Input Size (Elements)
 </text>
 <polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="85,52 85,473 "/>
-<text x="76" y="457" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-0.95
+<text x="76" y="464" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
+1.452
 </text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,457 85,457 "/>
-<text x="76" y="416" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.0
+<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,464 85,464 "/>
+<text x="76" y="391" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
+1.454
 </text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,416 85,416 "/>
-<text x="76" y="376" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.05
+<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,391 85,391 "/>
+<text x="76" y="317" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
+1.456
 </text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,376 85,376 "/>
-<text x="76" y="335" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.1
+<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,317 85,317 "/>
+<text x="76" y="244" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
+1.458
 </text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,335 85,335 "/>
-<text x="76" y="295" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.15
+<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,244 85,244 "/>
+<text x="76" y="170" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
+1.46
 </text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,295 85,295 "/>
-<text x="76" y="254" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.2
+<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,170 85,170 "/>
+<text x="76" y="97" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
+1.462
 </text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,254 85,254 "/>
-<text x="76" y="214" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.25
-</text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,214 85,214 "/>
-<text x="76" y="174" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.3
-</text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,174 85,174 "/>
-<text x="76" y="133" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.35
-</text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,133 85,133 "/>
-<text x="76" y="93" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
-1.4
-</text>
-<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,93 85,93 "/>
+<polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="80,97 85,97 "/>
 <polyline fill="none" opacity="1" stroke="#000000" stroke-width="1" points="86,474 933,474 "/>
 <text x="86" y="484" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#000000">
 10000.0
