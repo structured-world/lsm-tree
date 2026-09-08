@@ -11,6 +11,9 @@ pub enum Compression {
     None,
     Lz4,
     Zstd,
+    /// Maximum zstd level. The codec-bound end of the spectrum, which the
+    /// `mixed` workload pins so its series means the same thing on every run.
+    Zstd22,
 }
 
 impl std::fmt::Display for Compression {
@@ -19,6 +22,7 @@ impl std::fmt::Display for Compression {
             Self::None => f.write_str("none"),
             Self::Lz4 => f.write_str("lz4"),
             Self::Zstd => f.write_str("zstd"),
+            Self::Zstd22 => f.write_str("zstd22"),
         }
     }
 }
@@ -29,6 +33,10 @@ impl Compression {
             Self::None => CompressionType::None,
             Self::Lz4 => CompressionType::Lz4,
             Self::Zstd => CompressionType::Zstd(3),
+            // The level is source-controlled and inside zstd's 1..=22 range, so
+            // the constructor cannot reject it.
+            #[expect(clippy::expect_used, reason = "constant, in-range zstd level")]
+            Self::Zstd22 => CompressionType::zstd(22).expect("22 is a valid zstd level"),
         }
     }
 }

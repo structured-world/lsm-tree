@@ -283,6 +283,27 @@ fn engines_for(compression: Compression) -> &'static [Engine] {
     }
 }
 
+/// The engine series for a scan-shaped scenario, as `(label, engine, row cache)`.
+///
+/// Our tree appears twice: once with the row cache, which is the default a
+/// deployment gets, and once without. A scan does not reuse keys, so it is the
+/// shape where paying for rows is most likely to cost something and least
+/// likely to repay — exactly the case that has to be measured rather than
+/// assumed. Reporting only one side would leave the default unevidenced.
+fn scan_series(compression: Compression) -> Vec<(&'static str, Engine, bool)> {
+    let mut series = vec![
+        ("ours", Engine::Ours, false),
+        ("ours-row-cache", Engine::Ours, true),
+    ];
+    series.extend(
+        engines_for(compression)
+            .iter()
+            .filter(|e| !matches!(e, Engine::Ours))
+            .map(|&e| (e.label(), e, false)),
+    );
+    series
+}
+
 /// Compression axis of the engine matrix. Each workload runs once per
 /// variant so the dashboard plots the `None` baseline and the
 /// high-ratio zstd path side-by-side, with both engines configured the
@@ -529,15 +550,19 @@ fn open_ours(
         SequenceNumberCounter::default(),
     );
     // Row cache: a key->resolved-value layer in front of the block cache so a
-    // repeat point read skips the index walk + data-block decode. Off for the
-    // other arms (a fresh default cache otherwise matches Config's 16 MiB).
-    let config = if row_cache {
-        config.use_cache(std::sync::Arc::new(
-            lsm_tree::Cache::with_capacity_bytes(16 * 1024 * 1024).with_row_cache(true),
-        ))
-    } else {
-        config
-    };
+    // repeat point read skips the index walk + data-block decode.
+    //
+    // BOTH branches build the cache explicitly. Leaving the `false` arms on the
+    // library default stopped working the moment that default became ON: the
+    // one-time verification read below touches every key, which would populate
+    // the row cache for the plain, hash-index and ribbon arms too, and their
+    // timed reads would then all be row-cache hits. The variants this suite
+    // exists to separate would collapse into one, and the published numbers
+    // would say the wrong thing about every one of them. 16 MiB either way,
+    // matching the library default capacity.
+    let config = config.use_cache(std::sync::Arc::new(
+        lsm_tree::Cache::with_capacity_bytes(16 * 1024 * 1024).with_row_cache(row_cache),
+    ));
     // Data-block hash index: a point get resolves a key to its in-block offset
     // by hash instead of binary-searching the restart array. 1.33 buckets/entry
     // is the rough equal of RocksDB's 0.75 utilization for the hash-index
@@ -1218,12 +1243,18 @@ fn range_scan_variant(c: &mut Criterion, group_name: &str, compression: Compress
     for &n in &[1_000_u64, 10_000_u64, 70_000_u64] {
         let inputs = WorkloadInputs::build(n);
         group.throughput(Throughput::Elements(n));
-        for &engine in engines_for(compression) {
+        for (label, engine, row_cache) in scan_series(compression) {
             // Built once per arm on the first closure entry (see `WarmEngine`).
             let mut warm: Option<WarmEngine> = None;
-            group.bench_with_input(BenchmarkId::new(engine.label(), n), &n, |b, _| {
+            group.bench_with_input(BenchmarkId::new(label, n), &n, |b, _| {
                 let warm = warm.get_or_insert_with(|| {
-                    WarmEngine::build(engine, compression, IndexStrategy::Binary, false, &inputs)
+                    WarmEngine::build(
+                        engine,
+                        compression,
+                        IndexStrategy::Binary,
+                        row_cache,
+                        &inputs,
+                    )
                 });
                 match warm {
                     WarmEngine::Ours { tree, .. } => {
@@ -1291,12 +1322,18 @@ fn seek_random_variant(c: &mut Criterion, group_name: &str, compression: Compres
     for &n in &[1_000_u64, 10_000_u64, 70_000_u64] {
         let inputs = WorkloadInputs::build(n);
         group.throughput(Throughput::Elements(n));
-        for &engine in engines_for(compression) {
+        for (label, engine, row_cache) in scan_series(compression) {
             // Built once per arm on the first closure entry (see `WarmEngine`).
             let mut warm: Option<WarmEngine> = None;
-            group.bench_with_input(BenchmarkId::new(engine.label(), n), &n, |b, _| {
+            group.bench_with_input(BenchmarkId::new(label, n), &n, |b, _| {
                 let warm = warm.get_or_insert_with(|| {
-                    WarmEngine::build(engine, compression, IndexStrategy::Binary, false, &inputs)
+                    WarmEngine::build(
+                        engine,
+                        compression,
+                        IndexStrategy::Binary,
+                        row_cache,
+                        &inputs,
+                    )
                 });
                 match warm {
                     WarmEngine::Ours { tree, .. } => {

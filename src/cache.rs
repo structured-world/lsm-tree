@@ -76,6 +76,18 @@ impl From<(u8, u64, u64, u64)> for CacheKey {
     }
 }
 
+/// What a cached row costs the cache: key bytes + value bytes + a fixed term for
+/// the `InternalKey` scalars (seqno + `value_type`) and the entry's own
+/// bookkeeping.
+///
+/// Shared by the weigher and by `insert_row`'s admission pre-check so the two
+/// cannot drift: a pre-check that charged less than the weigher would copy a
+/// value the cache then refuses, and one that charged more would skip a row that
+/// would have fit.
+const fn row_weight(key_len: usize, value_len: usize) -> u64 {
+    key_len as u64 + value_len as u64 + 16
+}
+
 #[derive(Clone)]
 struct BlockWeighter;
 
@@ -91,9 +103,7 @@ impl Weighter<CacheKey, Item> for BlockWeighter {
             // Key + value; the size field is an inline scalar. The prefetch's
             // admission budget charges itself the same way, so the two agree.
             Blob(key, _, b) => (key.len() + b.len()) as u64,
-            // Key bytes + value bytes + a fixed term for the InternalKey scalars
-            // (seqno + value_type) and the entry's own bookkeeping.
-            Item::Row(iv) => iv.key.user_key.len() as u64 + iv.value.len() as u64 + 16,
+            Item::Row(iv) => row_weight(iv.key.user_key.len(), iv.value.len()),
             // Weighed by the resident decompressed prefix + covered key; the
             // shared `Arc<ResumeState>` scratch is approximated by a small fixed
             // term rather than counted per entry.
@@ -133,10 +143,16 @@ pub struct Cache {
     // NOTE: rustc_hash performed best: https://fjall-rs.github.io/post/fjall-2-1
     /// In-tree sharded S3-FIFO cache (byte-weighted).
     data: ShardedCache<CacheKey, Item, BlockWeighter, rustc_hash::FxBuildHasher>,
-    /// Opt-in: when false, the row cache (decoded point-read results) is off, so
+    /// When false, the row cache (decoded point-read results) is off, so
     /// `get_row` always misses and `insert_row` is a no-op. Blocks / blobs are
-    /// cached regardless. Off by default to avoid spending the shared capacity on
-    /// rows for workloads that do not benefit (e.g. uniform / scan-heavy).
+    /// cached regardless.
+    ///
+    /// On by default. Rows share the block cache's byte capacity, so the worry
+    /// was that a workload without key reuse would spend capacity on rows at the
+    /// blocks' expense. Measurement says it does not: scan-heavy and
+    /// larger-than-cache arms are unchanged or better, while a repeat point read
+    /// skips the index walk and the data-block decode outright. Turn it off for
+    /// a workload measured to be one of the exceptions.
     row_cache_enabled: bool,
     /// When true (default), index / filter / range-tombstone blocks are admitted
     /// at [`Priority::High`] so heavy data-block churn (working set >> cache)
@@ -167,14 +183,14 @@ impl Cache {
                 BlockWeighter,
                 rustc_hash::FxBuildHasher,
             ),
-            row_cache_enabled: false,
+            row_cache_enabled: true,
             metadata_priority: true,
         }
     }
 
     /// Enables or disables the row cache (decoded point-read results), returning
-    /// the cache for builder-style configuration. Off by default; rows share the
-    /// block cache's byte capacity when enabled.
+    /// the cache for builder-style configuration. On by default; rows share the
+    /// block cache's byte capacity.
     #[must_use]
     pub fn with_row_cache(mut self, enabled: bool) -> Self {
         self.row_cache_enabled = enabled;
@@ -351,10 +367,30 @@ impl Cache {
     /// away (after which its `table_id` is never read again and the entry ages
     /// out of the cache).
     #[doc(hidden)]
-    pub fn insert_row(&self, id: GlobalTableId, key_hash: u64, iv: InternalValue) {
+    pub fn insert_row(&self, id: GlobalTableId, key_hash: u64, mut iv: InternalValue) {
         if !self.row_cache_enabled {
             return;
         }
+        // The point-read path hands over a value that is a SUBSLICE of the
+        // decoded data block, and a subslice keeps the whole block allocation
+        // alive. The weigher charges a row its own key and value bytes only, so
+        // a 100-byte row viewing a 4 KiB block would be accounted as 100 bytes
+        // while holding 4096 — and a workload touching one key per block, the
+        // one a row cache helps least, would overrun the requested capacity by
+        // that ratio. Copying the value out costs one small allocation per
+        // MISS, on a path that has just walked the index and decoded a block,
+        // and it makes the charge equal to what is actually retained.
+        //
+        // Unless the row cannot be admitted at all. A row heavier than one shard
+        // is refused by the insert below, and a value that big is re-read as
+        // often as any other, so copying it first would burn an allocation and a
+        // memcpy on every one of those reads to produce something immediately
+        // discarded. The copy does not change the weight, so projecting it here
+        // is exact.
+        if row_weight(iv.key.user_key.len(), iv.value.len()) > self.data.max_entry_weight() {
+            return;
+        }
+        iv.value = crate::UserValue::from(&*iv.value);
         self.data.insert(
             (TAG_ROW, id.tree_id(), id.table_id(), key_hash).into(),
             Item::Row(iv),

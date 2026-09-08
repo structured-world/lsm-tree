@@ -36,13 +36,25 @@ fn tree_with_row_cache() -> (tempfile::TempDir, lsm_tree::AnyTree, Arc<Cache>) {
     (dir, tree, cache)
 }
 
+/// A caller who builds a cache without saying anything about rows gets the row
+/// cache. This pins the default itself: every tree that does not construct its
+/// own `Cache` inherits it, so flipping it silently would change the memory and
+/// latency profile of every deployment that never touched the setting.
 #[test]
-fn row_cache_is_disabled_by_default() {
+fn row_cache_when_not_configured_is_enabled() {
     let cache = Cache::with_capacity_bytes(1024);
-    assert!(!cache.row_cache_enabled());
+    assert!(cache.row_cache_enabled());
+}
+
+/// The opt-out still works. A workload measured to be one of the exceptions,
+/// scan-heavy or without key reuse, has to be able to turn the row cache off,
+/// and the builder must not be a no-op now that its argument agrees with the
+/// default in one direction.
+#[test]
+fn row_cache_when_switched_off_stays_off() {
     assert!(
-        Cache::with_capacity_bytes(1024)
-            .with_row_cache(true)
+        !Cache::with_capacity_bytes(1024)
+            .with_row_cache(false)
             .row_cache_enabled()
     );
 }
@@ -134,7 +146,9 @@ fn row_cache_off_matches_row_cache_on() {
     // values — the cache is a pure read accelerator, never a behaviour change.
     let folder = get_tmp_folder();
     let dir = tempfile::TempDir::new_in(folder).unwrap();
-    let plain = Arc::new(Cache::with_capacity_bytes(64 * 1024 * 1024)); // row cache OFF
+    // Explicitly off: the default is on, so a bare cache would not exercise the
+    // comparison this test exists to make.
+    let plain = Arc::new(Cache::with_capacity_bytes(64 * 1024 * 1024).with_row_cache(false));
     let tree = Config::new(
         dir.path(),
         SequenceNumberCounter::default(),
