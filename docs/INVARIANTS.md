@@ -85,10 +85,15 @@ matching entry (and add one for a new subsystem).
   integration tests (`src/compaction/leveled`).
 
 - **Everything an install reports as collected history sits strictly below the
-  GC watermark.** The recorded floor is `GcBelow(watermark)`, which is exact
-  rather than conservative only because of this: a loss reported from at or
-  above the watermark would leave the floor below the data it lost, and the
-  refusal that protects a reader would not be raised. Every reporting path
+  GC watermark.** This is what lets the effect be derived from the watermark at
+  all: a loss reported from at or above it would leave the floor below the data
+  that was lost, and the refusal protecting a reader would never be raised. The
+  floor it produces, `(watermark - 1)` capped at the install's own seqno, is a
+  SAFE boundary rather than a tight one, since the report is a single boolean
+  and carries no seqno: a run that collected one version at seqno 10 under a
+  watermark of 100 refuses every snapshot up to the cap, not just up to 10.
+  Refusing more than was lost costs a reader an error it might not have needed;
+  refusing less would answer it from data that is gone. Every reporting path
   upholds it by gating on a seqno it already has: the plain fold and the
   merge folds on the head's own seqno, weak-delete annihilation and
   tombstone-chain eviction likewise, applied range tombstones on
@@ -166,22 +171,34 @@ matching entry (and add one for a new subsystem).
   `src/version/super_version.rs` (`get_version_for_snapshot`) and surfaced by
   every read path that resolves a snapshot (`src/tree`, `src/blob_tree`).
 
-- **A compaction output only ever has to serve reads at or above its own
-  install seqno.** A read at snapshot `R` resolves to the newest version
-  installed strictly below `R`, so an output installed at seqno `I` is
-  reachable only from `R > I`; a read below `I` is routed to the version
-  current at that seqno, and answered from the tables that compaction
-  consumed. This is why a fold may discard a version that a lower snapshot
-  still resolves to: that snapshot is not reading this output. A reopen
-  removes the routing (the history restarts as a single version seeded at the
-  persisted floor), so a fold must ALSO be sound on its own, with the floor as
-  the only boundary left; a fold that leaned on the routing alone is the shape
-  that produced the "GC fold drops the readable version" defect. Enforced by
-  `SuperVersions::get_version_for_snapshot`
-  (`src/version/super_version.rs`), the single resolver every read path goes
-  through, and by the iterators holding the version they resolved for the
-  whole traversal, so a concurrent compaction cannot swap the file set
-  underneath one.
+- **While the history that installed it is live, a compaction output only has
+  to serve reads at or above its own install seqno.** A read at snapshot `R`
+  resolves to the newest version installed strictly below `R`, so an output
+  installed at seqno `I` is reachable only from `R > I`; a read below `I` is
+  routed to the version current at that seqno, and answered from the tables
+  that compaction consumed. This is why a fold may discard a version that a
+  lower snapshot still resolves to: that snapshot is not reading this output.
+
+  The qualifier is load-bearing, because a reopen does NOT preserve it. The
+  recovered history is a single version whose seqno is the persisted retention
+  floor (`SuperVersions::new`), not the seqno anything was installed at, so an
+  output installed at `I = 100` under a floor of `20` answers a read at
+  `R = 50` after a restart. The floor, not the install seqno, is the boundary
+  from then on: everything at or below it is refused, everything above it is
+  answered from the surviving tables. A fold must therefore be sound against
+  the floor ALONE, not merely against the routing; a fold that leaned on the
+  routing is the shape that produced the "GC fold drops the readable version"
+  defect.
+
+  Enforced by `SuperVersions::get_version_for_snapshot`
+  (`src/version/super_version.rs`) and, for point reads under `std`, by the
+  mirrored-latest fast path in `Tree::snapshot_for_read`, which answers
+  `seqno > latest.seqno` without consulting the resolver. Those are two
+  spellings of one comparison and have to stay that way: changing the strict
+  `<` in either alone makes point reads and iterator reads disagree about
+  which compaction has happened. Iterators additionally hold the version they
+  resolved for the whole traversal, so a concurrent compaction cannot swap the
+  file set underneath one.
 
 - **The retention boundary is durable.** An install that discards what older
   snapshots saw raises the version's *retention floor* in the same version

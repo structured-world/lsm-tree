@@ -28,9 +28,16 @@
 //! None above the watermark, which is the whole of the permission. A rewritten
 //! entry answers snapshots between `0` and its real seqno that it never
 //! answered before, and every entry rewritten here is below the watermark, so
-//! the install's `GcBelow(watermark)` floor refuses exactly those snapshots
-//! after a reopen. A snapshot at or above the watermark resolves to the same
-//! entry as before, since a zeroed seqno still loses to any real one.
+//! the install's floor refuses AT LEAST those snapshots after a reopen. A
+//! snapshot at or above the watermark resolves to the same entry as before,
+//! since a zeroed seqno still loses to any real one.
+//!
+//! At least, and usually more: the floor is `(watermark - 1)` capped at the
+//! install's own seqno, derived from a boolean that says only THAT something
+//! was rewritten. Zeroing one entry at seqno 10 under a watermark of 100 and
+//! an install at 50 refuses every snapshot through 50, though only reads
+//! through 10 changed. That is the safe direction and the deliberate one; the
+//! gate below is what keeps it safe, not the floor's precision.
 //!
 //! That coupling is why the gate is `seqno < gc_seqno_threshold` and not, say,
 //! the output level's own bounds: an entry rewritten at or above the watermark

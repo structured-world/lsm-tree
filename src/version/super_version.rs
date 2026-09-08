@@ -112,9 +112,13 @@ impl RetentionEffect {
     /// is how a floor came to promise data the output no longer held.
     ///
     /// `collected_below_watermark` says the run lost or rewrote a version
-    /// because of `watermark`. `GcBelow(watermark)` is exact rather than
-    /// conservative because of an invariant the callers uphold: everything
-    /// they report happens STRICTLY BELOW the watermark. The fold, merge
+    /// because of `watermark`. Deriving the effect from the watermark at all
+    /// rests on an invariant the callers uphold: everything they report
+    /// happens STRICTLY BELOW the watermark. (The floor this yields is safe,
+    /// not tight: the report is one boolean with no seqno in it, so a run that
+    /// collected at seqno 10 under a watermark of 100 still refuses up to the
+    /// cap. Refusing more than was lost costs an error; refusing less would
+    /// answer from data that is gone.) The fold, merge
     /// resolution, weak-delete annihilation and bottom-level eviction are each
     /// gated on the head's own seqno; applied range tombstones are strictly
     /// below it and so are the entries they cover; bottommost seqno zeroing
@@ -630,9 +634,16 @@ impl SuperVersions {
     /// version some lower snapshot still resolves to. The dependency is
     /// one-way and unenforced by any type, so a change to the comparison here
     /// changes what the folds are allowed to drop; a reopen already drops the
-    /// routing (the history restarts as one version seeded at the persisted
-    /// floor), which is why the folds are written to be sound against the floor
-    /// alone.
+    /// routing (the history restarts as one version whose seqno is the
+    /// persisted floor, not any install seqno), which is why the folds are
+    /// written to be sound against the floor alone.
+    ///
+    /// The comparison is spelled twice. Point reads under `std` take
+    /// [`Tree::snapshot_for_read`](crate::Tree)'s mirrored-latest fast path,
+    /// which answers `seqno > latest.seqno` without reaching this function.
+    /// The two must move together: relaxing the strict `<` here alone would
+    /// leave point reads and iterator reads disagreeing about which
+    /// compaction has happened yet.
     ///
     /// Snapshot `0` is served from the oldest retained version. No entry has a
     /// seqno below `0`, so nothing is visible at that snapshot from any

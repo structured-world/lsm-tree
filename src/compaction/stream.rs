@@ -347,14 +347,19 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
         result
     }
 
-    /// Which reads this may be invisible to: those below the head's seqno, and
-    /// no others. The result carries the head's seqno, so a snapshot between a
-    /// consumed operand (or base) and the head resolved to that operand before
-    /// and resolves to nothing from this output afterwards. Both call sites
-    /// enter only with the head below the watermark, so everything consumed
-    /// here is below it too, and the install's `GcBelow(watermark)` floor
-    /// covers the whole set. A call site that folded a head at or above the
-    /// watermark would break that, which is why neither has one.
+    /// Which reads this may be invisible to: those AT OR BELOW the head's
+    /// seqno, and no others. The result carries the head's seqno `H`, and
+    /// visibility is strict (`entry.seqno < read_seqno`), so a read at exactly
+    /// `H` does not see the result either, while before the fold it saw the
+    /// consumed operand or base sitting below `H`. The boundary is `R <= H`,
+    /// not `R < H`; a call site preserving the wrong one would leave the read
+    /// at `H` unaccounted for.
+    ///
+    /// Both call sites enter only with the head below the watermark, so
+    /// everything consumed here is below it too and so is `H` itself, which
+    /// puts the whole affected range under the install's floor. A call site
+    /// that folded a head at or above the watermark would break that, which is
+    /// why neither has one.
     fn resolve_merge_operands(
         &mut self,
         head: InternalValue,

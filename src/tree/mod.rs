@@ -3841,6 +3841,12 @@ impl Tree {
     /// against (see
     /// [`get_version_for_snapshot`](crate::version::SuperVersions::get_version_for_snapshot)).
     ///
+    /// The fast path above is the SECOND spelling of that routing comparison,
+    /// not a shortcut around it: `seqno > latest.seqno` is the resolver's
+    /// `version.seqno < seqno` with the sides swapped. Change one and the other
+    /// has to change with it, or point reads and iterator reads start
+    /// disagreeing about which compaction a snapshot can see.
+    ///
     /// # Errors
     ///
     /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
