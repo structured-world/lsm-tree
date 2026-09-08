@@ -7114,7 +7114,10 @@ fn corrupt_second_data_block(
         params.encryption = encryption;
         #[cfg(zstd_any)]
         {
-            params.zstd_dictionary = zstd_dictionary;
+            params.zstd_dictionaries = zstd_dictionary
+                .map_or_else(crate::compression::ZstdDictionaries::new, |dict| {
+                    crate::compression::ZstdDictionaries::new().with(dict)
+                });
         }
         Table::recover(params)?
     };
@@ -7306,7 +7309,8 @@ fn salvage_recovers_a_dictionary_sst_with_the_dictionary() -> crate::Result<()> 
             Arc::new(crate::cache::Cache::with_capacity_bytes(1 << 20)),
         );
         params.descriptor_table = Some(Arc::new(crate::descriptor_table::DescriptorTable::new(8)));
-        params.zstd_dictionary = Some(Arc::clone(&dict));
+        params.zstd_dictionaries =
+            crate::compression::ZstdDictionaries::new().with(Arc::clone(&dict));
         Table::recover(params)?
     };
     assert_eq!(

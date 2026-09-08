@@ -957,8 +957,8 @@ impl AbstractTree for Tree {
                 #[cfg(zstd_any)]
                 {
                     params
-                        .zstd_dictionary
-                        .clone_from(&self.config.zstd_dictionary);
+                        .zstd_dictionaries
+                        .clone_from(&self.config.zstd_dictionaries);
                 }
                 #[cfg(feature = "metrics")]
                 {
@@ -1848,6 +1848,66 @@ impl AbstractTree for Tree {
 }
 
 impl Tree {
+    /// Stores `dict` in the tree and records it in the current version, so it
+    /// resolves after a reopen with no dictionary supplied in the config.
+    ///
+    /// Additive: tables already written keep resolving to the dictionary they
+    /// were written against, which is what makes it safe to introduce a
+    /// dictionary on a tree that already holds data, and to replace one (both
+    /// are this same operation). Registering an id the tree already holds is a
+    /// no-op, since the id is derived from the bytes.
+    ///
+    /// The file is written BEFORE the version edit that references it. The
+    /// other order would publish an id whose bytes a crash could still lose,
+    /// and the tables written against it would then fail to open; this order
+    /// can only leave an unreferenced file, which the next collection removes.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the store's write failures and the version install's.
+    #[cfg(zstd_any)]
+    pub fn register_zstd_dictionary(
+        &self,
+        dict: alloc::sync::Arc<crate::compression::ZstdDictionary>,
+    ) -> crate::Result<()> {
+        let id = dict.id();
+        let folder = crate::dicts::folder(&self.config.path);
+        crate::dicts::write(&*self.config.fs, &folder, &dict, self.config.sync_mode)?;
+
+        let mut version_lock = self.version_history.write();
+        if version_lock
+            .latest_version_ref()
+            .version
+            .dicts()
+            .contains(&id)
+        {
+            return Ok(());
+        }
+        version_lock.upgrade_version(
+            &self.config.path,
+            |current| {
+                let mut copy = current.clone();
+                copy.version = copy.version.with_dict(id);
+                Ok(copy)
+            },
+            &self.config.seqno,
+            &self.config.visible_seqno,
+            &*self.config.fs,
+            self.0.runtime_config.load_full(),
+            self.0.config.encryption.clone(),
+            // Registering a dictionary adds a file and drops nothing, so no
+            // snapshot loses anything it could read before.
+            crate::version::RetentionEffect::Keep,
+        )
+    }
+
+    /// The dictionaries this tree can decompress against.
+    #[cfg(zstd_any)]
+    #[must_use]
+    pub fn zstd_dictionaries(&self) -> &crate::compression::ZstdDictionaries {
+        &self.config.zstd_dictionaries
+    }
+
     /// Maps a raw internal entry to its change-data-capture event, routing
     /// `Indirection` (KV-separated) values through `resolve_indirection`.
     ///
@@ -3986,16 +4046,20 @@ impl Tree {
         // a pool per compaction would spawn threads on each run). A caller-
         // supplied pool is left untouched. Shadowed under `parallel` only, so
         // non-parallel builds don't carry an unused `mut`.
+        // `mut` unconditionally: the dictionary set below is loaded into the
+        // config on every build, not only the parallel one.
+        #[cfg_attr(
+            not(any(feature = "parallel", zstd_any)),
+            expect(unused_mut, reason = "assigned only by the parallel / zstd builds")
+        )]
+        let mut config = config;
+
         #[cfg(feature = "parallel")]
-        let config = {
-            let mut config = config;
-            if config.compaction_pool.is_none() && config.compaction_threads > 1 {
-                config.compaction_pool = Some(Arc::new(
-                    crate::table::writer::RayonSpawner::with_threads(config.compaction_threads)?,
-                ));
-            }
-            config
-        };
+        if config.compaction_pool.is_none() && config.compaction_threads > 1 {
+            config.compaction_pool = Some(Arc::new(
+                crate::table::writer::RayonSpawner::with_threads(config.compaction_threads)?,
+            ));
+        }
 
         // Gate on the `page_ecc` cargo feature: caller asked for ECC
         // but the build does not link the Reed-Solomon codec. We have
@@ -4028,6 +4092,31 @@ impl Tree {
             config.fs.create_dir_all(&config.path)?;
             crate::config::acquire_directory_lock(&*config.fs, &config.path, config.directory_lock)?
         };
+
+        // Load the tree's own dictionaries before anything opens a table: a
+        // table resolves the dictionary id it recorded against this set, so an
+        // empty one fails every dictionary-compressed table in the tree. Under
+        // the directory lock, since it reads the tree's own folder, and before
+        // the recover / create split, because a freshly created tree writes
+        // dictionary-compressed tables too.
+        //
+        // A dictionary supplied through the config joins them, which is what
+        // keeps `Config::dict` working: on the first open it is the only one
+        // there, and it is registered at the end of this function so later
+        // opens need no config at all.
+        #[cfg(zstd_any)]
+        {
+            let folder = crate::dicts::folder(&config.path);
+            // A `.tmp` is an unpublished registration referenced by no version,
+            // so a crashed one is swept rather than left to linger.
+            crate::dicts::sweep_temps(&*config.fs, &folder)?;
+
+            let mut dicts = crate::dicts::read_all(&*config.fs, &folder)?;
+            if let Some(supplied) = config.zstd_dictionary.clone() {
+                dicts = dicts.with(supplied);
+            }
+            config.zstd_dictionaries = dicts;
+        }
 
         // Check for old version
         if config.fs.exists(&config.path.join("version"))? {
@@ -4109,6 +4198,17 @@ impl Tree {
             }
             Err(e) => Err(e),
         }?;
+
+        // A dictionary supplied through the config becomes the tree's, so the
+        // caller supplies it once rather than on every open forever. Idempotent
+        // by id, so re-opening with the same one writes nothing.
+        //
+        // After the recover / create above, because registering installs a
+        // version edit and there is no history to install into before that.
+        #[cfg(zstd_any)]
+        if let Some(dict) = tree.config.zstd_dictionary.clone() {
+            tree.register_zstd_dictionary(dict)?;
+        }
 
         Ok(tree)
     }
@@ -5322,7 +5422,9 @@ impl Tree {
                         params.encryption.clone_from(&config.encryption);
                         #[cfg(zstd_any)]
                         {
-                            params.zstd_dictionary.clone_from(&config.zstd_dictionary);
+                            params
+                                .zstd_dictionaries
+                                .clone_from(&config.zstd_dictionaries);
                         }
                         #[cfg(feature = "metrics")]
                         {

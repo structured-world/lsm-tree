@@ -563,33 +563,207 @@ mod zstd_dict {
     }
 
     #[test]
-    fn reopen_with_wrong_dict_fails_at_recovery() -> lsm_tree::Result<()> {
+    fn a_tree_reopens_with_no_dictionary_in_the_config() -> lsm_tree::Result<()> {
+        // The defect this whole mechanism exists for: the dictionary bytes used
+        // to live only in the caller's config, so losing that file (or simply
+        // not passing it again) made every dictionary-compressed table
+        // unreadable. The tree keeps them now.
         let dir = tempfile::tempdir()?;
         let dict = make_test_dictionary();
         let compression = CompressionType::zstd_dict(3, dict.id())?;
 
-        // Write data with dict A
         {
             let tree = make_config(dir.path())
                 .data_block_compression_policy(CompressionPolicy::all(compression))
-                .zstd_dictionary(Some(Arc::new(dict.clone())))
+                .zstd_dictionary(Some(Arc::new(dict)))
+                .open()?;
+            for i in 0u32..200 {
+                let key = format!("key-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        // Not one dictionary supplied, and no compression policy either: this
+        // is a caller that has forgotten the dictionary ever existed.
+        let reopened = make_config(dir.path()).open()?;
+
+        for i in 0u32..200 {
+            let key = format!("key-{i:05}");
+            let expected = format!("value-{i:05}-padding-to-make-it-longer");
+            let got = reopened
+                .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                .unwrap_or_else(|| panic!("key {key} unreadable after reopen without the dict"));
+            assert_eq!(got.as_ref(), expected.as_bytes());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_dictionary_can_be_introduced_on_a_tree_that_already_holds_data() -> lsm_tree::Result<()> {
+        // A tree is created empty, so there is nothing to train on at creation
+        // time. Introducing a dictionary later has to leave the tables written
+        // before it readable, or the realistic flow (run unconditioned, then
+        // train on what accumulated) is impossible.
+        let dir = tempfile::tempdir()?;
+
+        {
+            let tree = make_config(dir.path()).open()?;
+            for i in 0u32..100 {
+                let key = format!("plain-{i:05}");
+                tree.insert(key.as_bytes(), b"written-before-any-dictionary", i.into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(compression))
+                .zstd_dictionary(Some(Arc::new(dict)))
                 .open()?;
 
+            for i in 0u32..100 {
+                let key = format!("dict-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), (1000 + i).into());
+            }
+            tree.flush_active_memtable(0)?;
+
+            // Both generations readable in the same tree.
+            assert!(tree.get(b"plain-00000", lsm_tree::MAX_SEQNO)?.is_some());
+            assert!(tree.get(b"dict-00000", lsm_tree::MAX_SEQNO)?.is_some());
+        }
+
+        // And after a reopen with nothing supplied.
+        let reopened = make_config(dir.path()).open()?;
+        assert_eq!(
+            reopened
+                .get(b"plain-00042", lsm_tree::MAX_SEQNO)?
+                .as_deref(),
+            Some(b"written-before-any-dictionary".as_slice()),
+        );
+        assert_eq!(
+            reopened.get(b"dict-00042", lsm_tree::MAX_SEQNO)?.as_deref(),
+            Some(b"value-00042-padding-to-make-it-longer".as_slice()),
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_second_dictionary_leaves_the_first_generation_readable() -> lsm_tree::Result<()> {
+        // Replacing a dictionary is the same operation as introducing one, and
+        // has the same requirement: the tables written under the previous one
+        // keep resolving to it. This is what a single `Config` slot could not
+        // express — it held exactly one dictionary for everything.
+        let dir = tempfile::tempdir()?;
+        let first = make_test_dictionary();
+        let second = ZstdDictionary::new(&b"a second dictionary with different content".repeat(40));
+        assert_ne!(first.id(), second.id());
+
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(CompressionType::zstd_dict(
+                    3,
+                    first.id(),
+                )?))
+                .zstd_dictionary(Some(Arc::new(first)))
+                .open()?;
+            for i in 0u32..100 {
+                let key = format!("first-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        let second_id = second.id();
+        {
+            // Opened under a DIFFERENT dictionary than the data on disk was
+            // written with. Before the tree owned its dictionaries this was a
+            // hard failure; now the new one is what new blocks are written
+            // against and the old one is still what the old blocks resolve to.
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(CompressionType::zstd_dict(
+                    3, second_id,
+                )?))
+                .zstd_dictionary(Some(Arc::new(second)))
+                .open()?;
+
+            for i in 0u32..100 {
+                let key = format!("second-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), (1000 + i).into());
+            }
+            tree.flush_active_memtable(0)?;
+
+            for i in 0u32..100 {
+                let expected = format!("value-{i:05}-padding-to-make-it-longer");
+                let first_key = format!("first-{i:05}");
+                assert_eq!(
+                    tree.get(first_key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                        .as_deref(),
+                    Some(expected.as_bytes()),
+                    "data written under the first dictionary must stay readable",
+                );
+                let second_key = format!("second-{i:05}");
+                assert_eq!(
+                    tree.get(second_key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                        .as_deref(),
+                    Some(expected.as_bytes()),
+                );
+            }
+        }
+
+        // Both survive a reopen with nothing supplied.
+        let reopened = make_config(dir.path()).open()?;
+        assert!(reopened.get(b"first-00007", lsm_tree::MAX_SEQNO)?.is_some());
+        assert!(
+            reopened
+                .get(b"second-00007", lsm_tree::MAX_SEQNO)?
+                .is_some()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_table_naming_a_dictionary_the_tree_lost_reports_that_id() -> lsm_tree::Result<()> {
+        // The other direction: when the bytes genuinely are not there, the
+        // failure has to name the id the table asked for, so an operator can
+        // tell WHICH dictionary is missing rather than only that one is.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let dict_id = dict.id();
+        let compression = CompressionType::zstd_dict(3, dict_id)?;
+
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(compression))
+                .zstd_dictionary(Some(Arc::new(dict)))
+                .open()?;
             tree.insert(b"key", b"value", 0);
             tree.flush_active_memtable(0)?;
         }
 
-        // Reopen with dict B → should fail at recovery
-        let wrong_dict = ZstdDictionary::new(b"completely different dictionary bytes");
-        let wrong_compression = CompressionType::zstd_dict(3, wrong_dict.id())?;
-        let result = make_config(dir.path())
-            .data_block_compression_policy(CompressionPolicy::all(wrong_compression))
-            .zstd_dictionary(Some(Arc::new(wrong_dict)))
-            .open();
+        // Remove the tree's copy: the operator deleted the folder, a backup
+        // restored without it, a bad migration.
+        std::fs::remove_dir_all(dir.path().join("dicts"))?;
 
+        let err = make_config(dir.path())
+            .open()
+            .err()
+            .expect("opening a tree whose dictionary is gone must fail");
         assert!(
-            matches!(result, Err(lsm_tree::Error::ZstdDictMismatch { .. })),
-            "expected ZstdDictMismatch on reopen with wrong dict",
+            matches!(
+                err,
+                lsm_tree::Error::ZstdDictMismatch { expected, got: None } if expected == dict_id
+            ),
+            "expected the missing id to be named, got {err:?}",
         );
 
         Ok(())

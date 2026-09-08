@@ -238,8 +238,8 @@ impl<'a> BlobIngestion<'a> {
                 #[cfg(zstd_any)]
                 {
                     params
-                        .zstd_dictionary
-                        .clone_from(&index.config.zstd_dictionary);
+                        .zstd_dictionaries
+                        .clone_from(&index.config.zstd_dictionaries);
                 }
                 #[cfg(feature = "metrics")]
                 {

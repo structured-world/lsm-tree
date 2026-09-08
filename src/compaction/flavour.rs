@@ -822,8 +822,8 @@ impl StandardCompaction {
                 #[cfg(zstd_any)]
                 {
                     params
-                        .zstd_dictionary
-                        .clone_from(&opts.config.zstd_dictionary);
+                        .zstd_dictionaries
+                        .clone_from(&opts.config.zstd_dictionaries);
                 }
                 #[cfg(feature = "metrics")]
                 {

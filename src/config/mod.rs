@@ -691,15 +691,29 @@ pub struct Config {
     #[cfg(all(test, feature = "std"))]
     pub(crate) fail_tight_blob_reopen: Arc<core::sync::atomic::AtomicBool>,
 
-    /// Pre-trained zstd dictionary for dictionary compression.
+    /// The dictionary NEW blocks are compressed against, when the compression
+    /// policy asks for [`CompressionType::ZstdDict`].
     ///
-    /// When set together with a [`CompressionType::ZstdDict`] compression
-    /// policy, data blocks are compressed using this dictionary. The
-    /// dictionary must remain the same for the lifetime of the tree —
-    /// opening a tree with a different dictionary will produce
-    /// [`Error::ZstdDictMismatch`](crate::Error::ZstdDictMismatch) errors.
+    /// One, because a block is written against exactly one dictionary. Reading
+    /// is the other direction and takes the whole set
+    /// ([`Self::zstd_dictionaries`]): a tree can hold tables written against
+    /// several, and each resolves to the one it names.
+    ///
+    /// Supplying a dictionary here registers it with the tree, so it survives
+    /// the reopen without being supplied again.
     #[cfg(zstd_any)]
     pub(crate) zstd_dictionary: Option<Arc<crate::compression::ZstdDictionary>>,
+
+    /// Every dictionary the tree can decompress against: the ones it has
+    /// registered, plus [`Self::zstd_dictionary`] when one was supplied.
+    ///
+    /// Populated at open from the tree's own `dicts/` folder, so a reopen needs
+    /// no dictionary from the caller at all. A table resolves the id it
+    /// recorded against this set rather than being compared to a single
+    /// configured dictionary, which is what lets one tree hold data written
+    /// under more than one.
+    #[cfg(zstd_any)]
+    pub(crate) zstd_dictionaries: crate::compression::ZstdDictionaries,
 
     /// The global sequence number generator.
     ///
@@ -800,6 +814,8 @@ impl Default for Config {
 
             #[cfg(zstd_any)]
             zstd_dictionary: None,
+            #[cfg(zstd_any)]
+            zstd_dictionaries: crate::compression::ZstdDictionaries::new(),
 
             comparator: comparator::default_comparator(),
             encryption: None,

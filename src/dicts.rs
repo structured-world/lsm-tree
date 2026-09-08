@@ -138,6 +138,33 @@ pub(crate) fn read_set(
     Ok(set)
 }
 
+/// Loads every dictionary the folder holds.
+///
+/// The READ side scans rather than following the version's id list, so a
+/// dictionary whose file landed before the version edit that registers it (a
+/// crash in between) still resolves, and an open never fails on an id the list
+/// and the folder disagree about. The list is what says which files are still
+/// OWED to a reader, which is a collection question, not a read one.
+///
+/// # Errors
+///
+/// Propagates the directory read failure, and [`read_one`]'s integrity check:
+/// a corrupt dictionary fails the open rather than silently dropping out of the
+/// set, which would turn into "unknown dictionary id" on the first table that
+/// needs it.
+pub(crate) fn read_all(fs: &dyn Fs, folder: &Path) -> crate::Result<ZstdDictionaries> {
+    if !fs.exists(folder)? {
+        return Ok(ZstdDictionaries::new());
+    }
+    let mut set = ZstdDictionaries::new();
+    for dirent in fs.read_dir(folder)? {
+        if let DictDirEntry::Dict(id) = DictDirEntry::classify(&dirent.file_name) {
+            set = set.with(Arc::new(read_one(fs, folder, id)?));
+        }
+    }
+    Ok(set)
+}
+
 /// Removes the dictionary stored under `id`, treating an already-absent file as
 /// success.
 ///

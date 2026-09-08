@@ -475,8 +475,8 @@ impl<'a> Ingestion<'a> {
                 #[cfg(zstd_any)]
                 {
                     params
-                        .zstd_dictionary
-                        .clone_from(&self.tree.config.zstd_dictionary);
+                        .zstd_dictionaries
+                        .clone_from(&self.tree.config.zstd_dictionaries);
                 }
                 #[cfg(feature = "metrics")]
                 {

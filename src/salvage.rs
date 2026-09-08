@@ -882,7 +882,15 @@ fn salvage_attempt(
         params.encryption.clone_from(&options.encryption);
         #[cfg(zstd_any)]
         {
-            params.zstd_dictionary.clone_from(&options.zstd_dictionary);
+            // Salvage reads ONE table outside any tree, so the caller supplies
+            // the one dictionary it was written against rather than a tree's
+            // whole set; the recovery resolves against it the same way.
+            params.zstd_dictionaries = options
+                .zstd_dictionary
+                .clone()
+                .map_or_else(crate::compression::ZstdDictionaries::new, |dict| {
+                    crate::compression::ZstdDictionaries::new().with(dict)
+                });
         }
         crate::table::Table::recover_inner(
             params,
