@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.8.6](https://github.com/structured-world/coordinode-lsm-tree/compare/v5.8.5...v5.8.6) - 2026-09-08
+
+### Fixed
+
+- *(version)* refuse a snapshot read below the retained history ([#617](https://github.com/structured-world/coordinode-lsm-tree/pull/617))
+
+### Performance
+
+- *(read)* turn the row cache on by default, and take structured-zstd 0.0.51 ([#624](https://github.com/structured-world/coordinode-lsm-tree/pull/624))
+- *(filter)* solve the ribbon in registers, one word per row ([#622](https://github.com/structured-world/coordinode-lsm-tree/pull/622))
+- *(tree)* keep the point-read snapshot lookup inlinable ([#620](https://github.com/structured-world/coordinode-lsm-tree/pull/620))
+
 ## [5.8.3](https://github.com/structured-world/coordinode-lsm-tree/compare/v5.8.2...v5.8.3) - 2026-09-01
 
 ### Performance
