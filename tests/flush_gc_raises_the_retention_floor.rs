@@ -20,7 +20,27 @@
 //! These tests pin both sides of that boundary, and the watermark-0 case that
 //! must move nothing.
 
-use lsm_tree::{AbstractTree, Config, SeqNo, SequenceNumberCounter};
+use lsm_tree::{AbstractTree, Config, MergeOperator, SeqNo, SequenceNumberCounter, UserValue};
+
+/// Concatenates the base and every operand, so a fold is observable in the
+/// value it produces.
+struct ConcatMerge;
+
+impl MergeOperator for ConcatMerge {
+    fn merge(
+        &self,
+        _key: &[u8],
+        base_value: Option<&[u8]>,
+        operands: &[&[u8]],
+    ) -> lsm_tree::Result<UserValue> {
+        let mut out = base_value.unwrap_or_default().to_vec();
+        for operand in operands {
+            out.push(b',');
+            out.extend_from_slice(operand);
+        }
+        Ok(out.into())
+    }
+}
 
 #[test]
 fn a_flush_that_collects_below_the_watermark_refuses_reads_below_it_after_a_reopen()
@@ -301,6 +321,71 @@ fn a_compaction_that_only_zeroed_seqnos_still_raises_the_floor() -> lsm_tree::Re
             Err(lsm_tree::Error::SnapshotBelowRetention { .. })
         ),
         "the snapshot the zeroing would answer wrongly must be refused instead",
+    );
+
+    Ok(())
+}
+
+/// A merge fold consumes the base version inline, which is a loss the fold's
+/// own drain never sees. What the recorded floor then owes is the whole point:
+/// every snapshot above the watermark must still be served after a reopen, and
+/// the ones below it must be refused rather than answered from a base that is
+/// no longer there.
+#[test]
+fn a_merge_fold_compaction_serves_every_snapshot_above_the_watermark_after_a_reopen()
+-> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let open = || -> lsm_tree::Result<lsm_tree::AnyTree> {
+        Config::new(
+            dir.path(),
+            SequenceNumberCounter::new(100),
+            SequenceNumberCounter::new(100),
+        )
+        .with_merge_operator(Some(std::sync::Arc::new(ConcatMerge)))
+        .open()
+    };
+
+    let tree = open()?;
+
+    // A base and an operand, both below the watermark used below, so the fold
+    // runs and swallows the base into the merged result.
+    tree.insert("k", "base", 2);
+    tree.merge("k", "op", 5);
+    tree.flush_active_memtable(0)?;
+
+    assert_eq!(
+        tree.get("k", 3)?.as_deref(),
+        Some(&b"base"[..]),
+        "precondition: snapshot 3 resolves to the base alone",
+    );
+
+    tree.major_compact(u64::MAX, 8)?;
+
+    let floor = tree.retention_floor();
+    assert_eq!(floor, 7, "the fold collected the base, so the floor moves");
+
+    drop(tree);
+    let reopened = open()?;
+
+    // The contract this test exists for: above the floor, still served.
+    assert_eq!(
+        reopened.get("k", floor + 1)?.as_deref(),
+        Some(&b"base,op"[..]),
+        "the smallest admitted snapshot must still be answered after a reopen",
+    );
+    assert_eq!(
+        reopened.get("k", SeqNo::MAX)?.as_deref(),
+        Some(&b"base,op"[..]),
+    );
+
+    // And below it, refused rather than answered from a base that is gone.
+    assert!(
+        matches!(
+            reopened.get("k", SeqNo::from(3_u64)),
+            Err(lsm_tree::Error::SnapshotBelowRetention { .. })
+        ),
+        "a snapshot whose answer the fold consumed must be refused",
     );
 
     Ok(())

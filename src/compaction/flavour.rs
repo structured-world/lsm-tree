@@ -440,22 +440,14 @@ pub(super) fn install_merge(
     }
 
     // What this install does to older snapshots, read off what the run
-    // actually did rather than off the watermark it was handed.
-    //
-    // A user compaction filter removes or rewrites rows regardless of the
-    // watermark (a `Remove` at watermark 0 still drops the row), so an output
-    // it transformed invalidates every snapshot up to the install itself.
-    // Otherwise the watermark-derived floor covers what the merge stream
-    // collected -- but only if it collected anything: a run that dropped no
-    // version below the watermark took nothing away from any snapshot, and
-    // claiming a floor there refuses reads whose data is still on disk.
-    let retention = if filter_transformed {
-        crate::version::RetentionEffect::DropsData
-    } else if collected_below_watermark {
-        crate::version::RetentionEffect::GcBelow(opts.mvcc_gc_watermark)
-    } else {
-        crate::version::RetentionEffect::Keep
-    };
+    // actually did rather than off the watermark it was handed. The rule
+    // itself lives with the effect it produces, so the flush install cannot
+    // drift from it.
+    let retention = crate::version::RetentionEffect::of_run(
+        filter_transformed,
+        collected_below_watermark,
+        opts.mvcc_gc_watermark,
+    );
 
     let tables_out = created_tables.len();
 

@@ -1037,24 +1037,14 @@ impl AbstractTree for Tree {
             // A flush adds a run, but it does not only add: `AbstractTree::flush`
             // feeds the sealed memtables through the same `CompactionStream`
             // with this same watermark, so it collects the versions below it
-            // exactly as a compaction does. The floor has to record that, or a
-            // read the flush already collected the answer for stays admitted
-            // after a reopen and comes back as an absent key rather than a
-            // refusal.
+            // exactly as a compaction does, and owes older snapshots the same
+            // accounting. Same rule, evaluated in the same place, because a
+            // flush and a compaction disagreeing about it is how a floor came
+            // to promise data the output no longer held.
             //
-            // Only when it collected something, though: the caller reports that
-            // from the stream's own count, because the watermark alone does not
-            // say it. An empty output is not the signal either -- a watermark
-            // above every version collects the lot and writes no table at all.
-            //
-            // `DropsData` is unreachable here: the flush stream carries no user
-            // compaction filter, and every arm of the fold that drops an entry
-            // is bounded by the watermark.
-            if collected_below_watermark {
-                crate::version::RetentionEffect::GcBelow(gc_watermark)
-            } else {
-                crate::version::RetentionEffect::Keep
-            },
+            // `false` for the filter: the flush stream carries no user
+            // compaction filter, so `DropsData` is unreachable here.
+            crate::version::RetentionEffect::of_run(false, collected_below_watermark, gc_watermark),
         )?;
 
         if let Err(e) = version_lock.maintenance(&self.config.path, gc_watermark, &*self.config.fs)
