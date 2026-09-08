@@ -1047,6 +1047,15 @@ impl AbstractTree for Tree {
             // watermark, cannot drop an entry at or above it, so the watermark
             // is the whole of this install's effect and `DropsData` is
             // unreachable here.
+            //
+            // The floor is reported for a non-zero watermark whether or not
+            // this run folded anything away, matching the compaction install
+            // and what `GcBelow` states: a snapshot below it MAY have lost what
+            // it depended on, not that it did. Narrowing that to what a run
+            // actually removed has no signal here to read: the plain GC fold
+            // drains without marking a transform, and an empty output does not
+            // mean an empty collection, since a watermark above every version
+            // collects the lot and writes no table at all.
             crate::version::RetentionEffect::GcBelow(gc_watermark),
         )?;
 

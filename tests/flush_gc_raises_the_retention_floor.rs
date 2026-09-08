@@ -5,16 +5,20 @@
 //!
 //! `AbstractTree::flush` runs the sealed memtables through the same
 //! `CompactionStream` a compaction uses, with the same GC threshold, so it
-//! collects the same versions. The version it installs, however, is recorded
-//! with `RetentionEffect::Keep`, which leaves the persisted retention floor
+//! collects the same versions. The version it installed used to be recorded
+//! with `RetentionEffect::Keep`, which left the persisted retention floor
 //! where it was.
 //!
-//! While the process lives that is invisible: a read below the install is
-//! routed to the retained `SuperVersion` and its sealed memtables. A reopen
-//! removes that routing, and the floor is the only boundary left. Admitting a
-//! read the flush already collected the answer for makes it return a silent
-//! "absent" instead of `SnapshotBelowRetention`, which a consumer cannot tell
-//! from a genuine delete.
+//! While the process lives that was invisible, and still is: a read below the
+//! install is routed to the retained `SuperVersion` and its sealed memtables,
+//! so it comes back answered either way. A reopen removes that routing and the
+//! floor is the only boundary left. Admitting a read the flush had already
+//! collected the answer for returned a silent "absent" instead of
+//! `SnapshotBelowRetention`, which a consumer cannot tell from a genuine
+//! delete.
+//!
+//! These tests pin both sides of that boundary, and the watermark-0 case that
+//! must move nothing.
 
 use lsm_tree::{AbstractTree, Config, SeqNo, SequenceNumberCounter};
 
