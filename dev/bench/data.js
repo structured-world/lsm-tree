@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788869711558,
+  "lastUpdate": 1788886930351,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -22182,6 +22182,90 @@ window.BENCHMARK_DATA = {
             "value": 724854.1236512559,
             "unit": "ops/sec",
             "extra": "P50: 1.2us | P99: 4.5us | P99.9: 27.0us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bbc3a15ef2530f3db05b76382ea40488578b10d2",
+          "message": "fix(compaction): refuse an interrupted merge, and record only real losses (#636)\n\n## Summary\n\nBoth installs reported the GC watermark they were handed, whether or not\nthe run dropped anything below it. So a run that collected nothing still\nrecorded `GcBelow` and, after a reopen, refused snapshots whose data was\nnever collected.\n\nAn RT-only flush is the sharpest case: it sends nothing through the fold\nat all, and still persisted `watermark - 1`.\n\n## An interrupted serial merge was committing a truncated output\n\nFound in review of this PR. Unrelated to the retention accounting except\nthat the accounting is what exposed it, and fixed here rather than\ndeferred, because it is data loss.\n\n`merge_tables` runs its merge loop inside a closure. On the stop signal\nthe loop returned `Ok(())`, the closure ended, and execution continued\nto `produce` and `install_merge`, which swaps EVERY input table named in\nthe payload for what was written. The input the loop never read was\ndropped out of the tree.\n\nMeasured on the unfixed code by the regression test: a compaction of 128\nkeys, interrupted after its first written item, loses 127 of them\n(`key_0001 was lost by the interrupted compaction`).\n\nThe parallel path already refuses in exactly this situation, with a\ncomment saying why: a truncated sub-range installed atomically beside\nits siblings leaves a gap in the key space. The serial path now refuses\nthe same way, and the shared error stops being `std`-gated because a\nno-std build reaches it too.\n\n`interrupted_serial_merge_keeps_every_key` drives it through a test-only\nfailpoint that raises the stop signal after the first written item, so\nthe path is reachable without racing a tree drop against an in-flight\ncompaction. It asserts the compaction refuses, that every key is still\nreadable, and that a reopen sweeps the half-written output and returns\nthe same tree.\n\n## Why the issue's premise is mostly stale\n\nThe issue says `filter_transformed` is derived from a marker that also\nticks on the merge stream's own drops, so a tree with merge operators\nand no filter records `DropsData` routinely. That was true when the\nissue was written and is not true now: `a91be3d3c` (#616) split the\ncounters, and `worker.rs` derives `filter_transformed` from\n`filter_marker`, which only the filter adapter ticks on non-`Keep`\nverdicts. `DropsData` already means what its name says.\n\nWhat was left is the other axis the issue also names: telling a run that\ncollected history from one that collected none.\n\n## Why there was no signal for it\n\nNeither existing counter answers it, and the obvious substitutes are\nwrong:\n\n- The transform marker deliberately does not tick for obsolete-version\ndrops, since the newer version shadowing them lives in the output and\nthey are not a lineage transformation.\n- The plain GC fold drains without marking anything at all.\n- An empty output is not the signal: a watermark above every version\ncollects the lot and writes no table (`tree_flush_eviction_2`).\n\n## What this does\n\nThe stream keeps a BALANCE of versions consumed and not emitted.\n`CountingPeek` wraps the peekable and registers every version that\nLEAVES it (through `next` or `next_if`, never through `peek`, which only\nfills a cache); the iterator settles one on every emit. So any way of\nlosing a version registers itself: the fold's drain, a merge resolution\nconsuming a base inline, a range-tombstone drop, an eviction, and ways\nnot written yet.\n\nCounting on the way out rather than on the way in is what makes an\nabandoned run safe: a run stopped mid-way must not be charged for an\nentry it only looked at.\n\nThe polarity is deliberate: an oversight over-reports and refuses reads,\nrather than under-reporting and answering them from data that is gone.\nWhat excuses itself is one rule applied at each site that drops a\ntombstone: at the bottom level a tombstone and an all-tombstone tail\nunder it are neutral, because the key read absent through them and reads\nabsent from nothing afterwards. Anything else stays counted, including\nthe same shapes off the bottom level, where a lower level may hold the\nversion the tombstone was hiding.\n\nTwo changes fall outside the stream and carry their own signal:\n\n- **Seqno zeroing.** The bottom level rewrites a below-watermark seqno\nto 0. The entry count is unchanged, so the balance cannot see it, yet\nthe version now answers snapshots that predate it. It reports once per\nrun.\n- **Merge-on-read relocation.** It never enters the stream, and it is\nreached only for a non-empty bitmap of rows covered by below-watermark\nrange tombstones, so the replacement masks rows a below-watermark\nsnapshot could read before. It reports unconditionally.\n\nBoth installs read the result (the compaction through `ProducedOutput`\nbeside the filter flag, the flush through `register_tables`) and both\nderive the effect through `RetentionEffect::of_run`, so the rule lives\nin one place rather than two:\n\n| run did | effect |\n|---|---|\n| user filter returned non-`Keep` | `DropsData` (acts regardless of any\nwatermark) |\n| fold dropped a version below the watermark | `GcBelow(watermark)` |\n| neither | `Keep` |\n\n`AbstractTree::register_tables` takes one more argument for this.\n\n## Regression tests\n\nFailing on the unfixed code, for both installs:\n\n- `an_rt_only_flush_leaves_the_floor_alone`: a memtable holding only a\nrange tombstone produces no tables and must move no floor, with a\npre-existing SST version staying readable below the watermark.\n- `a_flush_that_collects_nothing_leaves_the_floor_alone` and\n`a_compaction_that_collects_nothing_leaves_the_floor_alone`: one version\nper key, nothing to fold.\n- `a_compaction_that_collects_history_still_raises_the_floor`: the other\ndirection stays pinned.\n- `a_compaction_that_only_zeroed_seqnos_still_raises_the_floor`: no\nversion is dropped at all, yet the floor must move.\n-\n`a_merge_fold_compaction_serves_every_snapshot_above_the_watermark_after_a_reopen`:\nthe contract the floor owes, followed through a reopen.\n\nUnit tests in `src/compaction/stream/tests.rs` cover the balance itself,\neach with its counterexample so neither direction can rot:\n\n| neutral, must not count | collected, must count |\n|---|---|\n| lone bottom-level tombstone | tombstone chain that also swallowed a\nvalue |\n| bottom-level tombstone-only chain | merge fold swallowing a\nbelow-watermark base |\n| tombstone tail under an emitted head, at the bottom level | the same\ntail OFF the bottom level, where a lower level may hold a version the\ntombstone was hiding |\n| the tombstone a bottom-level merge fold resolves against | the same\nfold off the bottom level, or over a tombstone that hid a value, or\nswallowing an operand into the result |\n| lone merge operand, nothing consumed beyond the head | watermark\ndropping a version |\n| a run abandoned after one item (the peek must not count) | |\n\n`RetentionEffect::of_run` has its own unit tests for all three outcomes,\nincluding that a filter verdict outranks both the watermark and whether\nthe folds collected anything.\n\n## One neutral drop that IS counted, on purpose\n\nTwo inputs carrying the same key at the same seqno, which a\nre-registered table or an overlapping ingest can produce, emit one copy\nand consume both. The balance ends positive and the floor rises although\nnothing observable changed. That is left counted: it errs toward\nrefusing a read rather than answering one from data that is gone, and\nexcusing it would mean deciding two entries are identical rather than\nmerely adjacent. Recorded next to the genuine exemptions so it is not\nremoved later as an oversight.\n\n## What review found, and why the mechanism changed\n\nThe first version of this PR ticked a counter at each known drop site.\nReview found three routes it did not know about: a merge resolution\nswallowing a base inline (so `drain_key` had nothing left to drain), the\nbottom level rewriting a seqno, and the relocation path. All three\nrecorded `Keep`.\n\nThree misses in one round is a verdict on the mechanism, not three\noversights. Ticking at drop sites is a whitelist, and a whitelist whose\nomissions fail by under-reporting keeps producing this defect as paths\nare added. Hence the balance, which is closed by construction, and the\ntwo explicit exceptions above, which fail safely if forgotten.\n\nThe merge-fold case has a regression test that fails on the previous\ncommit of this branch.\n\n## Two tests corrected\n\n`a_compaction_that_collects_nothing_leaves_the_floor_alone` used a\nwatermark above its data, which at the bottom level also zeroes seqnos,\nso it was asserting the very behaviour review flagged. Its watermark now\nsits below the data, which is what \"touched nothing\" actually requires\nof a bottom-level run.\n\n`gc_fold_keeps_the_readable_version` records the watermark-derived floor\nagain. Its fold keeps both versions, but the bottom level zeroes the\nseqno of the one it keeps, and that is a change of its own. The\nfloor-boundary assertions that belong with a floor come back with it.\n\n## Also in this branch\n\n`structured-zstd` moves to 0.0.52, which carries a dictionary-encode fix\non the per-level dictionary compression path this crate uses, and its\ndependency comment loses the release history it had accumulated.\n\n`ZstdDictionary`'s documentation no longer reads as though the\nconstructor trains: it was headed \"pre-trained\" with an example passing\n`training_data` to `new`, which takes dictionary bytes and hashes them.\nTraining happens outside the crate.\n\n## Comments in the touched files\n\nThree issue numbers pinned in comments are replaced by what they were\npointing at, and two notes are dropped rather than reworded: a\nmanifest-version bump policy and a no-std migration plan. A comment\nexplains why the code is what it is; it does not hand out future\nobligations.\n\n## Note on #629's closure\n\nThe issue was closed by #635's merge without this code: the `Closes\n#629` line went into that PR's body while the commit carrying the work\nwas still unpushed. Reopened, and this PR is the one that actually\ncarries it.\n\n## Testing\n\n`cargo nextest run --workspace` 2675/2675 and `--all-features`\n3326/3326, `cargo test --doc --all-features` 80/80, clippy with `-D\nwarnings` in both feature configurations, `cargo doc --no-deps` 0\nwarnings, no-std check 0 errors, `cargo fmt --check` clean.\n\nRecovery paths run separately, since this touches the compaction\nlifecycle: the repair, salvage, recovery, scrub, ECC, heal, crash,\nreload, orphan and corruption suites (804 tests, all features), the\nproperty suites including the BTreeMap oracle and the MVCC snapshot\nproperties, and the `#[ignore]`d bitrot heal fuzzer at its full CI\nbudget (45s, one bit flipped per SST across a corpus varying block size,\nper-KV checksum, columnar, compression, encryption and Page-ECC).\n\nThe no-std gate caught a real break in this round:\n`cancelled_compaction` was `#[cfg(feature = \"std\")]` because only the\nparallel path used it, and the serial path reaches it in a no-std build.\n\nCloses #629",
+          "timestamp": "2026-09-08T19:59:59+03:00",
+          "tree_id": "d044b182b6cb3bd93f602c00cdbef5c7dfbf5f80",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/bbc3a15ef2530f3db05b76382ea40488578b10d2"
+        },
+        "date": 1788886915359,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "mixed",
+            "value": 136834.62067759814,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 5.5us | P99.9: 9.2us\nthreads: 1 | elapsed: 3.91s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillseq",
+            "value": 4334987.362211343,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.2us | P99.9: 1.6us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1356008.4984035813,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 1.9us | P99.9: 3.2us\nthreads: 1 | elapsed: 0.15s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readrandom",
+            "value": 858535.7320232159,
+            "unit": "ops/sec",
+            "extra": "P50: 1.0us | P99: 3.2us | P99.9: 15.8us\nthreads: 1 | elapsed: 0.23s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readseq",
+            "value": 4371774.477466934,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.9us | P99.9: 2.7us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 491618.4498966946,
+            "unit": "ops/sec",
+            "extra": "P50: 1.7us | P99: 3.8us | P99.9: 7.2us\nthreads: 1 | elapsed: 0.41s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 244359.14895577927,
+            "unit": "ops/sec",
+            "extra": "P50: 3.8us | P99: 4.7us | P99.9: 7.1us\nthreads: 1 | elapsed: 0.82s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "overwrite",
+            "value": 1356712.7685353453,
+            "unit": "ops/sec",
+            "extra": "P50: 0.7us | P99: 1.9us | P99.9: 3.0us\nthreads: 1 | elapsed: 0.15s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 1269196.646878918,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 1.4us | P99.9: 2.3us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 723627.1672823612,
+            "unit": "ops/sec",
+            "extra": "P50: 1.2us | P99: 4.5us | P99.9: 27.3us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3"
           }
         ]
       }
