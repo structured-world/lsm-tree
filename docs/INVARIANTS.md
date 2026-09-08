@@ -78,11 +78,18 @@ matching entry (and add one for a new subsystem).
 
 ## Compaction
 
-- **Compaction output preserves every MVCC version visible to a live snapshot.**
-  A merge may physically drop a version only when no open snapshot can observe it;
-  otherwise a snapshot read would change answer across a compaction. Enforced in
-  `src/compaction/worker.rs` (merge + tombstone handling) and the compaction
-  integration tests (`src/compaction/leveled`).
+- **Every MVCC version a live snapshot can observe survives a compaction, in the
+  tree though not necessarily in the new output.** A snapshot below the install
+  keeps reading the version retained for it, whose tables stay on disk until no
+  version or open reader references them, so a merge may leave such a version
+  out of what it writes: preservation is provided by the retained history plus
+  file lifetime, not by every output carrying every version (see the routing
+  entry under Snapshot / sequence number, and the file-lifecycle entry below).
+  What a merge may NOT do is drop a version the recorded retention floor still
+  promises, since after a reopen the floor is the only boundary left. Enforced
+  in `src/compaction/worker.rs` (merge + tombstone handling), the floor recorded
+  at install (`RetentionEffect`), and the compaction integration tests
+  (`src/compaction/leveled`).
 
 - **Everything an install reports as collected history sits strictly below the
   GC watermark.** This is what lets the effect be derived from the watermark at
@@ -177,11 +184,15 @@ matching entry (and add one for a new subsystem).
   with the sides arranged differently. A read at snapshot `R` resolves to the
   version whose seqno is highest still strictly below `R`, so an output
   installed at seqno `I` is reachable only from `R > I`; a read at or below `I`
-  is routed to the version current at that seqno, and answered from the tables
-  that compaction consumed, for as long as that version is retained. Once
-  maintenance prunes it, such a read is REFUSED (the entry above), not answered
-  from this output. Either way it is not this output's problem, which is why a
-  fold may discard a version that a lower snapshot still resolves to.
+  is routed to the version current at that seqno and answered from THAT
+  version's tables, for as long as it is retained. Those are not necessarily
+  this compaction's inputs: with consecutive compactions (A replaced by B at
+  20, B by C at 30) a read at 15 resolves to the version holding A, while the
+  compaction at 30 consumed B. They are the ancestry its inputs came from, and
+  the file-lifecycle rule below is what keeps them on disk. Once maintenance
+  prunes that version, such a read is REFUSED (the entry above) rather than
+  answered from this output. Either way it is not this output's problem, which
+  is why a fold may discard a version that a lower snapshot still resolves to.
 
   The qualifier is load-bearing, because a reopen does NOT preserve it. The
   recovered history is a single version whose seqno is the persisted retention
@@ -199,9 +210,13 @@ matching entry (and add one for a new subsystem).
   (`src/version/super_version.rs`) and, for point reads under `std`, by the
   mirrored-latest fast path in `Tree::snapshot_for_read`, which answers
   `seqno > latest.seqno` without consulting the resolver. Those are two
-  spellings of one comparison and have to stay that way: changing the strict
-  `<` in either alone makes point reads and iterator reads disagree about
-  which compaction has happened. Iterators additionally hold the version they
+  spellings of one comparison, and the constraint between them runs ONE WAY:
+  the fast path may claim a snapshot only when the resolver would answer it
+  with the latest version anyway. Widening the fast path breaks routing by
+  itself, since iterators call the resolver directly and would still get the
+  previous version. Changing the resolver alone does not, because the fast path
+  fires only above `latest.seqno`, where both spellings pick the latest
+  regardless. Iterators additionally hold the version they
   resolved for the whole traversal, so a concurrent compaction cannot swap the
   file set underneath one.
 
