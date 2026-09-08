@@ -510,16 +510,43 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                     {
                         head = fail_iter!(self.resolve_with_operator(head));
                     }
-                } else if head.is_tombstone() && self.evict_tombstones {
-                    // Bottom level: the tombstone and every version it shadows
-                    // leave together. Deliberately independent of the older
-                    // sibling's seqno, which is what the key-boundary and
-                    // end-of-stream arms already do. Gating it on the threshold
-                    // instead left a tombstone uncollectable for good whenever a
-                    // surviving older version sat beneath it — a shape the fold
-                    // below now produces on purpose.
+                } else if head.key.value_type == ValueType::Tombstone
+                    && self.evict_tombstones
+                    && head.key.seqno < self.gc_seqno_threshold
+                {
+                    // Bottom level, and the tombstone itself is below the
+                    // watermark: it is then the newest version any servable
+                    // snapshot resolves to, and it reads as an absent key. So
+                    // the tombstone and every version it shadows leave together.
+                    //
+                    // The gate is the tombstone's OWN seqno, the same condition
+                    // the fold below states. Gating on the older sibling instead
+                    // discards the value a snapshot between the two still
+                    // resolves to; leaving the gate out entirely does that at
+                    // any watermark, including the threshold-0 contract that
+                    // collects nothing.
+                    //
+                    // The key-boundary and end-of-stream arms need no such gate:
+                    // a tombstone with no sibling shadows nothing, so dropping
+                    // it answers every snapshot the way keeping it does.
                     self.note_transform();
                     fail_iter!(self.drain_key(&head.key.user_key));
+                    continue;
+                } else if head.key.value_type == ValueType::WeakTombstone
+                    && peeked.key.value_type == ValueType::Value
+                    && head.key.seqno < self.gc_seqno_threshold
+                {
+                    // The weak delete and the put it consumed leave the output
+                    // together: an annihilation, a visibility transform rather
+                    // than a GC fold, and it needs no bottom level because a
+                    // weak delete is contracted to a key written at most once.
+                    //
+                    // It is bounded by the watermark for the reason above: a
+                    // snapshot between the put and the delete resolves to the
+                    // put, so the pair may only go once the delete itself is
+                    // below the watermark.
+                    fail_iter!(self.drain_key(&head.key.user_key));
+                    self.note_transform();
                     continue;
                 } else if peeked.key.seqno < self.gc_seqno_threshold {
                     // Merge operands below GC watermark: collapse via merge operator.
@@ -555,20 +582,6 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                     } else if head.key.value_type.is_merge_operand() {
                         // Head MergeOperand above GC — preserve tail for future merge
                     } else {
-                        // Drop weak tombstone if next item is Value: the weak
-                        // delete and the value it consumed both leave the
-                        // output — an annihilation, a visibility transform.
-                        // Not a GC fold and not gated by the threshold: the
-                        // delete is what the writer asked for, so the value it
-                        // consumed must go with it at any seqno.
-                        if peeked.key.value_type == ValueType::Value
-                            && head.key.value_type == ValueType::WeakTombstone
-                        {
-                            fail_iter!(self.drain_key(&head.key.user_key));
-                            self.note_transform();
-                            continue;
-                        }
-
                         // The GC fold, and it needs BOTH versions below the
                         // threshold, the same condition the merge path states
                         // above. Testing only the older sibling discards the

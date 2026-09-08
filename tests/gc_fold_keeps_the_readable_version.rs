@@ -91,13 +91,28 @@ fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::R
          instead of the version the floor promised",
     );
 
-    // And a read the floor does not admit must be refused, not answered.
+    // And a read the floor does not admit must be refused, not answered. The
+    // boundary itself is the interesting one: the contract is "at or below the
+    // floor", so `floor` is refused while `floor + 1` is the smallest snapshot
+    // the fold has to keep a version for.
     assert!(
         matches!(
             reopened.get("k", SeqNo::from(1_u64)),
             Err(lsm_tree::Error::SnapshotBelowRetention { .. })
         ),
-        "a read at or below the floor must be refused",
+        "a read below the floor must be refused",
+    );
+    assert!(
+        matches!(
+            reopened.get("k", floor),
+            Err(lsm_tree::Error::SnapshotBelowRetention { .. })
+        ),
+        "a read AT the floor {floor} must be refused",
+    );
+    assert_eq!(
+        reopened.get("k", floor + 1)?.as_deref(),
+        Some(&b"old"[..]),
+        "the smallest admitted snapshot must resolve to the newest version below the watermark",
     );
 
     Ok(())
