@@ -23,6 +23,25 @@ use std::time::Instant;
 /// rewrites are re-compressed at that level, not merely copied.
 pub struct Mixed;
 
+/// The workload's own name, so the reporting path can ask about it without
+/// hardcoding the string in two places.
+pub const NAME: &str = "mixed";
+
+/// The codec a given workload actually runs with.
+///
+/// Everything reads `--compression`; `mixed` overrides it. The reporting path
+/// asks here so the JSON report names the codec that ran rather than the one on
+/// the command line, which would otherwise be a quiet mislabel in exactly the
+/// series that is meant to be comparable across runs.
+#[must_use]
+pub fn effective_compression(benchmark_name: &str, requested: Compression) -> Compression {
+    if benchmark_name == NAME {
+        Compression::Zstd22
+    } else {
+        requested
+    }
+}
+
 impl Workload for Mixed {
     fn run(
         &self,
@@ -61,7 +80,7 @@ impl Workload for Mixed {
         // the run header keeps describing the tree that actually ran.
         let dir = tempfile::tempdir()?;
         let mut pinned = config.clone();
-        pinned.compression = Compression::Zstd22;
+        pinned.compression = effective_compression(NAME, config.compression);
         let tree = create_tree(dir.path(), &pinned)?;
 
         let mut key = vec![0u8; config.key_size];
