@@ -169,6 +169,11 @@ impl Tree {
         let hi = clone_bound(range.end_bound());
         let bounds_ref = (bound_as_ref(&lo), bound_as_ref(&hi));
 
+        // The segment list below is built from the version a read at `seqno`
+        // resolves to, not from the current one. Two things follow that this
+        // scan depends on: a compaction installed at or above `seqno` cannot
+        // turn a row-major tree columnar (or the reverse) underneath it, and
+        // the per-segment recency ranking is the ranking THAT version had.
         let super_version = self
             .version_history
             .read()

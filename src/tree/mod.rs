@@ -1202,9 +1202,27 @@ impl AbstractTree for Tree {
         let mut key_count: u64 = 0;
 
         // Use ONE snapshot at the requested seqno for both the SST and memtable
-        // contributions, so the estimate reflects the same visibility as a read
-        // at `seqno` (no entries newer than the snapshot, and a consistent set of
-        // tables + memtables even during a concurrent flush / compaction).
+        // contributions, so the estimate is taken against a read's view at
+        // `seqno`: one consistent TABLE set even during a concurrent flush or
+        // compaction, and memtable entries filtered by the snapshot. Neither
+        // half is exact, and the two paragraphs below say how.
+        //
+        // What "the same visibility as a read" does and does not mean here.
+        //
+        // It picks the FILE SET a read at `seqno` resolves to, rather than the
+        // current one, and filters the memtables by `seqno`. It is not a
+        // per-row mask: a table whose seqno range straddles `seqno` is
+        // classified `Partial` and then apportioned whole by byte offsets, so
+        // its share can include rows the snapshot cannot read. The estimate is
+        // an estimate, and this is one of the ways it is approximate.
+        //
+        // Nor does resolving once freeze the tree. The clone pins the version's
+        // tables, but the active memtable behind it is the live one every
+        // writer mutates, so a write landing mid-call can be counted by the
+        // memtable half after the table half was read. And at a forward-looking
+        // `seqno` (`MAX_SEQNO`, say) a compaction installing after the clone is
+        // what the NEXT read at that seqno resolves to: the layout described
+        // here is one compaction is free to change the moment this returns.
         let comparator = self.config.comparator.as_ref();
         let super_version = self
             .version_history
@@ -3812,11 +3830,16 @@ impl Tree {
 
     /// The snapshot for one point read, without a clone when it is the latest.
     ///
-    /// Lock-free fast path: when reading at or beyond the latest installed
+    /// Lock-free fast path: when reading STRICTLY ABOVE the latest installed
     /// version (always the case for `MAX_SEQNO`, and the common case), the
     /// mirrored latest [`SuperVersion`] is exactly what `get_version_for_snapshot`
     /// would return (it yields the latest iff `latest.seqno < seqno`), so
     /// load it without taking the history `RwLock` or cloning a deque entry.
+    /// At equality the fast path does not fire: `seqno == latest.seqno` falls
+    /// through to the resolver, which answers from the retained history, or
+    /// refuses when nothing is retained below that seqno (the latest version
+    /// being also the oldest, after a reopen at a non-zero floor or once
+    /// pruning has left one version).
     /// Recent inserts stay visible because they mutate the shared
     /// `active_memtable` behind a stable Arc; the back only changes on
     /// flush / compaction, which refresh this mirror under the write lock.
@@ -3828,6 +3851,37 @@ impl Tree {
     /// mirror's writers, so iterators keep their own clones. no-std has no
     /// mirror (`arc-swap` is std-only) and always clones out of the locked
     /// history, as before.
+    ///
+    /// What every caller with a NON-ZERO `seqno` gets, and may assume: the
+    /// memtables and tables of ONE version, the one whose seqno is the highest
+    /// still strictly below `seqno`. Not the newest tables that exist. While
+    /// the history that installed it is live, that means a compaction which
+    /// installed at or above `seqno` is invisible here, which is the routing
+    /// the compaction folds are written against (see
+    /// [`get_version_for_snapshot`](crate::version::SuperVersions::get_version_for_snapshot)).
+    ///
+    /// Snapshot `0` is outside that rule and served by its own: no version is
+    /// strictly below it, so the resolver hands back the OLDEST retained one,
+    /// which after pruning can be an output installed far above `0`. Nothing
+    /// is visible at seqno `0` whatever the file set, which is why the
+    /// exception is harmless and why it is stated rather than papered over.
+    ///
+    /// The qualifier matters. A recovered history holds ONE version carrying
+    /// the persisted retention floor as its seqno, so after a reopen this
+    /// returns tables written by compactions that installed well above
+    /// `seqno`, for every `seqno` above the floor. Nothing here may be relied
+    /// on to hide a compaction from a read that the floor admits.
+    ///
+    /// The fast path above is the SECOND spelling of that routing comparison,
+    /// not a shortcut around it: `seqno > latest.seqno` is the resolver's
+    /// `version.seqno < seqno` with the sides swapped. It may only claim a
+    /// snapshot the resolver would answer with the latest version anyway.
+    /// Widening it (to `>=`, say) breaks that by itself, because iterators call
+    /// the resolver directly and would still get the previous version, so point
+    /// reads and iterator reads would disagree about which compaction a
+    /// snapshot can see. The constraint does not run the other way: the
+    /// resolver can be changed alone, since this path fires only above
+    /// `latest.seqno`, where both spellings pick the latest either way.
     ///
     /// # Errors
     ///
@@ -4325,6 +4379,16 @@ impl Tree {
     /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
     /// when the history no longer retains a version for `seqno`; the error is
     /// raised here, before any I/O, rather than as an iterator item.
+    ///
+    /// The version is resolved ONCE here and moved into the iterator, so the
+    /// whole traversal reads one file set: a compaction installing mid-scan
+    /// neither adds its output nor removes the inputs this iterator holds.
+    /// Combined with the resolver picking, for a non-zero `seqno`, the version
+    /// whose seqno is highest still strictly below it (its install seqno while
+    /// the history is live, the persisted floor after a reopen), that is what
+    /// lets a compaction fold discard a version a lower snapshot still
+    /// resolves to. Snapshot `0` is the resolver's own special case and sees
+    /// nothing regardless of which version it lands on.
     #[doc(hidden)]
     pub fn create_range<'a, K: AsRef<[u8]> + 'a, R: RangeBounds<K> + 'a>(
         &self,
@@ -4353,6 +4417,11 @@ impl Tree {
 
     /// Build a [`SeekableTreeIter`](crate::range::SeekableTreeIter) over
     /// `[lo, hi)`. Source collection (Phase 1) runs once; repositions reuse it.
+    ///
+    /// Because the sources are collected once and reused, every reposition
+    /// resolves against the file set of the version taken here, however long
+    /// the iterator lives. That is the same one-version rule the plain range
+    /// iterator states, and it binds for longer.
     ///
     /// # Errors
     ///
@@ -4395,6 +4464,10 @@ impl Tree {
     /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
     /// when the history no longer retains a version for `seqno`; the error is
     /// raised here, before any I/O, rather than as an iterator item.
+    ///
+    /// One version for the whole traversal, as for the range iterator. The
+    /// prefix filter narrows which of ITS tables are consulted; it never
+    /// reaches a table outside the version resolved here.
     #[doc(hidden)]
     pub fn create_prefix<'a, K: AsRef<[u8]> + 'a>(
         &self,

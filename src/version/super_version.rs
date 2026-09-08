@@ -112,9 +112,13 @@ impl RetentionEffect {
     /// is how a floor came to promise data the output no longer held.
     ///
     /// `collected_below_watermark` says the run lost or rewrote a version
-    /// because of `watermark`. `GcBelow(watermark)` is exact rather than
-    /// conservative because of an invariant the callers uphold: everything
-    /// they report happens STRICTLY BELOW the watermark. The fold, merge
+    /// because of `watermark`. Deriving the effect from the watermark at all
+    /// rests on an invariant the callers uphold: everything they report
+    /// happens STRICTLY BELOW the watermark. (The floor this yields is safe,
+    /// not tight: the report is one boolean with no seqno in it, so a run that
+    /// collected at seqno 10 under a watermark of 100 still refuses up to the
+    /// cap. Refusing more than was lost costs an error; refusing less would
+    /// answer from data that is gone.) The fold, merge
     /// resolution, weak-delete annihilation and bottom-level eviction are each
     /// gated on the head's own seqno; applied range tombstones are strictly
     /// below it and so are the entries they cover; bottommost seqno zeroing
@@ -621,6 +625,32 @@ impl SuperVersions {
 
     /// Resolves the super-version that serves a read at snapshot `seqno`: the
     /// newest retained version installed below it.
+    ///
+    /// This is where the engine's read routing lives, and compaction depends on
+    /// it: because a read at `seqno` is answered by a version installed
+    /// STRICTLY below it, an output installed at seqno `I` never has to answer
+    /// a read below `I`, which is answered from the version current then, out
+    /// of THAT version's tables. Those need not be this compaction's own
+    /// inputs: consecutive compactions (A replaced by B at 20, B by C at 30)
+    /// leave a read at 15 on the version holding A, while the compaction at 30
+    /// consumed B. Either way it is not the new output's problem, which is what
+    /// lets a fold discard a version some lower snapshot still resolves to.
+    /// The dependency is
+    /// one-way and unenforced by any type, so a change to the comparison here
+    /// changes what the folds are allowed to drop; a reopen already drops the
+    /// routing (the history restarts as one version whose seqno is the
+    /// persisted floor, not any install seqno), which is why the folds are
+    /// written to be sound against the floor alone.
+    ///
+    /// The comparison is spelled twice. Point reads under `std` take
+    /// [`Tree::snapshot_for_read`](crate::Tree)'s mirrored-latest fast path,
+    /// which answers `seqno > latest.seqno` without reaching this function.
+    /// The constraint between them runs ONE WAY: the fast path must only claim
+    /// a snapshot this resolver would answer with the latest version anyway.
+    /// Widening it (to `>=`, say) breaks that on its own, since iterators come
+    /// here directly and would still get the previous version. Changing this
+    /// resolver alone does not, because the fast path fires only above
+    /// `latest.seqno`, where both spellings pick the latest regardless.
     ///
     /// Snapshot `0` is served from the oldest retained version. No entry has a
     /// seqno below `0`, so nothing is visible at that snapshot from any
