@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788886930351,
+  "lastUpdate": 1788897869157,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -22266,6 +22266,90 @@ window.BENCHMARK_DATA = {
             "value": 723627.1672823612,
             "unit": "ops/sec",
             "extra": "P50: 1.2us | P99: 4.5us | P99.9: 27.3us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0a15cca9282d2052eb5dddedff2a80f6fbecb736",
+          "message": "docs(compaction): write down the two couplings the folds rest on (#639)\n\n## Summary\n\nTwo properties the compaction folds rest on were true, load-bearing and\nwritten nowhere. Each surfaced by accident, one of them as a live\ncorrectness defect (#630). This writes both down, at the sites that\ncarry them and in `docs/INVARIANTS.md` as properties of the engine\nrather than of any one module.\n\n## The routing coupling\n\nWhile the history that installed it is live, a compaction output only\nhas to serve reads STRICTLY ABOVE its own install seqno. A read at\nsnapshot `R` resolves to the version whose seqno is highest still\nstrictly below `R`, so an output installed at `I` is reachable only from\n`R > I`, equality included in what it never has to serve; a read at or\nbelow `I` is answered from THAT version's tables (its inputs' ancestry,\nnot necessarily this compaction's own inputs, since consecutive\ncompactions push the retained version further back), for as long as it\nis retained, and refused once maintenance prunes it. Either way it is\nnot this output's problem, which is what makes a fold allowed to discard\na version some lower snapshot still resolves to.\n\nThat also reconciles the pre-existing preservation invariant, which\ndemanded every version a live snapshot can observe survive in the\ncompaction OUTPUT. It survives in the TREE: the retained version holds\nit and file lifetime keeps those files on disk. What a merge may never\ndrop is a version the recorded floor still promises, which is the half\nthat survives a reopen.\n\nThe qualifier is load-bearing. A reopen recovers ONE version whose seqno\nis the persisted retention floor (`SuperVersions::new`), not any install\nseqno, so an output installed at `100` under a floor of `20` does answer\na read at `50` after a restart. From a restart onward the floor is the\nboundary, which is why a fold has to be sound against the floor alone\nrather than against the routing. A fold leaning on the routing by itself\nis exactly the shape of #630.\n\nThe comparison is also spelled twice, not once: point reads under `std`\ntake the mirrored-latest fast path in `Tree::snapshot_for_read` (`seqno\n> latest.seqno`) without reaching the resolver. Both sites now say so,\nand say which way the constraint runs: the fast path may claim a\nsnapshot only when the resolver would answer it with the latest version\nanyway, so widening the fast path breaks routing by itself (iterators\ncall the resolver directly and would still get the previous version),\nwhile changing the resolver alone does not, since the fast path fires\nonly above the latest seqno where both spellings agree.\n\nWhere it now says so:\n\n- `SuperVersions::get_version_for_snapshot` states that compaction\ndepends on the strict comparison, that the fast path is its second\nspelling, and that a reopen replaces the routing with the floor.\n- `Tree::snapshot_for_read` states what its callers get (the memtables\nand tables of ONE version, not the newest tables that exist), that its\nfast path is the same comparison with the sides swapped, and that hiding\na compaction from a read is a live-history property only: after a reopen\nit returns tables written by compactions that installed well above the\nread seqno, for every seqno above the floor.\n- The range, seekable-range and prefix iterators state that the version\nis resolved once and moved into the iterator, so a compaction installing\nmid-scan neither adds its output nor removes the inputs being read. The\nseekable one binds for longer, since it collects its sources once and\nreuses them across repositions.\n- The approximate range statistics state what \"the same visibility as a\nread\" does and does not mean there: it selects the file set a read at\nthat seqno resolves to and filters memtables by seqno, but applies no\nper-row mask (a table straddling the seqno is `Partial` and apportioned\nwhole by byte offsets, so its share can include rows the snapshot cannot\nread), and resolving once does not freeze the tree (the clone pins the\ntables, not the live active memtable, and a compaction installing after\nit is what the next read at that seqno resolves to).\n- The columnar scan states the two things it takes from this: a\ncompaction at or above the snapshot cannot turn the tree columnar (or\nback) underneath it, and the recency ranking is the one that version\nhad.\n- The blob tree's get, prefix and range state that the pointer and the\nblob file it names come from the same version, so a concurrent blob GC\ncannot reclaim the file a yielded pointer references.\n\n## The watermark coupling\n\nEvery loss an install reports sits strictly below the watermark, which\nis what lets the effect be derived from the watermark at all. A report\nfrom at or above it would leave the floor below the data that was lost,\nand the refusal protecting the reader would never be raised.\n\nThe floor that follows, `(watermark - 1)` capped at the install's own\nseqno, is a SAFE boundary rather than a tight one: the report is a\nsingle boolean carrying no seqno, so a run that collected one version at\nseqno 10 under a watermark of 100 refuses every snapshot up to the cap.\nRefusing more than was lost costs a reader an error it might not have\nneeded; refusing less would answer it from data that is gone.\n\nAudited every reporting path against the code rather than against its\ndescription:\n\n| path | what bounds it | verdict |\n|---|---|---|\n| plain fold | `head.seqno < threshold` | below |\n| merge folds | all three call sites enter with the head below the\nthreshold | below |\n| applied range tombstones | `rt.visible_at(threshold)`, covered entry\nolder still | below |\n| tombstone-chain eviction | `head.seqno < threshold` | below |\n| weak-delete annihilation | `head.seqno < threshold` | below |\n| bottommost seqno zeroing | `kv.seqno < threshold` | below |\n| merge-on-read relocation | bitmap built only from below-watermark\ntombstones | below |\n| lone bottom-level tombstone, all-tombstone tail under it | no gate |\nreports nothing, changes no answer at any snapshot |\n\nThe one transform that acts regardless of any watermark is the user\ncompaction filter, and that is precisely why it records a different\neffect (`DropsData`, floor at the install's own seqno).\n\nThe audit also turned up an install the first draft of this list missed:\nthe tight-space slice loop hands `GcBelow(watermark)` to\n`upgrade_version` directly, never through `of_run`. It holds for the\nsame reason in two parts, now written down. Its merge is an ordinary\ncompaction stream at the same watermark. Its punched input prefix leaves\noutside the stream, so the balance cannot see it: the original file is\nkept whole while any prior version references it and punches its\nconsumed prefix only once those readers drain, which makes the loss\ndeferred but certain, and the floor is what covers it.\n\n`resolve_merge_operands` and the seqno zeroer carry the statement in the\nform the issue asked for: which reads they may be invisible to, and how\nthe recorded floor covers them. For the merge fold the affected range is\n`R <= H`, not `R < H`: visibility is strict, so a read at exactly the\nhead's seqno does not see the folded result either, while before the\nfold it saw the operand below it. An applied range tombstone at `T > H`\nwidens it to `R <= max(H, T)`, since the retain drops the head as\ncovered and the emit path then drops the merged result, taking the key\nout entirely; still under the watermark, because applied tombstones are\nfiltered below it. For the zeroer the statement is scoped to key/value\nvisibility, because one thing does change above the watermark: a\ncolumnar scan projecting `COL_SEQNO` reads it in tree-global space, so a\nrewritten row reports `0` at every snapshot. The column is a physical\nencoding detail, and now says so.\n\n## Nothing filed alongside\n\nThe issue asks for any assumption the recorded floor does not cover to\nbe filed as its own issue. The audit found none: every path either gates\nbelow the watermark or reports nothing, and the one unbounded transform\nalready uses the other effect.\n\n## Testing\n\nNo behavioural change: comments and documentation only. Full gate run\nanyway, since the tree was touched.\n\n`cargo nextest run --workspace` 2679/2679 and `--all-features`\n3330/3330, `cargo test --doc --all-features` 80/80, clippy with `-D\nwarnings` in both feature configurations, `cargo doc --no-deps` clean in\nboth, no-std check 0 errors, `cargo fmt --check` clean.\n\nCloses #632",
+          "timestamp": "2026-09-08T23:02:17+03:00",
+          "tree_id": "eb9cbb3a069706f3a8e07c6e853cfc2f90c82f75",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/0a15cca9282d2052eb5dddedff2a80f6fbecb736"
+        },
+        "date": 1788897854416,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "mixed",
+            "value": 137241.86967852418,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 6.4us | P99.9: 9.4us\nthreads: 1 | elapsed: 3.90s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillseq",
+            "value": 4309421.274026963,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.2us | P99.9: 1.6us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1425900.818189019,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.8us | P99.9: 2.9us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readrandom",
+            "value": 870745.3612945633,
+            "unit": "ops/sec",
+            "extra": "P50: 1.0us | P99: 3.2us | P99.9: 14.4us\nthreads: 1 | elapsed: 0.23s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readseq",
+            "value": 4482741.400779584,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.9us | P99.9: 2.4us\nthreads: 1 | elapsed: 0.04s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 511133.27759833843,
+            "unit": "ops/sec",
+            "extra": "P50: 1.7us | P99: 3.7us | P99.9: 5.0us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 250079.48776518618,
+            "unit": "ops/sec",
+            "extra": "P50: 3.7us | P99: 4.7us | P99.9: 7.2us\nthreads: 1 | elapsed: 0.80s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "overwrite",
+            "value": 1414738.8798057938,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.9us | P99.9: 3.1us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 1220547.844853039,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 1.4us | P99.9: 2.4us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 723482.8347909583,
+            "unit": "ops/sec",
+            "extra": "P50: 1.2us | P99: 4.5us | P99.9: 26.7us\nthreads: 1 | elapsed: 0.28s | num: 200000 | iterations: 3"
           }
         ]
       }
