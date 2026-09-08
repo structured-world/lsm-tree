@@ -22,6 +22,13 @@ pub const MAGIC_BYTES: [u8; 4] = [b'L', b'S', b'M', 4];
 
 pub const TABLES_FOLDER: &str = "tables";
 pub const BLOBS_FOLDER: &str = "blobs";
+/// Compression dictionaries the tree owns, one file per dictionary id.
+///
+/// The bytes live here rather than in the manifest because the manifest is
+/// rewritten on every rotation while a dictionary is both large (order 100 KiB)
+/// and immutable once written; and rather than in each SST because every table
+/// compressed against one would then carry its own copy.
+pub const DICTS_FOLDER: &str = "dicts";
 pub const CURRENT_VERSION_FILE: &str = "current";
 
 /// Suffix of a table replacement a manifest repair has not published yet.
@@ -83,6 +90,50 @@ impl BlobDirEntry {
             return owned_id(rest, Self::SalvageTmp);
         }
         owned_id(file_name, Self::Blob)
+    }
+}
+
+/// Identity of a compression dictionary: the same 32 bits every SST already
+/// records in its `CompressionType::ZstdDict { dict_id, .. }`.
+///
+/// Declared here, unconditionally, because the DIRECTORY GRAMMAR must not
+/// depend on the build's compression features: a tree written by a zstd build
+/// and opened by one without it still has to recognise `dicts/` as engine
+/// state rather than sweep it as foreign.
+pub type DictId = u32;
+
+/// Suffix of a dictionary file that has been written but not yet published by
+/// the atomic rename. A survivor is from a crashed registration, referenced by
+/// no version. Disposable.
+pub const DICT_TMP_SUFFIX: &str = ".tmp";
+
+/// What a directory entry in a `dicts/` folder IS: the dictionary half of the
+/// naming grammar, exactly as [`BlobDirEntry`] is the blob half.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DictDirEntry {
+    /// `{id}`: a compression dictionary's bytes.
+    Dict(DictId),
+    /// `{id}.tmp`: an unpublished registration. Disposable.
+    Tmp(DictId),
+    /// None of the shapes the engine owns.
+    Foreign,
+}
+
+impl DictDirEntry {
+    /// Classifies a file name in a `dicts/` folder.
+    ///
+    /// Exact-shape ownership, as everywhere else in this grammar: the id must
+    /// parse, so an operator's `notes.tmp` beside the dictionaries is
+    /// [`Foreign`](Self::Foreign) and is never swept.
+    #[must_use]
+    pub fn classify(file_name: &str) -> Self {
+        let owned_id = |rest: &str, make: fn(DictId) -> Self| {
+            rest.parse::<DictId>().map_or(Self::Foreign, make)
+        };
+        if let Some(rest) = file_name.strip_suffix(DICT_TMP_SUFFIX) {
+            return owned_id(rest, Self::Tmp);
+        }
+        owned_id(file_name, Self::Dict)
     }
 }
 
