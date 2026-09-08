@@ -1452,6 +1452,53 @@ fn gc_balance_tombstone_only_chain_at_the_bottom_level_is_zero() {
 
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_tombstone_tail_under_an_emitted_head_at_the_bottom_level_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "val", "V",
+      "a", "", "T",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    let iter = CompactionStream::new(iter, 1_000).evict_tombstones(true);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    // Every snapshot below the value read "absent" through the tombstone and
+    // reads "absent" from nothing after the fold. Nothing observable changed,
+    // so no floor is owed.
+    assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_tombstone_tail_off_the_bottom_level_is_positive() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "val", "V",
+      "a", "", "T",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    // NOT the bottom level: a lower level may still hold a version the drained
+    // tombstone was hiding, so dropping it without a floor would resurrect that
+    // version for the snapshots the floor refuses.
+    let iter = CompactionStream::new(iter, 1_000);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    assert!(
+        balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+        "off the bottom level a dropped tombstone is collected history",
+    );
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn gc_balance_tombstone_chain_over_a_value_is_positive() {
     #[rustfmt::skip]
     let vec = stream![

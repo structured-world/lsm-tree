@@ -512,6 +512,16 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
     /// level shadows nothing, and an absent key reads the same as a deleted
     /// one. Every OTHER way of losing a version is meant to count, which is why
     /// this is an explicit exception rather than the default.
+    ///
+    /// One case IS counted although it is observationally neutral, and is left
+    /// that way on purpose: two inputs carrying the same key at the same seqno,
+    /// which a re-registered table or an overlapping ingest can produce. One
+    /// copy is emitted and both are consumed, so the balance ends positive and
+    /// the floor rises for a run that changed nothing a reader can see. That
+    /// errs toward refusing a read rather than answering it from data that is
+    /// gone, which is the direction this counter is built to fail in, and
+    /// excusing it would mean deciding two entries are identical rather than
+    /// merely adjacent. Do not "fix" it by adding an exemption here.
     fn note_neutral_drop(&self) {
         self.settle_one();
     }
@@ -755,7 +765,22 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                         // floor is the only boundary left, so the fold has to be
                         // sound on its own rather than by that coupling.
                         if head.key.seqno < self.gc_seqno_threshold {
-                            fail_iter!(self.drain_key(&head.key.user_key));
+                            let drained = fail_iter!(self.drain_key(&head.key.user_key));
+                            // A tail that was all tombstones, under a head this
+                            // fold emits, is observationally neutral ONLY at the
+                            // bottom level. Every snapshot below the head read
+                            // "absent" through the newest of those tombstones and
+                            // reads "absent" from nothing afterwards.
+                            //
+                            // Off the bottom level it is not neutral and must
+                            // stay counted: a lower level may hold an older
+                            // version that the drained tombstone was hiding, and
+                            // dropping the tombstone without raising the floor
+                            // would resurrect it for exactly the snapshots the
+                            // floor would otherwise refuse.
+                            if self.evict_tombstones && drained.all_tombstones {
+                                self.settle(drained.total);
+                            }
                         }
                     }
                 }

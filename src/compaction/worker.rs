@@ -744,14 +744,15 @@ fn ranges_from_boundaries(
     ranges
 }
 
-/// Error returned when a sub-compaction is interrupted by the stop signal, so
-/// the parallel caller re-shows the inputs and skips the atomic install instead
-/// of committing a truncated sub-range.
-#[cfg(feature = "std")]
+/// Error returned when a merge is interrupted by the stop signal, so the caller
+/// re-shows the inputs and skips the install instead of committing a truncated
+/// output. The install swaps every input table for what was written, so a
+/// truncated commit drops the unread tail out of the tree; both the serial and
+/// the parallel path refuse for that reason.
 fn cancelled_compaction() -> crate::Error {
     crate::Error::from(crate::io::Error::new(
         crate::io::ErrorKind::Interrupted,
-        "sub-compaction cancelled by stop signal",
+        "compaction cancelled by stop signal",
     ))
 }
 
@@ -2711,20 +2712,35 @@ fn merge_tables(
                 .rate_limiter
                 .request_interruptible(io_bytes, || opts.stop_signal.is_stopped())
             {
+                // Same reason as the stop check below: the item was not even
+                // written, so committing here would drop it and everything
+                // after it.
                 log::debug!("Stopping amidst compaction because of stop signal (I/O throttle)");
-                return Ok(());
+                return Err(cancelled_compaction());
             }
 
             compactor.write(item)?;
 
-            // NOTE: When stop_signal fires mid-merge, the loop exits early but
-            // compaction proceeds to commit whatever was written so far. The
-            // resulting CompactionResult will report `Merged` even though not
-            // all input items were processed. This is pre-existing behavior:
-            // partial merge output is valid and committed to the version history.
+            // Test-only failpoint: raise the stop signal after the first written
+            // item, so the interrupted-merge path below is reachable without
+            // racing a tree drop against an in-flight compaction.
+            #[cfg(all(test, feature = "std"))]
+            if opts
+                .config
+                .stop_serial_merge_after_first_item
+                .swap(false, core::sync::atomic::Ordering::SeqCst)
+            {
+                opts.stop_signal.send();
+            }
+
+            // Abort, do not produce. The install swaps EVERY input table named
+            // in the payload for this output, so committing a merge that never
+            // read its input to the end drops the unread tail out of the tree
+            // entirely. The parallel path refuses for the same reason; this one
+            // used to commit and call the result `Merged`.
             if idx % 1_000_000 == 0 && opts.stop_signal.is_stopped() {
                 log::debug!("Stopping amidst compaction because of stop signal");
-                return Ok(());
+                return Err(cancelled_compaction());
             }
         }
 
