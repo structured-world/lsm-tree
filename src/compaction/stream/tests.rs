@@ -212,6 +212,17 @@ fn compaction_stream_tombstone_overwrite_gc() -> crate::Result<()> {
         InternalValue::from_components(*b"a", *b"val", 999, ValueType::Value),
         iter.next().unwrap()?,
     );
+    // The tombstone at 998 is the newest version below the threshold, so the
+    // fold keeps it: a read at snapshot 999 resolves to exactly this entry.
+    // Here it happens to be observationally equal to dropping it, since every
+    // older version goes too and an absent key reads the same as a deleted one.
+    // The fold cannot tell those apart from one key's versions, and the rule
+    // that can, keep the newest below the threshold, is the one that also holds
+    // when that version is a value rather than a tombstone.
+    assert_eq!(
+        InternalValue::from_components(*b"a", *b"", 998, ValueType::Tombstone),
+        iter.next().unwrap()?,
+    );
     iter_closed!(iter);
 
     Ok(())
@@ -434,11 +445,17 @@ fn compaction_stream_filter_1() {
 
     let out: Vec<_> = iter.map(Result::unwrap).collect();
 
+    // Six entries, not five: every version at or above the threshold (999 down
+    // to 995) plus the newest one below it (994). This expectation used to stop
+    // at 995, which encoded the fold's older rule of discarding by the seqno of
+    // the next-older sibling. That rule dropped exactly the version a read just
+    // above the recorded retention floor resolves to.
     #[rustfmt::skip]
     assert_eq!(out, stream![
         "a", "9", "V",
         "a", "8", "V",
         "a", "7", "V",
+        "a", "", "T",
         "a", "", "T",
         "a", "", "T",
     ]);
