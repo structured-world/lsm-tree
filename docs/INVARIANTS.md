@@ -172,7 +172,9 @@ matching entry (and add one for a new subsystem).
   every read path that resolves a snapshot (`src/tree`, `src/blob_tree`).
 
 - **While the history that installed it is live, a compaction output only has
-  to serve reads at or above its own install seqno.** A read at snapshot `R`
+  to serve reads STRICTLY ABOVE its own install seqno.** Strictly: at `R == I`
+  neither spelling of the comparison selects the output, since both are `<`
+  with the sides arranged differently. A read at snapshot `R`
   resolves to the newest version installed strictly below `R`, so an output
   installed at seqno `I` is reachable only from `R > I`; a read below `I` is
   routed to the version current at that seqno, and answered from the tables

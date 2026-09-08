@@ -1206,10 +1206,15 @@ impl AbstractTree for Tree {
         // at `seqno` (no entries newer than the snapshot, and a consistent set of
         // tables + memtables even during a concurrent flush / compaction).
         //
-        // "The same visibility as a read" is meant literally: this walks the
-        // tables of the version a read at `seqno` would be routed to, not the
-        // current ones, so an estimate and the read it predicts cannot disagree
-        // about which compaction has happened yet.
+        // "The same visibility as a read" is meant literally, and only for the
+        // duration of THIS call: it walks the tables of the version a read at
+        // `seqno` resolves to right now, so the SST and memtable halves of one
+        // estimate cannot come from different points in time. It says nothing
+        // about a later read. At a forward-looking `seqno` (`MAX_SEQNO`, say)
+        // the clone is taken and the lock released, and a compaction that
+        // installs afterwards is what the next read at that same seqno
+        // resolves to: the estimate describes a physical layout compaction is
+        // free to change the moment this returns.
         let comparator = self.config.comparator.as_ref();
         let super_version = self
             .version_history
@@ -3835,11 +3840,18 @@ impl Tree {
     /// history, as before.
     ///
     /// What every caller of this gets, and may assume: the memtables and tables
-    /// of ONE version, the newest installed strictly below `seqno`. Not the
-    /// newest tables that exist. A compaction that installed at or above `seqno`
-    /// is invisible here, which is the routing the compaction folds are written
-    /// against (see
+    /// of ONE version, the one whose seqno is the highest still strictly below
+    /// `seqno`. Not the newest tables that exist. While the history that
+    /// installed it is live, that means a compaction which installed at or
+    /// above `seqno` is invisible here, which is the routing the compaction
+    /// folds are written against (see
     /// [`get_version_for_snapshot`](crate::version::SuperVersions::get_version_for_snapshot)).
+    ///
+    /// The qualifier matters. A recovered history holds ONE version carrying
+    /// the persisted retention floor as its seqno, so after a reopen this
+    /// returns tables written by compactions that installed well above
+    /// `seqno`, for every `seqno` above the floor. Nothing here may be relied
+    /// on to hide a compaction from a read that the floor admits.
     ///
     /// The fast path above is the SECOND spelling of that routing comparison,
     /// not a shortcut around it: `seqno > latest.seqno` is the resolver's
@@ -4347,9 +4359,10 @@ impl Tree {
     /// The version is resolved ONCE here and moved into the iterator, so the
     /// whole traversal reads one file set: a compaction installing mid-scan
     /// neither adds its output nor removes the inputs this iterator holds.
-    /// Combined with the resolver picking a version installed strictly below
-    /// `seqno`, that is what lets a compaction fold discard a version a lower
-    /// snapshot still resolves to.
+    /// Combined with the resolver picking the version whose seqno is highest
+    /// still strictly below `seqno` (its install seqno while the history is
+    /// live, the persisted floor after a reopen), that is what lets a
+    /// compaction fold discard a version a lower snapshot still resolves to.
     #[doc(hidden)]
     pub fn create_range<'a, K: AsRef<[u8]> + 'a, R: RangeBounds<K> + 'a>(
         &self,
