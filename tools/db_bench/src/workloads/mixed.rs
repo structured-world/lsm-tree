@@ -1,9 +1,8 @@
-use crate::config::BenchConfig;
+use crate::config::{BenchConfig, Compression, create_tree};
 use crate::db::{fill_sequential_key, make_value};
 use crate::reporter::Reporter;
 use crate::workloads::Workload;
-use lsm_tree::config::CompressionPolicy;
-use lsm_tree::{AbstractTree, AnyTree, CompressionType, Config, SequenceNumberCounter};
+use lsm_tree::{AbstractTree, AnyTree};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -24,10 +23,6 @@ use std::time::Instant;
 /// rewrites are re-compressed at that level, not merely copied.
 pub struct Mixed;
 
-/// Level 22 is the codec-bound end of the spectrum, the same one the flush and
-/// compaction benches use for their heavy arm.
-const LEVEL: i32 = 22;
-
 impl Workload for Mixed {
     fn run(
         &self,
@@ -37,18 +32,15 @@ impl Workload for Mixed {
         reporter: &mut Reporter,
     ) -> lsm_tree::Result<()> {
         // The harness hands in a tree built from --compression, which would
-        // make this series mean a different thing on every invocation. The
-        // cycle needs its own tree at a pinned level, so it builds one.
+        // make this series mean a different thing on every invocation. Only the
+        // codec is overridden, though: the tree is otherwise built from the same
+        // BenchConfig as every other workload, so --cache-mb, --block-size,
+        // --use-blob-tree and the metadata-partitioning switches still apply and
+        // the run header keeps describing the tree that actually ran.
         let dir = tempfile::tempdir()?;
-        let tree = Config::new(
-            dir.path(),
-            SequenceNumberCounter::default(),
-            SequenceNumberCounter::default(),
-        )
-        .data_block_compression_policy(CompressionPolicy::all(
-            CompressionType::zstd(LEVEL).expect("level 22 is a valid zstd level"),
-        ))
-        .open()?;
+        let mut pinned = config.clone();
+        pinned.compression = Compression::Zstd22;
+        let tree = create_tree(dir.path(), &pinned)?;
 
         let mut key = vec![0u8; config.key_size];
         let value = make_value(config.value_size);
@@ -114,12 +106,17 @@ impl Workload for Mixed {
             let t = Instant::now();
             let got = tree.get(&key[..], lsm_tree::MAX_SEQNO)?;
             reporter.record_duration(t.elapsed());
-            // Cheap shape check so a build that silently stopped resolving
-            // versions cannot post a fast number. Stage 2 deleted every fifth
-            // key, but stage 3 ran afterwards and re-inserted every seventh, so
-            // a key divisible by both is back. Last write wins.
+            // Shape check so a build that silently stopped resolving versions
+            // cannot post a fast number. Stage 2 deleted every fifth key, but
+            // stage 3 ran afterwards and re-inserted every seventh, so a key
+            // divisible by both is back. Last write wins.
+            //
+            // A plain assert, not a debug one: the dashboard builds with
+            // --release, which is exactly where an unguarded number would be
+            // published. It sits after the duration is recorded, so it is not
+            // part of what the series measures.
             let deleted = idx % 5 == 0 && idx % 7 != 0;
-            debug_assert_eq!(got.is_none(), deleted, "key {idx}: unexpected visibility");
+            assert_eq!(got.is_none(), deleted, "key {idx}: unexpected visibility");
         }
 
         reporter.stop();

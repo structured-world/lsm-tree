@@ -1,5 +1,65 @@
 use super::Cache;
 
+/// A cached row must own its value, not view the data block the value was read
+/// out of.
+///
+/// The point-read path produces a value as a subslice of the decoded block, and
+/// a subslice keeps the whole block allocation alive. The weigher charges the
+/// row only its own key and value bytes, so a hundred-byte row viewing a four
+/// kilobyte block is accounted as a hundred bytes while holding four thousand.
+/// A workload touching one key per block would then exceed the capacity it
+/// asked for by the ratio between the two, which is exactly the workload a
+/// row cache is least able to help.
+///
+/// The observable is the address: a view's bytes live inside the block's
+/// buffer, a copy's do not. That holds for either slice backend, where a
+/// reference count does not.
+#[test]
+fn row_cache_when_given_a_block_subslice_stores_a_detached_copy() {
+    let cache = Cache::with_capacity_bytes(1024 * 1024);
+    let id = crate::table::GlobalTableId::from((0, 0));
+
+    // Stand in for a decoded data block, large enough that the slice is
+    // heap-backed rather than stored inline.
+    let block = crate::Slice::from(vec![7_u8; 4096]);
+    let block_range = {
+        let start = block.as_ptr() as usize;
+        start..start + block.len()
+    };
+
+    let value = block.slice(0..8);
+    assert!(
+        block_range.contains(&(value.as_ptr() as usize)),
+        "precondition: a subslice points into the block's own buffer",
+    );
+
+    cache.insert_row(
+        id,
+        1,
+        crate::InternalValue {
+            key: crate::key::InternalKey::new(
+                crate::UserKey::from(&b"k"[..]),
+                1,
+                crate::ValueType::Value,
+            ),
+            value,
+        },
+    );
+
+    let Some(got) = cache.get_row(id, 1, b"k") else {
+        panic!("the row was just inserted, so the lookup must hit");
+    };
+
+    assert!(
+        !block_range.contains(&(got.value.as_ptr() as usize)),
+        "the cached row still points into the block it was read from, so it \
+         keeps the whole block alive while being charged only its own bytes",
+    );
+
+    // And the copy has to be a faithful one.
+    assert_eq!(&*got.value, &[7_u8; 8][..]);
+}
+
 #[test]
 fn metadata_priority_defaults_on_and_toggles() {
     // On by default.

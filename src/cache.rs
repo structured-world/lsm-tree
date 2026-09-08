@@ -357,10 +357,20 @@ impl Cache {
     /// away (after which its `table_id` is never read again and the entry ages
     /// out of the cache).
     #[doc(hidden)]
-    pub fn insert_row(&self, id: GlobalTableId, key_hash: u64, iv: InternalValue) {
+    pub fn insert_row(&self, id: GlobalTableId, key_hash: u64, mut iv: InternalValue) {
         if !self.row_cache_enabled {
             return;
         }
+        // The point-read path hands over a value that is a SUBSLICE of the
+        // decoded data block, and a subslice keeps the whole block allocation
+        // alive. The weigher charges a row its own key and value bytes only, so
+        // a 100-byte row viewing a 4 KiB block would be accounted as 100 bytes
+        // while holding 4096 — and a workload touching one key per block, the
+        // one a row cache helps least, would overrun the requested capacity by
+        // that ratio. Copying the value out costs one small allocation per
+        // MISS, on a path that has just walked the index and decoded a block,
+        // and it makes the charge equal to what is actually retained.
+        iv.value = crate::UserValue::from(&*iv.value);
         self.data.insert(
             (TAG_ROW, id.tree_id(), id.table_id(), key_hash).into(),
             Item::Row(iv),

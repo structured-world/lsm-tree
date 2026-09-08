@@ -247,7 +247,27 @@ fn kv_separated_values_survive_compaction_under_compression() -> lsm_tree::Resul
     let expected = write_three_disagreeing_ssts(&tree)?;
     assert_matches(&tree, &expected, "blob: before compaction")?;
 
+    // Same guards the non-blob cases carry. `major_compact` has successful
+    // no-op paths, and without these the three L0 tables would happily serve
+    // every read below, proving nothing about the rewritten output.
+    assert!(
+        tree.table_count() >= 3,
+        "blob: expected at least 3 tables before compaction, got {}",
+        tree.table_count()
+    );
+
     tree.major_compact(u64::MAX, 0)?;
+
+    assert_eq!(
+        Some(0),
+        tree.level_table_count(0),
+        "blob: L0 must be empty after major_compact"
+    );
+    assert!(
+        (1..8).any(|idx| tree.level_table_count(idx).unwrap_or(0) > 0),
+        "blob: no level below L0 holds the compacted output"
+    );
+
     assert_matches(&tree, &expected, "blob: after compaction")?;
 
     drop(tree);
