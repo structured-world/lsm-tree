@@ -1274,7 +1274,7 @@ mod merge_operator_tests {
     /// resolved to the base and answers it with the merged entry's newer seqno.
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
-    fn the_gc_balance_counts_a_base_the_merge_fold_swallowed() {
+    fn gc_balance_merge_fold_swallows_base_is_positive() {
         #[rustfmt::skip]
         let vec = stream![
             "a", "op", "M",
@@ -1300,7 +1300,7 @@ mod merge_operator_tests {
     /// beyond the head, so nothing was collected and the floor must not move.
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
-    fn the_gc_balance_stays_zero_for_a_lone_merge_operand() {
+    fn gc_balance_lone_merge_operand_is_zero() {
         #[rustfmt::skip]
         let vec = stream![
             "a", "op", "M",
@@ -1364,7 +1364,7 @@ fn collected_count(vec: &[InternalValue], gc_threshold: u64) -> u64 {
 }
 
 #[test]
-fn the_gc_marker_stays_zero_when_the_watermark_collects_nothing() {
+fn gc_balance_watermark_collects_nothing_is_zero() {
     #[rustfmt::skip]
     let vec = stream![
       "a", "new", "V",
@@ -1377,7 +1377,7 @@ fn the_gc_marker_stays_zero_when_the_watermark_collects_nothing() {
 }
 
 #[test]
-fn the_gc_marker_stays_zero_for_one_version_per_key() {
+fn gc_balance_one_version_per_key_is_zero() {
     #[rustfmt::skip]
     let vec = stream![
       "a", "va", "V",
@@ -1391,7 +1391,7 @@ fn the_gc_marker_stays_zero_for_one_version_per_key() {
 }
 
 #[test]
-fn the_gc_marker_counts_a_version_the_watermark_dropped() {
+fn gc_balance_watermark_drops_a_version_is_positive() {
     #[rustfmt::skip]
     let vec = stream![
       "a", "new", "V",
@@ -1405,7 +1405,7 @@ fn the_gc_marker_counts_a_version_the_watermark_dropped() {
 
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
-fn the_gc_marker_ignores_a_lone_tombstone_the_bottom_level_drops() {
+fn gc_balance_lone_bottom_level_tombstone_is_zero() {
     #[rustfmt::skip]
     let vec = stream![
       "a", "", "T",
@@ -1423,5 +1423,78 @@ fn the_gc_marker_ignores_a_lone_tombstone_the_bottom_level_drops() {
     // way keeping it would. That is not collected history and must not raise a
     // floor, least of all at a watermark of 0. The balance counts every
     // consumed version, so this arm has to excuse itself explicitly.
+    assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_tombstone_only_chain_at_the_bottom_level_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "T",
+      "a", "", "T",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    // Both tombstones below the watermark at the bottom level: the eviction arm
+    // takes the head and drains the rest of the chain.
+    let iter = CompactionStream::new(iter, 1_000).evict_tombstones(true);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    // The key read as absent at every snapshot before the drop and reads absent
+    // after it, exactly as for a lone tombstone. Dropping a whole chain of them
+    // is the same neutrality and must not cost a floor.
+    assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_tombstone_chain_over_a_value_is_positive() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "", "T",
+      "a", "", "T",
+      "a", "val", "V",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    let iter = CompactionStream::new(iter, 1_000).evict_tombstones(true);
+    let balance = iter.gc_balance();
+    for item in iter {
+        item.expect("stream must not error");
+    }
+
+    // A value anywhere under the chain makes the drop collection: a snapshot
+    // below the oldest tombstone resolved to it and no longer can.
+    assert!(
+        balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+        "a chain that also swallowed a value is collected history",
+    );
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn gc_balance_abandoned_after_one_item_is_zero() {
+    #[rustfmt::skip]
+    let vec = stream![
+      "a", "va", "V",
+      "b", "vb", "V",
+    ];
+
+    let iter = vec.iter().cloned().map(Ok);
+    let mut iter = CompactionStream::new(iter, 1_000);
+    let balance = iter.gc_balance();
+
+    // Take one and walk away, which is what a compaction stopped by its signal
+    // does before installing what it wrote. The peek that looked ahead at "b"
+    // must not leave that version on the balance: this run collected nothing.
+    iter.next()
+        .expect("first item")
+        .expect("stream must not error");
+    drop(iter);
+
     assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
 }

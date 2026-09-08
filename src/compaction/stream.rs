@@ -14,28 +14,54 @@ use core::iter::Peekable;
 
 type Item = crate::Result<InternalValue>;
 
-/// Counts the versions pulled out of the underlying stream.
+/// The peekable input, counting the versions that LEAVE it.
 ///
-/// It sits UNDER the peekable so every consumption is counted by construction:
-/// the fold's drain, a merge resolution consuming a base inline, a
-/// range-tombstone drop, an eviction. A new way to consume a version cannot
-/// forget to register itself, which is what a list of call sites could not
-/// promise (see `gc_balance`).
-struct Counting<I> {
-    inner: I,
+/// It wraps the peekable rather than sitting under it, because `peek` pulls an
+/// entry from the source to fill its cache: counting there would charge the
+/// stream for a version it has not taken yet, and a run abandoned mid-way (a
+/// stop signal, whose partial output is still installed) would leave that
+/// prefetch on the balance forever.
+///
+/// Counting on the way OUT keeps the by-construction property that a list of
+/// call sites could not: every consumption goes through `next` or `next_if`,
+/// so the fold's drain, a merge resolution taking a base inline, a
+/// range-tombstone drop and an eviction all register themselves, including
+/// ways of consuming that do not exist yet (see `gc_balance`).
+struct CountingPeek<I: Iterator<Item = Item>> {
+    inner: Peekable<I>,
     balance: Arc<portable_atomic::AtomicU64>,
 }
 
-impl<I: Iterator<Item = Item>> Iterator for Counting<I> {
-    type Item = Item;
+impl<I: Iterator<Item = Item>> CountingPeek<I> {
+    fn new(iter: I, balance: Arc<portable_atomic::AtomicU64>) -> Self {
+        Self {
+            inner: iter.peekable(),
+            balance,
+        }
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.inner.next();
-        if matches!(next, Some(Ok(_))) {
+    /// Fills the cache without taking anything, so it does not count.
+    fn peek(&mut self) -> Option<&Item> {
+        self.inner.peek()
+    }
+
+    fn count_taken(&self, taken: Option<&Item>) {
+        if matches!(taken, Some(Ok(_))) {
             self.balance
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
-        next
+    }
+
+    fn next(&mut self) -> Option<Item> {
+        let taken = self.inner.next();
+        self.count_taken(taken.as_ref());
+        taken
+    }
+
+    fn next_if(&mut self, func: impl FnOnce(&Item) -> bool) -> Option<Item> {
+        let taken = self.inner.next_if(func);
+        self.count_taken(taken.as_ref());
+        taken
     }
 }
 
@@ -80,7 +106,7 @@ impl StreamFilter for NoFilter {
 /// This iterator is used during flushing & compaction.
 pub struct CompactionStream<'a, I: Iterator<Item = Item>, F: StreamFilter = NoFilter> {
     /// KV stream
-    inner: Peekable<Counting<I>>,
+    inner: CountingPeek<I>,
 
     /// MVCC watermark to get rid of old versions
     gc_seqno_threshold: SeqNo,
@@ -151,11 +177,7 @@ impl<I: Iterator<Item = Item>> CompactionStream<'_, I, NoFilter> {
     #[must_use]
     pub fn new(iter: I, gc_seqno_threshold: SeqNo) -> Self {
         let gc_balance = Arc::new(portable_atomic::AtomicU64::new(0));
-        let iter = Counting {
-            inner: iter,
-            balance: Arc::clone(&gc_balance),
-        }
-        .peekable();
+        let iter = CountingPeek::new(iter, Arc::clone(&gc_balance));
 
         Self {
             inner: iter,
@@ -474,8 +496,15 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
     /// either because it was emitted or because dropping it changed nothing an
     /// enabled snapshot can observe.
     fn settle_one(&self) {
-        self.gc_balance
-            .fetch_sub(1, core::sync::atomic::Ordering::Relaxed);
+        self.settle(1);
+    }
+
+    /// Settles `n` at once, for a caller that excuses a whole chain.
+    fn settle(&self, n: u64) {
+        if n > 0 {
+            self.gc_balance
+                .fetch_sub(n, core::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// A drop that no snapshot can tell from keeping it, so it is not
@@ -487,12 +516,14 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
         self.settle_one();
     }
 
-    /// Drains the remaining versions of the given key.
+    /// Drains the remaining versions of the given key, reporting what went.
     ///
-    /// Nothing is counted here: `Counting` already registered each drained
-    /// version on the way in, and none of them is emitted, so the balance
-    /// carries them.
-    fn drain_key(&mut self, key: &UserKey) -> crate::Result<()> {
+    /// Nothing is settled here: `CountingPeek` registered each drained version
+    /// on the way out of the input and none of them is emitted, so the balance
+    /// carries them. The report lets the one caller that can excuse a whole
+    /// chain decide whether to.
+    fn drain_key(&mut self, key: &UserKey) -> crate::Result<Drained> {
+        let mut drained = Drained::default();
         loop {
             let Some(next) = self.inner.next_if(|kv| {
                 if let Ok(kv) = kv {
@@ -507,10 +538,30 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                     true
                 }
             }) else {
-                return Ok(());
+                return Ok(drained);
             };
 
-            next?;
+            let next = next?;
+            drained.total += 1;
+            drained.all_tombstones &= next.is_tombstone();
+        }
+    }
+}
+
+/// What a [`CompactionStream::drain_key`] took.
+#[derive(Clone, Copy)]
+struct Drained {
+    total: u64,
+    /// Vacuously true for an empty drain, which is what the callers that drain
+    /// nothing want: they have nothing to excuse.
+    all_tombstones: bool,
+}
+
+impl Default for Drained {
+    fn default() -> Self {
+        Self {
+            total: 0,
+            all_tombstones: true,
         }
     }
 }
@@ -625,7 +676,17 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                     // a tombstone with no sibling shadows nothing, so dropping
                     // it answers every snapshot the way keeping it does.
                     self.note_transform();
-                    fail_iter!(self.drain_key(&head.key.user_key));
+                    let drained = fail_iter!(self.drain_key(&head.key.user_key));
+                    // Same neutrality as a lone tombstone, one step further: if
+                    // the whole chain was tombstones, the key read as absent at
+                    // every snapshot before this drop and reads absent after, so
+                    // it is not collected history and must not cost a floor.
+                    // A value anywhere in the chain does make it collection, and
+                    // then the balance keeps all of it.
+                    if drained.all_tombstones {
+                        // The head plus everything it drained.
+                        self.settle(drained.total + 1);
+                    }
                     continue;
                 } else if head.key.value_type == ValueType::WeakTombstone
                     && peeked.key.value_type == ValueType::Value
