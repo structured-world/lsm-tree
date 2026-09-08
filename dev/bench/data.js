@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788799467511,
+  "lastUpdate": 1788849788948,
   "repoUrl": "https://github.com/structured-world/coordinode-lsm-tree",
   "entries": {
     "lsm-tree db_bench": [
@@ -21762,6 +21762,90 @@ window.BENCHMARK_DATA = {
             "value": 770666.9515565498,
             "unit": "ops/sec",
             "extra": "P50: 1.1us | P99: 4.2us | P99.9: 6.6us\nthreads: 1 | elapsed: 0.26s | num: 200000 | iterations: 3"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mail@polaz.com",
+            "name": "Dmitry Prudnikov",
+            "username": "polaz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6309dfd798300fbf1ac73a17547b4d6c6cf92e0",
+          "message": "perf(read): turn the row cache on by default, and take structured-zstd 0.0.51 (#624)\n\n## Summary\n\nFour changes that travel together: the read default that the\nmeasurements now support, the codec release we actually want, the test\ncoverage that justifies taking it, and the dashboard series that would\nhave shown the difference.\n\n### The row cache is on by default\n\nA repeat point read served from the row cache skips the index walk and\nthe data-block decode outright. The knob did that already; it was off\nunless a caller went looking for it.\n\nIt was off because rows share the block cache's byte capacity, so a\nworkload without key reuse could spend capacity on rows at the blocks'\nexpense. That mechanism is real, so it was measured rather than argued,\non the arms that could lose rather than only the one that wins.\n\nThe harness now carries both arms for the scan-shaped scenarios, so each\nrow below is one binary measuring itself with the cache off and on,\nrather than two binaries compared across a rebuild. At 10000 keys,\nper-side minimum over interleaved rounds on an M1 Max:\n\n| arm | row cache off | row cache on |\n|---|---|---|\n| `point_read` | 7.0456 ms | 1.8407 ms |\n| `range_scan` | 1.2151 ms | 1.2188 ms |\n| `seek_random` | 15.893 ms | 15.724 ms |\n\nA scan does not reuse keys, so it is where paying for rows was most\nlikely to cost something and least likely to repay. It does not cost\nanything measurable, and neither does a scattered seek.\n\nTwo notes on how those numbers were arrived at, because both were nearly\nreported wrong. A first `seek_random` reading suggested a 2x regression\nand was contamination from a just-finished build; two settled rounds\nagree on parity. And until this branch fixed it, the harness left its\nnon-row-cache arms on the library default, which stopped meaning \"off\"\nthe moment the default became \"on\" — the plain, hash-index and ribbon\narms were all silently measuring the row cache.\n\nFor scale, surrealkv reads the same 1000-key set in 285.1 µs and the\n10000-key set in 4.24 ms, so this is also the difference between\ntrailing it and leading it.\n\n**A cached row no longer pins its block.** The point-read path builds\nits value as a subslice of the decoded data block, and a subslice keeps\nthe whole block allocation alive, while the weigher charges the row only\nits own key and value bytes. A 100-byte row viewing a 4 KiB block was\ntherefore accounted as 100 bytes while holding 4096, so a workload\ntouching one key per block could overrun the capacity it asked for by\nthat ratio. That was a caller's own choice while the cache was opt-in;\nmaking it the default made it everyone's, so `insert_row` now copies the\nvalue out and the charge equals what is retained. The copy costs one\nsmall allocation per miss, on a path that has just walked the index and\ndecoded a block, and it is not visible in the arms above.\n\n### structured-zstd 0.0.51\n\n0.0.50 is skipped deliberately. On `benches/flush.rs`, memfs so the\nnumber is codec CPU rather than I/O:\n\n| arm | 0.0.49 | 0.0.51 |\n|---|---|---|\n| `flush_zstd1/40000_memfs` | 24.324 ms | 23.695 ms |\n| `flush_zstd22/40000_memfs` | 376.10 ms | 316.23 ms |\n\nCompression ratio was **not** measured: no harness here reports output\nsize, so this says the codec got faster and says nothing about whether\nit still packs as tightly.\n\nThe codec also leaves the scheduled dependency updates. It was inside\nthe grouped minor-and-patch rule, and a 0.0.x step reads as a patch\nupdate to the update-type check, so the auto-merge workflow would have\napproved and merged 0.0.50 as soon as CI went green. CI proves the build\nand the tests, not that a codec release is one we want.\n\nThe rest of the dependency tree was refreshed at the same time and\nproduces no committed change: `Cargo.lock` is not tracked, every direct\ndependency was already newest, and the lock-only moves were transitive.\n\n### Tests for what compaction does to the data\n\nThe existing codec tests write each key once and read it back. That\nmisses what a codec change is most likely to break. Compaction decodes\nblocks and re-encodes them, and a block decoded wrongly during a merge\ndoes not usually lose a key, it resolves the **wrong version** of one,\nwhich a \"is the key still there\" test passes over.\n\nSo each case in `tests/compression_survives_compaction.rs` builds three\nSSTs that disagree about the same keys, then checks the exact expected\nvalue of every key three times: before the compaction, after it, and\nafter a reopen. The reopen counts separately because recovery re-reads\nblock headers, including the dictionary id, from files the compaction\nrewrote.\n\nCovered: no compression, zstd 1, zstd 22, a dictionary, a per-level\npolicy where the merge must decode with the dictionary and re-encode\nwithout it, and KV separation. The file also asserts the compacted\noutput really landed on a deeper level, so the transition case cannot\npass vacuously, and the whole set was confirmed to go red when an\nexpected version is perturbed.\n\n### The dashboard leads with a whole cycle\n\nEvery workload on the trend dashboard isolates one operation against a\ntree prepared for it. None showed the sequence a deployment walks, where\nthe costs that matter appear only where the stages meet.\n\nThe new `mixed` workload runs it end to end at zstd 22: fill, flush,\nrewrite every third key and delete every fifth, flush, rewrite every\nseventh, flush, one major compaction, then read the whole keyspace back\noff the compacted files. Deleted keys are read too, since resolving a\ntombstone is work. It is registered first, which is the dashboard's\norder.\n\nTwo notes on it. The level is pinned rather than taken from\n`--compression`, so the series means the same thing across runs; that is\nwhy the workload opens its own tree. And the compaction is timed as one\noperation, because that is what it is from a deployment's point of view,\nso it lands in the tail of the histogram where it belongs.\n\nThe value stays ops/sec like every other series. The dashboard is\ndeclared `customBiggerIsBetter`, so a raw-seconds series would render a\nslowdown as an improvement; the timings surface as the P50/P99/P99.9 in\nthe tooltip instead.\n\n## Not in this PR\n\nCarrying the BuRR equations from the threshold pre-pass into the solve,\nto stop deriving each one twice. It was implemented in full and every\nfilter test passed, so the paths agree; it is simply slower. 1000 keys\n116.43 µs to 118.50 µs, 100000 keys 13.409 ms to 13.483 ms. The saving\nis three SplitMix steps in registers, about ten nanoseconds per key; the\nprice is a 40-byte tuple per key, a paired vector, a partition and an\nunzip. Recorded on a branch so it is not proposed again without a plan\nthat avoids the pairing.\n\n## Testing\n\n`cargo nextest run --workspace --all-features` 3295/3295, `cargo test\n--doc --all-features` 80/80, clippy with `-D warnings` on the crate and\non `tools/db_bench`, `cargo doc --no-deps` 0 warnings, no-std check 0\nerrors, `cargo fmt --check` clean. All 19 criterion benches and the\ncompare-rocksdb harness build; the `mixed` workload was run in both\ndebug and release.\n\nCloses #623",
+          "timestamp": "2026-09-08T09:40:34+03:00",
+          "tree_id": "c7714a79f8bf76de7720be9c9a57224b6ef07227",
+          "url": "https://github.com/structured-world/coordinode-lsm-tree/commit/a6309dfd798300fbf1ac73a17547b4d6c6cf92e0"
+        },
+        "date": 1788849752901,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "mixed",
+            "value": 132883.8642800727,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 5.2us | P99.9: 7.8us\nthreads: 1 | elapsed: 4.03s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillseq",
+            "value": 4322580.431821031,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.2us | P99.9: 1.6us\nthreads: 1 | elapsed: 0.05s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "fillrandom",
+            "value": 1396112.1696549924,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.8us | P99.9: 2.9us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readrandom",
+            "value": 887897.7700434186,
+            "unit": "ops/sec",
+            "extra": "P50: 1.0us | P99: 3.1us | P99.9: 15.7us\nthreads: 1 | elapsed: 0.23s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readseq",
+            "value": 4481802.659909543,
+            "unit": "ops/sec",
+            "extra": "P50: 0.1us | P99: 1.9us | P99.9: 2.4us\nthreads: 1 | elapsed: 0.04s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "seekrandom",
+            "value": 516670.0744933105,
+            "unit": "ops/sec",
+            "extra": "P50: 1.7us | P99: 3.7us | P99.9: 5.0us\nthreads: 1 | elapsed: 0.39s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "prefixscan",
+            "value": 254282.95261301388,
+            "unit": "ops/sec",
+            "extra": "P50: 3.7us | P99: 4.6us | P99.9: 7.3us\nthreads: 1 | elapsed: 0.79s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "overwrite",
+            "value": 1432763.900424628,
+            "unit": "ops/sec",
+            "extra": "P50: 0.6us | P99: 1.9us | P99.9: 3.0us\nthreads: 1 | elapsed: 0.14s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "mergerandom",
+            "value": 1286724.7488213568,
+            "unit": "ops/sec",
+            "extra": "P50: 0.3us | P99: 1.4us | P99.9: 2.2us\nthreads: 1 | elapsed: 0.16s | num: 200000 | iterations: 3"
+          },
+          {
+            "name": "readwhilewriting",
+            "value": 699281.4763952189,
+            "unit": "ops/sec",
+            "extra": "P50: 1.2us | P99: 5.7us | P99.9: 27.7us\nthreads: 1 | elapsed: 0.29s | num: 200000 | iterations: 3"
           }
         ]
       }
