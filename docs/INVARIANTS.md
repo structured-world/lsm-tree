@@ -112,10 +112,23 @@ matching entry (and add one for a new subsystem).
   transform that acts regardless of the watermark is the user compaction
   filter, and for exactly that reason it records a different effect
   (`DropsData`, floor at the install's own seqno). A new path that can lose a
-  version at or above the watermark must do the same. Stated at
-  `RetentionEffect::of_run` (`src/version/super_version.rs`), which derives the
-  effect, and upheld at the sites listed above (`src/compaction/stream.rs`,
-  `src/compaction/seqno_zeroer.rs`, `src/compaction/flavour.rs`).
+  version at or above the watermark must do the same.
+
+  One install does NOT derive its effect through `of_run`: the tight-space
+  slice loop (`src/compaction/worker.rs`) hands `GcBelow(watermark)` to
+  `upgrade_version` unconditionally. That is deliberate and it holds for the
+  same reason, from two parts. Its merge is an ordinary compaction stream at
+  the same watermark, so the fold half is gated exactly as above. Its other
+  half is the punched input prefix, which the balance cannot see because the
+  bytes leave outside the stream: the original file is kept whole while any
+  prior version still references it and punches its consumed prefix only once
+  those readers drain, so the loss is deferred but certain, and the floor is
+  what covers it. An audit of this coupling has to visit that caller too.
+
+  Stated at `RetentionEffect::of_run` (`src/version/super_version.rs`), which
+  derives the effect for every other install, and upheld at the sites listed
+  above (`src/compaction/stream.rs`, `src/compaction/seqno_zeroer.rs`,
+  `src/compaction/flavour.rs`, `src/compaction/worker.rs`).
 
 - **A weak tombstone is dropped below the lowest live snapshot, or when it
   collapses with its matching value.** Dropping a delete marker that a snapshot
@@ -228,7 +241,11 @@ matching entry (and add one for a new subsystem).
   the appended edit-log field): a GC compaction with watermark `w` sets it to
   `w - 1` (capped at its own install seqno), a `clear`, a table drop or a
   compaction whose filter removed or rewrote rows to its own install seqno;
-  a flush, ingest, move, relocation or an empty drop leaves it alone.
+  a flush, ingest, move, blob relocation or an empty drop leaves it alone.
+  Merge-on-read relocation is NOT in that list: it is reached only for a
+  non-empty delete bitmap built from below-watermark range tombstones, so the
+  replacement masks rows an older snapshot could read, and it reports
+  `GcBelow` like any other collecting run (`ProducedOutput::for_relocation`).
   `AbstractTree::retention_floor` exposes the persisted value. A reopened history is seeded at
   the floor, so the snapshots the live tree refused stay refused after a
   restart instead of being answered from the surviving version. Version seqnos

@@ -348,12 +348,21 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
     }
 
     /// Which reads this may be invisible to: those AT OR BELOW the head's
-    /// seqno, and no others. The result carries the head's seqno `H`, and
-    /// visibility is strict (`entry.seqno < read_seqno`), so a read at exactly
-    /// `H` does not see the result either, while before the fold it saw the
-    /// consumed operand or base sitting below `H`. The boundary is `R <= H`,
-    /// not `R < H`; a call site preserving the wrong one would leave the read
-    /// at `H` unaccounted for.
+    /// seqno `H` in the ordinary case, and up to a covering tombstone's seqno
+    /// when one applies. The result carries `H`, and visibility is strict
+    /// (`entry.seqno < read_seqno`), so a read at exactly `H` does not see the
+    /// result either, while before the fold it saw the consumed operand or
+    /// base sitting below `H`. The boundary is `R <= H`, not `R < H`; a call
+    /// site preserving the wrong one would leave the read at `H` unaccounted
+    /// for.
+    ///
+    /// An applied range tombstone at `T` with `H < T < watermark` widens it.
+    /// The retain below drops the head as covered, the emit path then drops the
+    /// merged result for the same reason, and the key leaves entirely: a read
+    /// at `H < R <= T` resolved to the operand before (the tombstone was not
+    /// visible to it yet) and resolves to nothing after. So the range is
+    /// `R <= max(H, T)`, still strictly under the watermark, since applied
+    /// tombstones are filtered to below it.
     ///
     /// All THREE call sites enter only with the head below the watermark (the
     /// key-boundary lone operand, the same-key merge arm, and the end-of-stream

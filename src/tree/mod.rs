@@ -3836,7 +3836,10 @@ impl Tree {
     /// would return (it yields the latest iff `latest.seqno < seqno`), so
     /// load it without taking the history `RwLock` or cloning a deque entry.
     /// At equality the fast path does not fire: `seqno == latest.seqno` falls
-    /// through to the resolver, which selects the version before it.
+    /// through to the resolver, which answers from the retained history, or
+    /// refuses when nothing is retained below that seqno (the latest version
+    /// being also the oldest, after a reopen at a non-zero floor or once
+    /// pruning has left one version).
     /// Recent inserts stay visible because they mutate the shared
     /// `active_memtable` behind a stable Arc; the back only changes on
     /// flush / compaction, which refresh this mirror under the write lock.
