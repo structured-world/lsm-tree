@@ -70,6 +70,16 @@ fn a_flush_that_collects_below_the_watermark_refuses_reads_below_it_after_a_reop
         "a flush that collected below watermark 8 must record a floor of 7",
     );
 
+    // While the process lives the read is still ANSWERED, not refused: the
+    // history retains the pre-flush SuperVersion and routes the read to its
+    // sealed memtables. The persisted floor is a boundary for what survives a
+    // reopen, not a live gate, and `oldest_retained_seqno` is the live one.
+    assert_eq!(
+        tree.get("k", 3)?.as_deref(),
+        Some(&b"oldest"[..]),
+        "a live tree still answers from the retained version",
+    );
+
     drop(tree);
     let reopened = open()?;
 

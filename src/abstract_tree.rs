@@ -465,10 +465,19 @@ pub trait AbstractTree: sealed::Sealed {
     ///
     /// `seqno_threshold` is an MVCC GC watermark, not a hint: the flush folds
     /// away versions below it exactly as a compaction does, and the install
-    /// raises the persisted retention floor to match, so afterwards a snapshot
-    /// below the watermark yields
+    /// raises the PERSISTED retention floor
+    /// ([`retention_floor`](Self::retention_floor)) to match. Pass `0` to
+    /// collect nothing.
+    ///
+    /// That floor is not a live gate. Reads keep being answered from the
+    /// retained version and its sealed memtables for as long as the history
+    /// holds them, so the boundary a caller can observe right now is
+    /// [`oldest_retained_seqno`](Self::oldest_retained_seqno), which is the
+    /// lower of the two. Once history pruning drops that version, or the tree
+    /// is reopened and only the persisted floor survives, a snapshot below the
+    /// watermark yields
     /// [`Error::SnapshotBelowRetention`](crate::Error::SnapshotBelowRetention)
-    /// rather than a stale or absent answer. Pass `0` to collect nothing.
+    /// rather than a stale or absent answer.
     ///
     /// # Errors
     ///

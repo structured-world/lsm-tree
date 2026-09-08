@@ -34,6 +34,8 @@ mod persist;
 pub mod recovery;
 pub mod run;
 mod super_version;
+#[cfg(test)]
+mod tests;
 
 pub use blob_file_list::BlobFileList;
 pub use persist::persist_version;
