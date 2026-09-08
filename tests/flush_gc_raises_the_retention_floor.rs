@@ -223,14 +223,17 @@ fn a_compaction_that_collects_nothing_leaves_the_floor_alone() -> lsm_tree::Resu
 
     let tree = open()?;
 
-    // One version per key across two tables: the compaction merges them but
-    // has no history to fold, so it collects nothing at any watermark.
-    tree.insert("a", "va", 2);
+    // One version per key across two tables, so the merge has no history to
+    // fold. The watermark sits BELOW both versions on purpose: at the bottom
+    // level a watermark above them would also zero their seqnos, and that
+    // changes what a snapshot resolves to even though no version is dropped
+    // (see the zeroing test above). Touching nothing at all is the case here.
+    tree.insert("a", "va", 20);
     tree.flush_active_memtable(0)?;
-    tree.insert("b", "vb", 3);
+    tree.insert("b", "vb", 30);
     tree.flush_active_memtable(0)?;
 
-    tree.major_compact(u64::MAX, 50)?;
+    tree.major_compact(u64::MAX, 10)?;
 
     assert_eq!(
         tree.retention_floor(),
@@ -242,8 +245,63 @@ fn a_compaction_that_collects_nothing_leaves_the_floor_alone() -> lsm_tree::Resu
     let reopened = open()?;
 
     assert_eq!(reopened.retention_floor(), 0);
-    assert_eq!(reopened.get("a", 3)?.as_deref(), Some(&b"va"[..]));
-    assert_eq!(reopened.get("b", 4)?.as_deref(), Some(&b"vb"[..]));
+    assert_eq!(reopened.get("a", 21)?.as_deref(), Some(&b"va"[..]));
+    assert_eq!(reopened.get("b", 31)?.as_deref(), Some(&b"vb"[..]));
+
+    Ok(())
+}
+
+/// Bottommost seqno zeroing rewrites a below-watermark version to seqno 0. The
+/// entry count is unchanged, so nothing is "collected" in the losing sense, but
+/// the version now answers snapshots that predate it. The floor has to move, or
+/// a reopened tree admits such a snapshot and hands it a value that did not
+/// exist then.
+#[test]
+fn a_compaction_that_only_zeroed_seqnos_still_raises_the_floor() -> lsm_tree::Result<()> {
+    let dir = tempfile::tempdir()?;
+
+    let open = || -> lsm_tree::Result<lsm_tree::AnyTree> {
+        Config::new(
+            dir.path(),
+            SequenceNumberCounter::new(100),
+            SequenceNumberCounter::new(100),
+        )
+        .open()
+    };
+
+    let tree = open()?;
+
+    // One version per key, so the fold collects nothing and the balance stays
+    // at zero. Both sit below the watermark used below, so the bottom level
+    // zeroes them.
+    tree.insert("a", "va", 2);
+    tree.insert("b", "vb", 3);
+    tree.flush_active_memtable(0)?;
+
+    assert_eq!(
+        tree.get("a", 2)?.as_deref(),
+        None,
+        "precondition: snapshot 2 predates the version at seqno 2",
+    );
+
+    tree.major_compact(u64::MAX, 50)?;
+
+    assert_eq!(
+        tree.retention_floor(),
+        49,
+        "zeroing a version's seqno has to raise the floor even though no version was dropped",
+    );
+
+    drop(tree);
+    let reopened = open()?;
+
+    assert!(
+        matches!(
+            reopened.get("a", SeqNo::from(2_u64)),
+            Err(lsm_tree::Error::SnapshotBelowRetention { .. })
+        ),
+        "the snapshot the zeroing would answer wrongly must be refused instead",
+    );
 
     Ok(())
 }

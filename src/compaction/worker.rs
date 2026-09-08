@@ -1648,10 +1648,9 @@ fn run_subcompaction(
         merge_iter = merge_iter.with_drop_callback(&mut blob_frag_map);
     }
 
-    // Watermark-driven drop counter: read after `produce` to tell a run that
-    // collected history from one that collected none.
-    let gc_marker = Arc::new(portable_atomic::AtomicU64::new(0));
-    let merge_iter = merge_iter.with_gc_marker(Arc::clone(&gc_marker));
+    // Versions that go in and do not come out: read after `produce` to tell a
+    // run that collected history from one that collected none.
+    let gc_balance = merge_iter.gc_balance();
 
     let mut filter_blob_writer = None;
     // Filter-only transform counter (see `TransformCounters::filter`): read
@@ -1680,6 +1679,7 @@ fn run_subcompaction(
         version_tombstones,
         opts.mvcc_gc_watermark,
         opts.config.comparator.clone(),
+        Arc::clone(&gc_balance),
     );
 
     // block_parallel = false: this sub-compaction already runs on a pool thread,
@@ -1821,7 +1821,7 @@ fn run_subcompaction(
     if filter_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
         produced.mark_filter_transformed();
     }
-    if gc_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+    if gc_balance.load(core::sync::atomic::Ordering::Relaxed) > 0 {
         produced.mark_collected_below_watermark();
     }
     Ok(produced)
@@ -2543,10 +2543,9 @@ fn merge_tables(
         merge_iter = merge_iter.with_transform_marker(Arc::clone(marker));
     }
 
-    // Watermark-driven drop counter: read after `produce` to tell a run that
-    // collected history from one that collected none.
-    let gc_marker = Arc::new(portable_atomic::AtomicU64::new(0));
-    let merge_iter = merge_iter.with_gc_marker(Arc::clone(&gc_marker));
+    // Versions that go in and do not come out: read after `produce` to tell a
+    // run that collected history from one that collected none.
+    let gc_balance = merge_iter.gc_balance();
 
     // This is used by the compaction filter if it wants to write new blobs
     // TODO: the filter should really pipe new blobs into the compaction stream directly,
@@ -2685,6 +2684,7 @@ fn merge_tables(
             zeroing_tombstones,
             opts.mvcc_gc_watermark,
             opts.config.comparator.clone(),
+            Arc::clone(&gc_balance),
         );
 
         for (idx, item) in merge_iter.enumerate() {
@@ -2785,7 +2785,7 @@ fn merge_tables(
     if filter_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
         produce_output.mark_filter_transformed();
     }
-    if gc_marker.load(core::sync::atomic::Ordering::Relaxed) > 0 {
+    if gc_balance.load(core::sync::atomic::Ordering::Relaxed) > 0 {
         produce_output.mark_collected_below_watermark();
     }
 

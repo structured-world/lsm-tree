@@ -1267,6 +1267,55 @@ mod merge_operator_tests {
 
         Ok(())
     }
+
+    /// A merge resolution swallows the base inline, so the key's tail is
+    /// already empty by the time the fold would drain it. The run still lost a
+    /// version and has to say so, or a reopened tree admits the snapshot that
+    /// resolved to the base and answers it with the merged entry's newer seqno.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn the_gc_balance_counts_a_base_the_merge_fold_swallowed() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "a", "base", "V",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        // Both versions below the watermark, so the fold runs and consumes the
+        // base into the merged result.
+        let iter = CompactionStream::new(iter, 1_000).with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert!(
+            balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
+            "the base folded into the merge result is collected history",
+        );
+    }
+
+    /// The same shape with a single operand and no base: nothing is consumed
+    /// beyond the head, so nothing was collected and the floor must not move.
+    #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn the_gc_balance_stays_zero_for_a_lone_merge_operand() {
+        #[rustfmt::skip]
+        let vec = stream![
+            "a", "op", "M",
+            "b", "vb", "V",
+        ];
+
+        let iter = vec.iter().cloned().map(Ok);
+        let iter = CompactionStream::new(iter, 1_000).with_merge_operator(Some(merge_op()));
+        let balance = iter.gc_balance();
+        for item in iter {
+            item.expect("stream must not error");
+        }
+
+        assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
+    }
 }
 
 /// Regression: the "is the peeked entry a different key?" check used a bytewise
@@ -1305,13 +1354,13 @@ fn compaction_stream_custom_comparator_weak_tombstone_not_annihilated_across_key
 /// it counted.
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn collected_count(vec: &[InternalValue], gc_threshold: u64) -> u64 {
-    let marker = Arc::new(portable_atomic::AtomicU64::new(0));
     let iter = vec.iter().cloned().map(Ok);
-    let iter = CompactionStream::new(iter, gc_threshold).with_gc_marker(Arc::clone(&marker));
+    let iter = CompactionStream::new(iter, gc_threshold);
+    let balance = iter.gc_balance();
     for item in iter {
         item.expect("stream must not error");
     }
-    marker.load(core::sync::atomic::Ordering::Relaxed)
+    balance.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 #[test]
@@ -1363,17 +1412,16 @@ fn the_gc_marker_ignores_a_lone_tombstone_the_bottom_level_drops() {
       "b", "vb", "V",
     ];
 
-    let marker = Arc::new(portable_atomic::AtomicU64::new(0));
     let iter = vec.iter().cloned().map(Ok);
-    let iter = CompactionStream::new(iter, 0)
-        .evict_tombstones(true)
-        .with_gc_marker(Arc::clone(&marker));
+    let iter = CompactionStream::new(iter, 0).evict_tombstones(true);
+    let balance = iter.gc_balance();
     for item in iter {
         item.expect("stream must not error");
     }
 
     // The tombstone shadows nothing, so dropping it answers every snapshot the
     // way keeping it would. That is not collected history and must not raise a
-    // floor, least of all at a watermark of 0.
-    assert_eq!(marker.load(core::sync::atomic::Ordering::Relaxed), 0);
+    // floor, least of all at a watermark of 0. The balance counts every
+    // consumed version, so this arm has to excuse itself explicitly.
+    assert_eq!(balance.load(core::sync::atomic::Ordering::Relaxed), 0);
 }

@@ -377,9 +377,15 @@ impl ProducedOutput {
             tables_to_delete: vec![deleted],
             blob_frag_map: FragmentationMap::default(),
             consumed_through: crate::HashMap::default(),
-            // A relocation reuses the source's rows verbatim.
+            // A relocation copies the source's rows verbatim, so no filter ran.
             filter_transformed: false,
-            collected_below_watermark: false,
+            // It does not leave them all readable, though. This path is reached
+            // only for a NON-EMPTY delete bitmap built from range tombstones
+            // strictly below the watermark, so the replacement masks rows that a
+            // snapshot below the watermark could read before. Nothing is
+            // physically removed and no filter acted, so neither of the other
+            // two signals catches it: say it here.
+            collected_below_watermark: true,
         }
     }
 }

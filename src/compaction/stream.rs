@@ -14,6 +14,31 @@ use core::iter::Peekable;
 
 type Item = crate::Result<InternalValue>;
 
+/// Counts the versions pulled out of the underlying stream.
+///
+/// It sits UNDER the peekable so every consumption is counted by construction:
+/// the fold's drain, a merge resolution consuming a base inline, a
+/// range-tombstone drop, an eviction. A new way to consume a version cannot
+/// forget to register itself, which is what a list of call sites could not
+/// promise (see `gc_balance`).
+struct Counting<I> {
+    inner: I,
+    balance: Arc<portable_atomic::AtomicU64>,
+}
+
+impl<I: Iterator<Item = Item>> Iterator for Counting<I> {
+    type Item = Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.inner.next();
+        if matches!(next, Some(Ok(_))) {
+            self.balance
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        next
+    }
+}
+
 /// A callback that receives all dropped KVs
 ///
 /// Used for counting blobs that are not referenced anymore because of
@@ -55,7 +80,7 @@ impl StreamFilter for NoFilter {
 /// This iterator is used during flushing & compaction.
 pub struct CompactionStream<'a, I: Iterator<Item = Item>, F: StreamFilter = NoFilter> {
     /// KV stream
-    inner: Peekable<I>,
+    inner: Peekable<Counting<I>>,
 
     /// MVCC watermark to get rid of old versions
     gc_seqno_threshold: SeqNo,
@@ -101,26 +126,40 @@ pub struct CompactionStream<'a, I: Iterator<Item = Item>, F: StreamFilter = NoFi
     /// NOT tick: the newer version shadowing them lives in the output.
     transform_marker: Option<Arc<portable_atomic::AtomicU64>>,
 
-    /// Ticked whenever the watermark is the reason a version leaves the
-    /// output: the plain fold's drain, a merge fold below the watermark, a
-    /// bottom-level tombstone and what it shadows, a weak-delete
-    /// annihilation. It answers the install's question, which neither counter
-    /// above can: did this run collect any history at all? A run that
-    /// collected none must not raise the retention floor, or it refuses
-    /// snapshots whose data is still there. An empty output is not that
-    /// signal -- a watermark above every version collects the lot and writes
-    /// no table.
-    gc_marker: Option<Arc<portable_atomic::AtomicU64>>,
+    /// Versions consumed from the input and not emitted, which answers the
+    /// install's question that neither counter above can: did this run collect
+    /// any history? A run that collected none must not raise the retention
+    /// floor, or it refuses snapshots whose data is still there. An empty
+    /// output is not that signal, since a watermark above every version
+    /// collects the lot and writes no table.
+    ///
+    /// It is a BALANCE rather than a list of drop sites: `Counting` adds on
+    /// every consumption and [`Self::note_emitted`] subtracts on every emit, so
+    /// any way of losing a version registers itself. The polarity is chosen so
+    /// that an oversight over-reports (the floor rises, reads are refused)
+    /// rather than under-reports (the floor stays put and a read is answered
+    /// from data that is gone). Only the deliberately visibility-neutral drops
+    /// excuse themselves, through [`Self::note_neutral_drop`].
+    ///
+    /// Consumption always precedes the matching emit, including for entries
+    /// parked in `pending`, so this never underflows.
+    gc_balance: Arc<portable_atomic::AtomicU64>,
 }
 
 impl<I: Iterator<Item = Item>> CompactionStream<'_, I, NoFilter> {
     /// Initializes a new merge iterator
     #[must_use]
     pub fn new(iter: I, gc_seqno_threshold: SeqNo) -> Self {
-        let iter = iter.peekable();
+        let gc_balance = Arc::new(portable_atomic::AtomicU64::new(0));
+        let iter = Counting {
+            inner: iter,
+            balance: Arc::clone(&gc_balance),
+        }
+        .peekable();
 
         Self {
             inner: iter,
+            gc_balance,
             gc_seqno_threshold,
             dropped_callback: None,
             filter: NoFilter,
@@ -134,7 +173,6 @@ impl<I: Iterator<Item = Item>> CompactionStream<'_, I, NoFilter> {
             rt_idx: 0,
             rt_sorted: false,
             transform_marker: None,
-            gc_marker: None,
         }
     }
 }
@@ -157,7 +195,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
             rt_idx: self.rt_idx,
             rt_sorted: self.rt_sorted,
             transform_marker: self.transform_marker,
-            gc_marker: self.gc_marker,
+            gc_balance: self.gc_balance,
         }
     }
 
@@ -174,13 +212,13 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
         self
     }
 
-    /// Wires the counter of watermark-driven drops (see the `gc_marker`
-    /// field), which the install reads to tell a run that collected history
-    /// from one that collected none.
+    /// Handle on the collected-history balance (see the `gc_balance` field),
+    /// which the install reads once the stream is drained to tell a run that
+    /// collected history from one that collected none. Non-zero means some
+    /// version went in and did not come out.
     #[must_use]
-    pub fn with_gc_marker(mut self, marker: Arc<portable_atomic::AtomicU64>) -> Self {
-        self.gc_marker = Some(marker);
-        self
+    pub fn gc_balance(&self) -> Arc<portable_atomic::AtomicU64> {
+        Arc::clone(&self.gc_balance)
     }
 
     /// Installs a callback that receives all dropped KVs.
@@ -355,9 +393,6 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                             watcher.on_dropped(&next);
                         }
                         self.note_transform();
-                        // Applied range tombstones are strictly below the
-                        // watermark, so a drop they cause is collected history.
-                        self.note_collected();
                     } else {
                         base_value = Some(next.value);
                     }
@@ -394,7 +429,6 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                     watcher.on_dropped(e);
                 }
                 self.note_transform();
-                self.note_collected();
             }
             !covered
         });
@@ -436,23 +470,29 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
         }
     }
 
-    /// Records that the watermark is the reason a version left the output
-    /// (see the `gc_marker` field).
-    fn note_collected(&self) {
-        if let Some(marker) = &self.gc_marker {
-            marker.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        }
+    /// Settles one consumed version against the balance (see `gc_balance`),
+    /// either because it was emitted or because dropping it changed nothing an
+    /// enabled snapshot can observe.
+    fn settle_one(&self) {
+        self.gc_balance
+            .fetch_sub(1, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A drop that no snapshot can tell from keeping it, so it is not
+    /// collected history: a tombstone with no same-key sibling at the bottom
+    /// level shadows nothing, and an absent key reads the same as a deleted
+    /// one. Every OTHER way of losing a version is meant to count, which is why
+    /// this is an explicit exception rather than the default.
+    fn note_neutral_drop(&self) {
+        self.settle_one();
     }
 
     /// Drains the remaining versions of the given key.
     ///
-    /// Every arm that calls this reached it because the head sits below the
-    /// watermark, so anything drained here is collected history and the
-    /// counter is ticked from this one place rather than at each arm. A lone
-    /// entry drains nothing and ticks nothing, which is what the merge fold's
-    /// single-operand paths need.
+    /// Nothing is counted here: `Counting` already registered each drained
+    /// version on the way in, and none of them is emitted, so the balance
+    /// carries them.
     fn drain_key(&mut self, key: &UserKey) -> crate::Result<()> {
-        let mut drained = false;
         loop {
             let Some(next) = self.inner.next_if(|kv| {
                 if let Ok(kv) = kv {
@@ -467,14 +507,10 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
                     true
                 }
             }) else {
-                if drained {
-                    self.note_collected();
-                }
                 return Ok(());
             };
 
             next?;
-            drained = true;
         }
     }
 }
@@ -482,7 +518,20 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
 impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for CompactionStream<'a, I, F> {
     type Item = Item;
 
+    /// Wraps [`Self::next_inner`] so every emitted version settles against the
+    /// balance in ONE place. Counting emissions at each `return` inside the
+    /// pipeline would be the same list-of-sites this design exists to avoid.
     fn next(&mut self) -> Option<Self::Item> {
+        let next = self.next_inner();
+        if matches!(next, Some(Ok(_))) {
+            self.settle_one();
+        }
+        next
+    }
+}
+
+impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I, F> {
+    fn next_inner(&mut self) -> Option<Item> {
         loop {
             // Pending entries (from Indirection bailout) go through the same pipeline.
             let next = self
@@ -543,6 +592,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                 if !crate::comparator::same_user_key(&peeked.key.user_key, &head.key.user_key) {
                     if head.is_tombstone() && self.evict_tombstones {
                         self.note_transform();
+                        self.note_neutral_drop();
                         continue;
                     }
 
@@ -611,7 +661,6 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                                     watcher.on_dropped(&merged);
                                 }
                                 self.note_transform();
-                                self.note_collected();
                                 continue;
                             }
                             // Skip zeroing for partial merges (MergeOperand) to avoid duplicate keys
@@ -651,6 +700,7 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                 }
             } else if head.is_tombstone() && self.evict_tombstones {
                 self.note_transform();
+                self.note_neutral_drop();
                 continue;
             } else if head.key.value_type.is_merge_operand()
                 && head.key.seqno < self.gc_seqno_threshold
@@ -670,7 +720,6 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> Iterator for Compaction
                     watcher.on_dropped(&head);
                 }
                 self.note_transform();
-                self.note_collected();
                 continue;
             }
 

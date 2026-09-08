@@ -16,7 +16,7 @@
 //! resolves against the latest version — so the answer became a silent
 //! "absent" rather than either the value or `SnapshotBelowRetention`.
 
-use lsm_tree::{AbstractTree, Config, SeqNo, SequenceNumberCounter};
+use lsm_tree::{AbstractTree, Config, SequenceNumberCounter};
 
 #[test]
 fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::Result<()> {
@@ -55,16 +55,17 @@ fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::R
         "precondition: snapshot 9 resolves to the version at seqno 2",
     );
 
-    // Compact with a GC threshold of 8. The fold keeps BOTH versions here: the
-    // one at 10 is above the watermark, and the one at 2 is the newest below
-    // it. So this compaction collects nothing and records no floor at all, and
-    // a read at 9 stays servable for the strongest possible reason.
+    // Compact with a GC threshold of 8. The fold keeps BOTH versions: the one
+    // at 10 is above the watermark, and the one at 2 is the newest below it, so
+    // the fold drops nothing. The bottom level still rewrites the seqno of the
+    // one at 2 down to 0, which is a change of its own, so the install records
+    // the watermark-derived floor of 7. A read at 9 stays well above it.
     tree.major_compact(u64::MAX, 8)?;
 
     let floor = tree.retention_floor();
     assert_eq!(
-        floor, 0,
-        "a compaction whose fold collected nothing must not move the floor",
+        floor, 7,
+        "the bottom level zeroed a seqno, so the watermark-derived floor applies",
     );
 
     // Live process: the retained version still routes this read to the old
@@ -81,10 +82,10 @@ fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::R
     // After the reopen the retained versions are gone and the floor is the only
     // boundary. The read is still above it, so the engine has promised to serve
     // it: it must answer with the value, and must never answer "absent".
+    let floor = reopened.retention_floor();
     assert_eq!(
-        reopened.retention_floor(),
-        0,
-        "the floor a non-collecting compaction recorded must survive the reopen",
+        floor, 7,
+        "the floor the compaction recorded must survive the reopen",
     );
     assert_eq!(
         reopened.get("k", 9)?.as_deref(),
@@ -93,11 +94,20 @@ fn a_read_above_the_floor_still_sees_its_version_after_a_reopen() -> lsm_tree::R
          instead of the version the floor promised",
     );
 
-    // Nothing was collected, so nothing is refused: every snapshot down to the
-    // one just above the version at seqno 2 still resolves to it.
+    // The boundary: the floor itself is refused, and the smallest admitted
+    // snapshot resolves to the same version, which is the one the fold had to
+    // keep.
+    assert!(
+        matches!(
+            reopened.get("k", floor),
+            Err(lsm_tree::Error::SnapshotBelowRetention { .. })
+        ),
+        "a read AT the floor {floor} must be refused",
+    );
     assert_eq!(
-        reopened.get("k", SeqNo::from(3_u64))?.as_deref(),
-        Some(&b"old"[..])
+        reopened.get("k", floor + 1)?.as_deref(),
+        Some(&b"old"[..]),
+        "the smallest admitted snapshot must resolve to the newest version below the watermark",
     );
 
     Ok(())

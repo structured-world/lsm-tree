@@ -543,15 +543,15 @@ pub trait AbstractTree: sealed::Sealed {
                 .collect::<Vec<_>>(),
             self.tree_config().comparator.clone(),
         );
-        // Counts the versions the watermark drops, so the install can tell a
-        // flush that collected history from one that collected none and only
-        // raise the retention floor for the former.
-        let gc_marker = alloc::sync::Arc::new(portable_atomic::AtomicU64::new(0));
         // RT suppression is not needed here: flush writes both entries and RTs
         // to the output tables. Suppression happens at read time, not write time.
         let stream = CompactionStream::new(merger, seqno_threshold)
-            .with_merge_operator(self.tree_config().merge_operator.clone())
-            .with_gc_marker(alloc::sync::Arc::clone(&gc_marker));
+            .with_merge_operator(self.tree_config().merge_operator.clone());
+        // Versions that go in and do not come out, so the install can tell a
+        // flush that collected history from one that collected none and only
+        // raise the retention floor for the former. Read once the stream is
+        // drained, below.
+        let gc_balance = stream.gc_balance();
 
         drop(version_history);
 
@@ -577,7 +577,7 @@ pub trait AbstractTree: sealed::Sealed {
                 None,
                 &sealed_ids,
                 seqno_threshold,
-                gc_marker.load(core::sync::atomic::Ordering::Relaxed) > 0,
+                gc_balance.load(core::sync::atomic::Ordering::Relaxed) > 0,
             )?;
         }
 
