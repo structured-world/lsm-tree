@@ -355,11 +355,12 @@ impl<'a, I: Iterator<Item = Item>, F: StreamFilter + 'a> CompactionStream<'a, I,
     /// not `R < H`; a call site preserving the wrong one would leave the read
     /// at `H` unaccounted for.
     ///
-    /// Both call sites enter only with the head below the watermark, so
-    /// everything consumed here is below it too and so is `H` itself, which
-    /// puts the whole affected range under the install's floor. A call site
-    /// that folded a head at or above the watermark would break that, which is
-    /// why neither has one.
+    /// All THREE call sites enter only with the head below the watermark (the
+    /// key-boundary lone operand, the same-key merge arm, and the end-of-stream
+    /// operand), so everything consumed here is below it too and so is `H`
+    /// itself, which puts the whole affected range under the install's floor. A
+    /// call site that folded a head at or above the watermark would break that,
+    /// which is why none of them does.
     fn resolve_merge_operands(
         &mut self,
         head: InternalValue,
