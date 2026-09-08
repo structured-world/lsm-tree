@@ -629,9 +629,13 @@ impl SuperVersions {
     /// This is where the engine's read routing lives, and compaction depends on
     /// it: because a read at `seqno` is answered by a version installed
     /// STRICTLY below it, an output installed at seqno `I` never has to answer
-    /// a read below `I`, which is answered from the version current then and
-    /// the tables that compaction consumed. That is what lets a fold discard a
-    /// version some lower snapshot still resolves to. The dependency is
+    /// a read below `I`, which is answered from the version current then, out
+    /// of THAT version's tables. Those need not be this compaction's own
+    /// inputs: consecutive compactions (A replaced by B at 20, B by C at 30)
+    /// leave a read at 15 on the version holding A, while the compaction at 30
+    /// consumed B. Either way it is not the new output's problem, which is what
+    /// lets a fold discard a version some lower snapshot still resolves to.
+    /// The dependency is
     /// one-way and unenforced by any type, so a change to the comparison here
     /// changes what the folds are allowed to drop; a reopen already drops the
     /// routing (the history restarts as one version whose seqno is the

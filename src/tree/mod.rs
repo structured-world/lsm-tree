@@ -1202,10 +1202,10 @@ impl AbstractTree for Tree {
         let mut key_count: u64 = 0;
 
         // Use ONE snapshot at the requested seqno for both the SST and memtable
-        // contributions, so the estimate reflects a read's visibility at
-        // `seqno`: no entries newer than the snapshot, and one consistent TABLE
-        // set even during a concurrent flush or compaction. The memtable half
-        // is approximate, for the reason two paragraphs down.
+        // contributions, so the estimate is taken against a read's view at
+        // `seqno`: one consistent TABLE set even during a concurrent flush or
+        // compaction, and memtable entries filtered by the snapshot. Neither
+        // half is exact, and the two paragraphs below say how.
         //
         // What "the same visibility as a read" does and does not mean here.
         //
@@ -4380,10 +4380,12 @@ impl Tree {
     /// The version is resolved ONCE here and moved into the iterator, so the
     /// whole traversal reads one file set: a compaction installing mid-scan
     /// neither adds its output nor removes the inputs this iterator holds.
-    /// Combined with the resolver picking the version whose seqno is highest
-    /// still strictly below `seqno` (its install seqno while the history is
-    /// live, the persisted floor after a reopen), that is what lets a
-    /// compaction fold discard a version a lower snapshot still resolves to.
+    /// Combined with the resolver picking, for a non-zero `seqno`, the version
+    /// whose seqno is highest still strictly below it (its install seqno while
+    /// the history is live, the persisted floor after a reopen), that is what
+    /// lets a compaction fold discard a version a lower snapshot still
+    /// resolves to. Snapshot `0` is the resolver's own special case and sees
+    /// nothing regardless of which version it lands on.
     #[doc(hidden)]
     pub fn create_range<'a, K: AsRef<[u8]> + 'a, R: RangeBounds<K> + 'a>(
         &self,
