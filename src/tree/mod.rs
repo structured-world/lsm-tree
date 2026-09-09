@@ -4303,10 +4303,25 @@ impl Tree {
         // caller supplies it once rather than on every open forever. Idempotent
         // by id, so re-opening with the same one writes nothing.
         //
+        // BOTH write slots, not just the table one: a KV-separated tree
+        // compresses its blob files against a dictionary of their own, and a
+        // blob file whose dictionary the tree never stored cannot be read back
+        // from a checkpoint or after the caller stops supplying it — the same
+        // failure the table side had, one file class over.
+        //
         // After the recover / create above, because registering installs a
         // version edit and there is no history to install into before that.
         #[cfg(zstd_any)]
-        if let Some(dict) = tree.config.zstd_dictionary.clone() {
+        for dict in [
+            tree.config.zstd_dictionary.clone(),
+            tree.config
+                .kv_separation_opts
+                .as_ref()
+                .and_then(|o| o.zstd_dictionary.clone()),
+        ]
+        .into_iter()
+        .flatten()
+        {
             tree.register_zstd_dictionary(dict)?;
         }
 

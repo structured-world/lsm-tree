@@ -968,15 +968,29 @@ impl Config {
     /// the compression policy references a `dict_id` that doesn't match the
     /// configured dictionary.
     pub fn open(self) -> crate::Result<AnyTree> {
+        // `mut` only under zstd: installing the registry assigns the config a
+        // set of its own and may fill the write slot from it.
+        #[cfg_attr(
+            not(zstd_any),
+            expect(unused_mut, reason = "only the zstd build installs a registry here")
+        )]
+        let mut config = self;
+
+        // BEFORE validation, not inside `Tree::open`: the policy names a
+        // dictionary by id, and the tree may hold it without the caller
+        // supplying the bytes again. Validating first would refuse exactly the
+        // reopen this feature exists to allow.
         #[cfg(zstd_any)]
-        self.validate_zstd_dictionary()?;
+        config.install_own_zstd_dictionaries()?;
+        #[cfg(zstd_any)]
+        config.validate_zstd_dictionary()?;
 
         // On a zstd build the live block path seals encrypted blocks through
         // the AAD-bound envelope, so the configured provider MUST implement it.
         // Reject an opaque-only provider here, at open time, instead of letting
         // it fail on the first encrypted read/write.
         #[cfg(zstd_any)]
-        if self
+        if config
             .encryption
             .as_ref()
             .is_some_and(|enc| !enc.supports_aad_block_path())
@@ -988,10 +1002,10 @@ impl Config {
             ));
         }
 
-        Ok(if self.kv_separation_opts.is_some() {
-            AnyTree::Blob(BlobTree::open(self)?)
+        Ok(if config.kv_separation_opts.is_some() {
+            AnyTree::Blob(BlobTree::open(config)?)
         } else {
-            AnyTree::Standard(Tree::open(self)?)
+            AnyTree::Standard(Tree::open(config)?)
         })
     }
 
@@ -1006,8 +1020,9 @@ impl Config {
     }
 
     /// Gives this config a registry of its OWN, holding every dictionary the
-    /// tree at [`Self::path`] stores plus the one supplied through
-    /// [`Self::zstd_dictionary`].
+    /// tree at [`Self::path`] stores plus the ones supplied through
+    /// [`Self::zstd_dictionary`] and the KV-separation options, and fills either
+    /// write slot the caller left empty from what the tree already holds.
     ///
     /// Every path that opens a table has to call this first: a table resolves
     /// the dictionary id it recorded against this set, so an unloaded one fails
@@ -1035,8 +1050,52 @@ impl Config {
         if let Some(supplied) = self.zstd_dictionary.clone() {
             dicts = dicts.with(supplied);
         }
+        if let Some(supplied) = self
+            .kv_separation_opts
+            .as_ref()
+            .and_then(|o| o.zstd_dictionary.clone())
+        {
+            dicts = dicts.with(supplied);
+        }
+
+        // Fill an empty WRITE slot from what the tree holds. Supplying the
+        // bytes once is the point of storing them, and that has to cover
+        // writing too: a reopen keeps its compression policy, the policy names
+        // a dictionary by id, and the tree can answer that id itself. Without
+        // this the reopen is refused by the validation below even though the
+        // file is right there, and the caller is back to carrying the bytes
+        // forever. A slot the caller DID fill is left alone: it is the caller's
+        // choice of what new blocks are written against.
+        if self.zstd_dictionary.is_none() {
+            self.zstd_dictionary =
+                Self::policy_dictionary(&dicts, self.data_block_compression_policy.iter().copied());
+        }
+        if let Some(kv_opts) = &mut self.kv_separation_opts
+            && kv_opts.zstd_dictionary.is_none()
+        {
+            kv_opts.zstd_dictionary =
+                Self::policy_dictionary(&dicts, core::iter::once(kv_opts.compression));
+        }
+
         self.zstd_dictionaries = Arc::new(arc_swap::ArcSwap::from_pointee(dicts));
         Ok(())
+    }
+
+    /// The dictionary `policy` names, if the set holds it.
+    ///
+    /// A policy may name several ids across levels; the FIRST one the tree can
+    /// answer wins, since a block is written against exactly one dictionary and
+    /// a policy that names two the tree holds is already ambiguous at the
+    /// validation below.
+    #[cfg(zstd_any)]
+    fn policy_dictionary(
+        dicts: &crate::compression::ZstdDictionaries,
+        mut policy: impl Iterator<Item = CompressionType>,
+    ) -> Option<Arc<crate::compression::ZstdDictionary>> {
+        policy.find_map(|ct| match ct {
+            CompressionType::ZstdDict { dict_id, .. } => dicts.get(dict_id).cloned(),
+            _ => None,
+        })
     }
 
     /// The dictionary ids NEW blocks may still be written against: every one a

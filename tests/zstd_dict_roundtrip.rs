@@ -351,6 +351,67 @@ mod zstd_dict {
     }
 
     #[test]
+    fn a_blob_trees_dictionary_becomes_tree_state_like_a_tables() -> lsm_tree::Result<()> {
+        // A KV-separated tree compresses its blob files against a dictionary of
+        // their own. It has to be stored and registered exactly like the table
+        // one, or the blob files are readable only while the caller keeps
+        // supplying the bytes — and a checkpoint of such a tree cannot be opened
+        // at all.
+        let dir = tempfile::tempdir()?;
+        let target = tempfile::tempdir()?;
+        let checkpoint = target.path().join("snapshot");
+        let dict = make_test_dictionary();
+        let dict_id = dict.id();
+        let compression = CompressionType::zstd_dict(3, dict_id)?;
+        let big_value = b"blob-value-".repeat(20);
+
+        {
+            let tree = make_config(dir.path())
+                .with_kv_separation(Some(make_blob_opts(compression, Arc::new(dict))))
+                .open()?;
+            for i in 0u32..50 {
+                let key = format!("key-{i:04}");
+                tree.insert(key.as_bytes(), &big_value, i.into());
+            }
+            tree.flush_active_memtable(0)?;
+            assert!(tree.blob_file_count() >= 1, "a blob file must exist");
+
+            tree.create_checkpoint(&checkpoint)?;
+        }
+
+        assert!(
+            dir.path().join("dicts").join(dict_id.to_string()).exists(),
+            "the blob dictionary is stored in the tree, not only in the config",
+        );
+        assert!(
+            checkpoint.join("dicts").join(dict_id.to_string()).exists(),
+            "and travels into a checkpoint with the blob files it decodes",
+        );
+
+        // The checkpoint opens on its own: the same blob compression policy, but
+        // NO dictionary supplied — it is resolved from the copy beside the blob
+        // files.
+        let restored = make_config(&checkpoint)
+            .with_kv_separation(Some(
+                lsm_tree::KvSeparationOptions::default()
+                    .separation_threshold(1)
+                    .compression(compression),
+            ))
+            .open()?;
+        for i in 0u32..50 {
+            let key = format!("key-{i:04}");
+            assert_eq!(
+                restored
+                    .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                    .as_deref(),
+                Some(big_value.as_slice()),
+                "blob value for {key} must survive the checkpoint",
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn blob_zstd_dict_roundtrip_write_flush_read() -> lsm_tree::Result<()> {
         // Round-trip: write blobs compressed with ZstdDict, flush to disk, read back.
         let dir = tempfile::tempdir()?;
@@ -1011,6 +1072,61 @@ mod zstd_dict {
                 second.get(key.as_bytes(), lsm_tree::MAX_SEQNO)?.as_deref(),
                 Some(expected.as_bytes()),
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_tree_keeps_writing_under_its_own_dictionary_without_the_config() -> lsm_tree::Result<()> {
+        // Supplying the dictionary once is the point of storing it, and that has
+        // to hold for WRITING too: a reopen that keeps the same compression
+        // policy but no longer carries the bytes must resolve the id the policy
+        // names from the tree's own folder.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let compression = CompressionType::zstd_dict(3, dict.id())?;
+
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(compression))
+                .zstd_dictionary(Some(Arc::new(dict)))
+                .open()?;
+            for i in 0u32..100 {
+                let key = format!("first-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        // Same policy, no dictionary in the config at all.
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(compression))
+                .open()?;
+            for i in 0u32..100 {
+                let key = format!("second-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), (1000 + i).into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        // Both generations read back, and the second was written under the
+        // dictionary the tree resolved for itself.
+        let reopened = make_config(dir.path()).open()?;
+        for i in 0u32..100 {
+            let expected = format!("value-{i:05}-padding-to-make-it-longer");
+            for prefix in ["first", "second"] {
+                let key = format!("{prefix}-{i:05}");
+                assert_eq!(
+                    reopened
+                        .get(key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                        .as_deref(),
+                    Some(expected.as_bytes()),
+                    "{key} must read back",
+                );
+            }
         }
         Ok(())
     }
