@@ -39,6 +39,34 @@ mod zstd_dict {
         )
     }
 
+    /// Removes the manifest and its version pointer, so the next open has to
+    /// rebuild from the tables on disk.
+    ///
+    /// Asserts that it removed something: matching by name means a change to the
+    /// naming would silently leave the manifest intact, and every test that
+    /// depends on this would then quietly assert only that a repair over a
+    /// HEALTHY manifest works.
+    fn lose_the_manifest(dir: &std::path::Path) -> lsm_tree::Result<()> {
+        let mut removed = 0;
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let is_version = name
+                .strip_prefix('v')
+                .is_some_and(|rest| rest.parse::<u64>().is_ok());
+            if is_version || name == "current" {
+                std::fs::remove_file(entry.path())?;
+                removed += 1;
+            }
+        }
+        assert!(
+            removed > 0,
+            "no manifest file matched: the naming changed and this helper stopped losing anything",
+        );
+        Ok(())
+    }
+
     #[test]
     fn tree_write_flush_read_zstd_dict() -> lsm_tree::Result<()> {
         let dir = tempfile::tempdir()?;
@@ -1013,17 +1041,7 @@ mod zstd_dict {
 
         // Lose the manifest, then rebuild it with NOTHING supplied: the tree
         // owns its dictionary, and that is the whole point of storing it.
-        for entry in std::fs::read_dir(dir.path())? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let is_version = name
-                .strip_prefix('v')
-                .is_some_and(|rest| rest.parse::<u64>().is_ok());
-            if is_version || name == "current" {
-                std::fs::remove_file(entry.path())?;
-            }
-        }
+        lose_the_manifest(dir.path())?;
 
         let report = make_config(dir.path()).repair()?;
         assert_eq!(report.unreadable, 0, "no table should be unreadable");
@@ -1097,18 +1115,7 @@ mod zstd_dict {
             })
             .expect("an SST to corrupt");
         corrupt_a_data_block(&victim)?;
-
-        for entry in std::fs::read_dir(dir.path())? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let is_version = name
-                .strip_prefix('v')
-                .is_some_and(|rest| rest.parse::<u64>().is_ok());
-            if is_version || name == "current" {
-                std::fs::remove_file(entry.path())?;
-            }
-        }
+        lose_the_manifest(dir.path())?;
 
         let report = make_config(dir.path()).repair_with_salvage(true)?;
         assert_eq!(

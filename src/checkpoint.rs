@@ -462,6 +462,12 @@ fn link_dictionaries(
 
     for id in ids {
         let name = id.to_string();
+        // The byte count is deliberately dropped rather than totalled into
+        // `CheckpointInfo::total_bytes`. That figure is contracted to measure
+        // the same SET of files as `StorageStats::used_bytes` — the SSTs, their
+        // sidecars and the blob files — and a dictionary is tree-level state
+        // like the manifest, which the same contract excludes. Adding it on one
+        // side only would break the equality both surfaces are asserted against.
         link_or_copy_cross_fs(
             src_fs,
             &src_folder.join(&name),
