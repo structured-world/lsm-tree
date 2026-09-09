@@ -1200,6 +1200,61 @@ mod zstd_dict {
     }
 
     #[test]
+    fn a_repaired_version_registers_the_dictionaries_its_tables_name() -> lsm_tree::Result<()> {
+        // A repair rebuilds the version from what is on disk, and the rebuilt
+        // one has to REGISTER the dictionaries its recovered tables reference.
+        // Everything downstream reads that list: a checkpoint copies exactly
+        // it, so a version that forgot the ids produces a snapshot with the
+        // tables and none of the dictionaries they need.
+        let dir = tempfile::tempdir()?;
+        let target = tempfile::tempdir()?;
+        let checkpoint = target.path().join("snapshot");
+        let dict = make_test_dictionary();
+        let dict_id = dict.id();
+        let compression = CompressionType::zstd_dict(3, dict_id)?;
+
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(compression))
+                .zstd_dictionary(Some(Arc::new(dict)))
+                .open()?;
+            for i in 0u32..100 {
+                let key = format!("key-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        lose_the_manifest(dir.path())?;
+        let report = make_config(dir.path()).repair()?;
+        assert_eq!(report.unreadable, 0);
+
+        // Checkpoint the REPAIRED tree under a policy that no longer names the
+        // dictionary, so nothing re-registers it: what the rebuilt version
+        // recorded is all there is. The tables on disk are still compressed
+        // against it and still need it.
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(CompressionType::None))
+                .open()?;
+            tree.create_checkpoint(&checkpoint)?;
+        }
+
+        assert!(
+            checkpoint.join("dicts").join(dict_id.to_string()).exists(),
+            "the rebuilt version must name the dictionary its tables were written against",
+        );
+
+        let restored = make_config(&checkpoint).open()?;
+        assert_eq!(
+            restored.get(b"key-00042", lsm_tree::MAX_SEQNO)?.as_deref(),
+            Some(b"value-00042-padding-to-make-it-longer".as_slice()),
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_salvage_resolves_the_dictionaries_the_tree_stores() -> lsm_tree::Result<()> {
         // Salvage reads the source's blocks and rewrites them, so it needs the
         // dictionary the source was written against just as a plain open does.

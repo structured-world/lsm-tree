@@ -2001,6 +2001,20 @@ impl Tree {
             if still_owed.contains(&id) || referenced.contains(&id) {
                 continue;
             }
+            // Through the deletion pause, like the tables and blob files. A
+            // checkpoint holds its captured version as a LOCAL clone, so a
+            // concurrent clear or GC install can drop that version out of the
+            // history while the checkpoint is still going to link the
+            // dictionaries it names. Unlinking directly would then make
+            // `link_dictionaries` fail on a missing file and abort a checkpoint
+            // that was otherwise perfectly valid; deferred, the file outlives
+            // the pause and the removal happens when it closes.
+            if self
+                .deletion_pause
+                .try_enqueue(self.config.fs.clone(), folder.join(id.to_string()))
+            {
+                continue;
+            }
             crate::dicts::remove(&*self.config.fs, &folder, id, self.config.sync_mode)?;
             removed += 1;
         }
@@ -6035,3 +6049,6 @@ mod cache_stats_tests;
 #[cfg(all(test, feature = "std"))]
 #[expect(clippy::expect_used, reason = "test code")]
 mod restricted_reclaim_tests;
+
+#[cfg(all(test, feature = "std", zstd_any))]
+mod dict_collect_tests;

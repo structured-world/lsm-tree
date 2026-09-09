@@ -387,8 +387,11 @@ impl Version {
     }
 
     /// This version with `dicts` in place of its own list.
+    ///
+    /// A REBUILT version (manifest repair) also sets the list this way, since
+    /// it starts empty and the ids have to be derived from the recovered files.
     #[must_use]
-    fn with_dicts(&self, dicts: Vec<crate::file::DictId>) -> Self {
+    pub(crate) fn with_dicts(&self, dicts: Vec<crate::file::DictId>) -> Self {
         Self {
             inner: Arc::new(VersionInner {
                 id: self.id,

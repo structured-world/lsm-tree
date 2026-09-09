@@ -6204,6 +6204,29 @@ fn publish_repaired_manifest(
     let version = Version::from_levels(version_id, tree_type, levels, blob_file_list, blob_frag)
         .with_retention_floor(config.repair_retention_floor);
 
+    // Register the dictionaries the recovered files name. A rebuilt version
+    // starts with none, and nothing later puts them back once the write policy
+    // stops naming them: a checkpoint copies exactly this list, so the snapshot
+    // would carry the tables and not the dictionaries that decode them.
+    //
+    // Derived from the files themselves and intersected with what `dicts/`
+    // actually holds, so a repair over a tree whose dictionary is genuinely
+    // gone records no id it cannot honour.
+    #[cfg(zstd_any)]
+    let version = {
+        let held = config.current_zstd_dictionaries();
+        let ids: Vec<_> = version
+            .referenced_dicts()
+            .into_iter()
+            .filter(|id| held.get(*id).is_some())
+            .collect();
+        if ids.is_empty() {
+            version
+        } else {
+            version.with_dicts(ids)
+        }
+    };
+
     // The LAST cancellation boundary: per-file checks only run before a file
     // starts, so a cancel requested during the final file's verification or
     // salvage would otherwise be silently outrun by the commit. From here on
