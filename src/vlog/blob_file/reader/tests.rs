@@ -763,12 +763,13 @@ fn blob_reader_zstd_dict_missing_dict_returns_mismatch() -> crate::Result<()> {
     Ok(())
 }
 
-/// Write a blob with dict A, then read it back with dict B (different id).
-/// Expect `ZstdDictMismatch { got: Some(B.id()) }`.
+/// A blob written under dict A resolves against a SET, by the id the file
+/// recorded: a set holding only the tree's newer dict B cannot decode it, and a
+/// set holding both decodes it whichever one the tree currently writes with.
 #[test]
 #[cfg(zstd_any)]
-fn blob_reader_zstd_dict_wrong_dict_id_returns_mismatch() -> crate::Result<()> {
-    use crate::compression::ZstdDictionary;
+fn blob_reader_resolves_the_dictionary_the_file_recorded() -> crate::Result<()> {
+    use crate::compression::{ZstdDictionaries, ZstdDictionary};
 
     let id_generator = SequenceNumberCounter::default();
     let folder = tempfile::tempdir()?;
@@ -786,21 +787,33 @@ fn blob_reader_zstd_dict_wrong_dict_id_returns_mismatch() -> crate::Result<()> {
         crate::vlog::BlobFileWriter::new(id_generator, folder.path(), 0, None, Arc::new(StdFs))?
             .use_target_size(u64::MAX)
             .use_compression(compression)
-            .use_zstd_dictionary(Some(dict_a_arc));
+            .use_zstd_dictionary(Some(dict_a_arc.clone()));
 
     let handle = writer.write(b"key", 0, b"value-compressed-with-dict-a")?;
     let blob_file = writer.finish()?;
     let blob_file = blob_file.first().unwrap();
 
     let file = File::open(&blob_file.0.path)?;
-    // Reader supplied with dict B (wrong id)
-    let reader = Reader::new(blob_file, &file).with_dict(Some(&dict_b_arc));
 
-    let result = reader.get(b"key", &handle);
+    // Rotated away: the tree now holds only B, so A's generation is gone.
+    let only_b = ZstdDictionaries::new().with(dict_b_arc);
+    let result = Reader::new(blob_file, &file)
+        .with_dicts(&only_b)
+        .get(b"key", &handle);
     assert!(
-        matches!(result, Err(crate::Error::ZstdDictMismatch { .. })),
-        "expected ZstdDictMismatch when wrong dict id provided; got: {result:?}",
+        matches!(
+            result,
+            Err(crate::Error::ZstdDictMismatch { got: None, .. })
+        ),
+        "a set without the recorded dictionary must report it missing; got: {result:?}",
     );
+
+    // Rotated properly: both are held, and the file names the one it needs.
+    let both = only_b.with(dict_a_arc);
+    let value = Reader::new(blob_file, &file)
+        .with_dicts(&both)
+        .get(b"key", &handle)?;
+    assert_eq!(&*value, b"value-compressed-with-dict-a");
 
     Ok(())
 }

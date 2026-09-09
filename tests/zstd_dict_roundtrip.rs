@@ -821,6 +821,83 @@ mod zstd_dict {
     }
 
     #[test]
+    fn a_second_blob_dictionary_leaves_the_first_generation_readable() -> lsm_tree::Result<()> {
+        // The blob twin of the test above. A blob file records the dictionary it
+        // was written with exactly as a table does, so rotating the KV
+        // dictionary must leave the previous generation readable: the read has
+        // to resolve each blob file's own recorded id against the tree's set,
+        // not hand every file whatever the current write policy happens to name.
+        let dir = tempfile::tempdir()?;
+        let first = make_test_dictionary();
+        let second =
+            ZstdDictionary::new(&b"a second blob dictionary with different content".repeat(40));
+        assert_ne!(first.id(), second.id());
+        let big_value = b"blob-value-".repeat(20);
+
+        {
+            let tree = make_config(dir.path())
+                .with_kv_separation(Some(make_blob_opts(
+                    CompressionType::zstd_dict(3, first.id())?,
+                    Arc::new(first),
+                )))
+                .open()?;
+            for i in 0u32..50 {
+                let key = format!("first-{i:04}");
+                tree.insert(key.as_bytes(), &big_value, i.into());
+            }
+            tree.flush_active_memtable(0)?;
+            assert!(tree.blob_file_count() >= 1, "a blob file must exist");
+        }
+
+        // Reopened under a DIFFERENT dictionary: the new one is what new blob
+        // files are written against, the old one is still what the old ones
+        // resolve to. Both are in the tree's set, read from its own folder.
+        let tree = make_config(dir.path())
+            .with_kv_separation(Some(make_blob_opts(
+                CompressionType::zstd_dict(3, second.id())?,
+                Arc::new(second),
+            )))
+            .open()?;
+        for i in 0u32..50 {
+            let key = format!("second-{i:04}");
+            tree.insert(key.as_bytes(), &big_value, (1000 + i).into());
+        }
+        tree.flush_active_memtable(0)?;
+
+        for i in 0u32..50 {
+            let first_key = format!("first-{i:04}");
+            assert_eq!(
+                tree.get(first_key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                    .as_deref(),
+                Some(big_value.as_slice()),
+                "a blob written under the first dictionary must stay readable",
+            );
+            let second_key = format!("second-{i:04}");
+            assert_eq!(
+                tree.get(second_key.as_bytes(), lsm_tree::MAX_SEQNO)?
+                    .as_deref(),
+                Some(big_value.as_slice()),
+            );
+        }
+
+        // And through the scan, which resolves handles on a different path (the
+        // guard, plus the coalescing prefetch that warms the cache ahead of it).
+        let mut scanned = 0;
+        for guard in tree.range(
+            "first-0000".as_bytes().."first-9999".as_bytes(),
+            lsm_tree::MAX_SEQNO,
+            None,
+        ) {
+            let (_, value) = guard.into_inner()?;
+            assert_eq!(value.as_ref(), big_value.as_slice());
+            scanned += 1;
+        }
+        assert_eq!(scanned, 50, "every first-generation blob must scan back");
+
+        Ok(())
+    }
+
+    #[test]
     fn a_dictionary_still_in_use_is_never_collected() -> lsm_tree::Result<()> {
         // The direction that matters: collection must not take a dictionary
         // the tables still need, or the tree loses the ability to read itself.

@@ -107,16 +107,15 @@ impl AccessorShared<'_> {
         user_key: &[u8],
         vhandle: &ValueHandle,
     ) -> crate::Result<Option<UserValue>> {
+        // The set, not the write dictionary: a compaction reads blob files of
+        // every generation the tree holds, and each names its own.
+        #[cfg(zstd_any)]
+        let dicts = self.opts.config.zstd_dictionaries.load();
+
         let accessor = {
             let a = Accessor::new(&self.version.blob_files);
             #[cfg(zstd_any)]
-            let a = a.with_dict(
-                self.opts
-                    .config
-                    .kv_separation_opts
-                    .as_ref()
-                    .and_then(|o| o.zstd_dictionary.as_deref()),
-            );
+            let a = a.with_dicts(&dicts);
             a
         };
 
