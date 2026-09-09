@@ -54,6 +54,41 @@ fn writing_an_id_already_held_is_a_no_op() -> crate::Result<()> {
 }
 
 #[test]
+fn rewriting_a_held_dictionary_still_syncs_its_directory() -> crate::Result<()> {
+    use crate::fs::{Fault, FaultFs, FaultOp, FaultRule};
+
+    // A registration retried after a crash between the RENAME and the directory
+    // sync finds the final file already there. Returning without syncing would
+    // leave the directory entry non-durable while the caller goes on to durably
+    // register the id, so a power loss could keep the version edit and lose the
+    // dictionary.
+    //
+    // Observed through an injected fault rather than a call counter: with the
+    // directory sync armed to fail, a path that syncs REPORTS the failure and a
+    // path that skips it silently succeeds.
+    let dir = tempfile::tempdir()?;
+    let folder = dir.path().join(crate::file::DICTS_FOLDER);
+    let dict = ZstdDictionary::new(b"content whose registration is retried");
+
+    let fs = FaultFs::new(StdFs);
+    write(&fs, &folder, &dict, SyncMode::Normal)?;
+
+    fs.injector().arm(
+        FaultRule::new(
+            FaultOp::SyncDirectory,
+            Fault::Error(crate::io::ErrorKind::Other),
+        )
+        .on_path(crate::file::DICTS_FOLDER),
+    );
+
+    assert!(
+        write(&fs, &folder, &dict, SyncMode::Normal).is_err(),
+        "the retry must sync the directory, so the armed failure surfaces",
+    );
+    Ok(())
+}
+
+#[test]
 fn writing_a_different_dictionary_under_a_held_id_is_refused() -> crate::Result<()> {
     let (_dir, fs, folder) = store();
     let held = ZstdDictionary::new(b"the dictionary this id belongs to");

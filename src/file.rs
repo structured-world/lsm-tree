@@ -125,10 +125,30 @@ impl DictDirEntry {
     /// Exact-shape ownership, as everywhere else in this grammar: the id must
     /// parse, so an operator's `notes.tmp` beside the dictionaries is
     /// [`Foreign`](Self::Foreign) and is never swept.
+    ///
+    /// The spelling must be CANONICAL, not merely parseable. Rust's integer
+    /// parser accepts `+1`, `01` and `00`, none of which this engine ever
+    /// writes — so accepting them would sweep an operator's `01.tmp` as an
+    /// engine temp, and would hand `01` to a reader as id 1, which then opens
+    /// the entirely different file `dicts/1`.
     #[must_use]
     pub fn classify(file_name: &str) -> Self {
         let owned_id = |rest: &str, make: fn(DictId) -> Self| {
-            rest.parse::<DictId>().map_or(Self::Foreign, make)
+            // Canonical spelling, checked without formatting the id back: the
+            // parser already accepted only digits after an optional sign, so
+            // requiring a DIGIT first rejects `+1`, and rejecting a leading zero
+            // on anything longer than one character rejects `01` and `00` while
+            // keeping `0` itself.
+            let canonical = || {
+                let mut bytes = rest.bytes();
+                bytes.next().is_some_and(|first| {
+                    first.is_ascii_digit() && (first != b'0' || rest.len() == 1)
+                })
+            };
+            rest.parse::<DictId>()
+                .ok()
+                .filter(|_| canonical())
+                .map_or(Self::Foreign, make)
         };
         if let Some(rest) = file_name.strip_suffix(DICT_TMP_SUFFIX) {
             return owned_id(rest, Self::Tmp);

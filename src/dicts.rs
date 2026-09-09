@@ -69,6 +69,12 @@ pub fn write(
                 got: Some(held.id()),
             });
         }
+        // Sync even though the bytes were already there. The file may be a
+        // PREVIOUS attempt that died between its rename and this sync, leaving
+        // the directory entry not yet durable; returning without syncing would
+        // let the caller durably register the id on top of a file a power loss
+        // can still lose. Syncing an already-durable directory is a no-op.
+        fs.sync_directory_with(folder, sync_mode)?;
         return Ok(());
     }
 

@@ -29,6 +29,15 @@ fn dict_dir_entry_refuses_every_name_it_does_not_own() {
         "7 ",           // trailing space
         "",             // empty
         "07x",          // trailing garbage
+        // PARSEABLE but not canonical. The engine writes `id.to_string()` and
+        // nothing else, so these are an operator's names: sweeping `01.tmp`
+        // would break the promise never to touch a foreign file, and reading
+        // `01` as id 1 would open the entirely different file `dicts/1`.
+        "01",
+        "00",
+        "+1",
+        "01.tmp",
+        "+7.tmp",
     ] {
         assert_eq!(
             DictDirEntry::classify(name),
