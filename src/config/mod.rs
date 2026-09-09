@@ -1039,6 +1039,11 @@ impl Config {
         if let Some(supplied) = self.zstd_dictionary.clone() {
             dicts = dicts.with(supplied);
         }
+        // The blob dictionary joins the SAME set, and blob reads resolve out of
+        // it by the id each file recorded (`vlog::blob_file::Reader::with_dicts`),
+        // never out of the write slot below. The two are separate questions:
+        // rotating the blob dictionary changes what the next file is written
+        // against, and leaves every earlier file resolving to its own.
         if let Some(supplied) = self
             .kv_separation_opts
             .as_ref()
