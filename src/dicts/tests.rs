@@ -54,6 +54,31 @@ fn writing_an_id_already_held_is_a_no_op() -> crate::Result<()> {
 }
 
 #[test]
+fn writing_a_different_dictionary_under_a_held_id_is_refused() -> crate::Result<()> {
+    let (_dir, fs, folder) = store();
+    let held = ZstdDictionary::new(b"the dictionary this id belongs to");
+    write(&*fs, &folder, &held, SyncMode::Normal)?;
+
+    // A DIFFERENT dictionary claiming the same id: what a collision of the
+    // truncated 32-bit hash looks like from here. Treating the write as already
+    // done would leave the old bytes on disk while the caller writes new blocks
+    // against the new ones under the same id, and every such block would
+    // decompress into plausible garbage.
+    let colliding = ZstdDictionary::new(b"entirely different content");
+    let colliding = colliding.with_id_for_test(held.id());
+
+    let err = write(&*fs, &folder, &colliding, SyncMode::Normal).unwrap_err();
+    match err {
+        crate::Error::ZstdDictMismatch { expected, .. } => assert_eq!(expected, held.id()),
+        other => panic!("expected ZstdDictMismatch, got {other:?}"),
+    }
+
+    // The dictionary already there is untouched.
+    assert_eq!(read_one(&*fs, &folder, held.id())?.raw(), held.raw());
+    Ok(())
+}
+
+#[test]
 fn reading_a_dictionary_the_tree_does_not_hold_reports_not_found() {
     let (_dir, fs, folder) = store();
 

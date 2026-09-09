@@ -177,6 +177,23 @@ impl ZstdDictionary {
         }
     }
 
+    /// The same dictionary with `id` forced, for exercising an id COLLISION.
+    ///
+    /// The id is the hash of the content, so two different dictionaries sharing
+    /// one is a collision of the 32-bit truncation — reachable in principle,
+    /// unsearchable in a test. This is the only way to construct that state, and
+    /// it needs the private field, so it lives with the type.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_id_for_test(&self, id: u32) -> Self {
+        Self {
+            id: u64::from(id),
+            raw: Arc::clone(&self.raw),
+            #[cfg(feature = "zstd")]
+            prepared: Arc::clone(&self.prepared),
+        }
+    }
+
     /// Returns the shared pre-parsed `DictionaryHandle`, parsing on first call
     /// and reusing the cached handle on every subsequent call (across threads).
     ///

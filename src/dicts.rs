@@ -39,12 +39,19 @@ fn path_of(folder: &Path, id: DictId) -> PathBuf {
 ///
 /// Published by an atomic rename, so a crash mid-write leaves a `.tmp` the
 /// sweep disposes of rather than a half-written dictionary under a live name.
-/// Writing an id the folder already holds is a no-op: the id is derived from
-/// the content, so the file that is there already has these bytes.
+/// Writing an id the folder already holds is a no-op ONLY when the bytes match.
+/// The id is the truncated xxh3 of the content, so that is the overwhelmingly
+/// common case; a DIFFERENT dictionary under the same id is a collision of the
+/// truncation, and is refused.
 ///
 /// # Errors
 ///
-/// Propagates the create / write / sync / rename failures of the backend.
+/// [`crate::Error::ZstdDictMismatch`] when the folder already holds a different
+/// dictionary under this id. Accepting it silently would be the worst outcome
+/// the store can produce: the caller's new dictionary would be selected for
+/// WRITES while every read resolved the id back to the old bytes, so new blocks
+/// would decompress into plausible garbage. Otherwise propagates the create /
+/// write / sync / rename failures of the backend.
 pub fn write(
     fs: &dyn Fs,
     folder: &Path,
@@ -53,6 +60,15 @@ pub fn write(
 ) -> crate::Result<()> {
     let final_path = path_of(folder, dict.id());
     if fs.exists(&final_path)? {
+        // Same id: prove it is the same DICTIONARY before treating the write as
+        // done. `read_one` re-hashes, so a corrupt file is caught here too.
+        let held = read_one(fs, folder, dict.id())?;
+        if held.raw() != dict.raw() {
+            return Err(crate::Error::ZstdDictMismatch {
+                expected: dict.id(),
+                got: Some(held.id()),
+            });
+        }
         return Ok(());
     }
 

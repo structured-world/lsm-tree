@@ -2001,18 +2001,25 @@ impl Tree {
             if still_owed.contains(&id) || referenced.contains(&id) {
                 continue;
             }
-            // Through the deletion pause, like the tables and blob files. A
-            // checkpoint holds its captured version as a LOCAL clone, so a
-            // concurrent clear or GC install can drop that version out of the
-            // history while the checkpoint is still going to link the
-            // dictionaries it names. Unlinking directly would then make
-            // `link_dictionaries` fail on a missing file and abort a checkpoint
-            // that was otherwise perfectly valid; deferred, the file outlives
-            // the pause and the removal happens when it closes.
-            if self
-                .deletion_pause
-                .try_enqueue(self.config.fs.clone(), folder.join(id.to_string()))
-            {
+            // A held deletion pause SKIPS the dictionary entirely — it is not
+            // queued for later. A checkpoint holds its captured version as a
+            // LOCAL clone, so a concurrent clear or GC install can drop that
+            // version out of the history while the checkpoint is still going to
+            // link the dictionaries it names; removing one now would fail
+            // `link_dictionaries` on a missing file and abort a checkpoint that
+            // was otherwise valid.
+            //
+            // Skipping rather than DEFERRING (which is what tables and blob
+            // files do) because a queued removal fires unconditionally when the
+            // pause drains, and by then the id may have been registered again:
+            // registration finds the file already there, makes its write a
+            // no-op, durably records the id — and the drain then deletes the
+            // dictionary that registration just published. A table's removal
+            // cannot be undone by re-creating the table, so deferring is right
+            // for it; a dictionary collection is an explicit operation that can
+            // simply be run again, so waiting for the next pass costs nothing
+            // and leaves no queued action to fire against a re-registered file.
+            if self.deletion_pause.is_active() {
                 continue;
             }
             crate::dicts::remove(&*self.config.fs, &folder, id, self.config.sync_mode)?;

@@ -1178,6 +1178,18 @@ mod zstd_dict {
         Ok(())
     }
 
+    /// The tree's first SST, by its numeric name.
+    fn a_table_to_corrupt(dir: &std::path::Path) -> lsm_tree::Result<std::path::PathBuf> {
+        Ok(std::fs::read_dir(dir.join("tables"))?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().parse::<u64>().is_ok())
+            })
+            .expect("an SST to corrupt"))
+    }
+
     /// Flips a byte inside the SST's data section, so the file still opens but
     /// one data block fails its checksum: the shape block salvage exists for.
     fn corrupt_a_data_block(path: &std::path::Path) -> std::io::Result<()> {
@@ -1328,14 +1340,7 @@ mod zstd_dict {
             tree.flush_active_memtable(0)?;
         }
 
-        let victim = std::fs::read_dir(dir.path().join("tables"))?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .find(|p| {
-                p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().parse::<u64>().is_ok())
-            })
-            .expect("an SST to corrupt");
+        let victim = a_table_to_corrupt(dir.path())?;
         corrupt_a_data_block(&victim)?;
         lose_the_manifest(dir.path())?;
 
@@ -1517,14 +1522,7 @@ mod zstd_dict {
         // Corrupt that table, then repair under a policy that has MOVED ON to a
         // second dictionary: the salvage must still rewrite the old table under
         // the dictionary it names.
-        let victim = std::fs::read_dir(dir.path().join("tables"))?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .find(|p| {
-                p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().parse::<u64>().is_ok())
-            })
-            .expect("an SST to corrupt");
+        let victim = a_table_to_corrupt(dir.path())?;
         corrupt_a_data_block(&victim)?;
         lose_the_manifest(dir.path())?;
 

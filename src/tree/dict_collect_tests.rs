@@ -33,11 +33,15 @@ fn config(path: &std::path::Path) -> Config {
 ///
 /// The checkpoint holds its captured version as a LOCAL clone, so the history
 /// can move past that version while the checkpoint is still going to link the
-/// dictionaries it names. Removing one directly would fail `link_dictionaries`
-/// on a missing file and abort an otherwise valid checkpoint, so the removal
-/// goes through the same deletion pause the tables and blob files use.
+/// dictionaries it names. Removing one now would fail `link_dictionaries` on a
+/// missing file and abort an otherwise valid checkpoint.
+///
+/// The pass SKIPS such a dictionary rather than queueing it: a queued removal
+/// fires unconditionally when the pause drains, and by then the id may have been
+/// registered again — the drain would then delete a dictionary a registration
+/// had just published. A later collection takes it instead.
 #[test]
-fn a_collection_under_a_held_pause_defers_the_dictionary_removal() -> crate::Result<()> {
+fn a_collection_under_a_held_pause_leaves_the_dictionary_alone() -> crate::Result<()> {
     let dir = tempfile::tempdir()?;
     let dict = ZstdDictionary::new(&training_corpus());
     let dict_id = dict.id();
@@ -98,9 +102,98 @@ fn a_collection_under_a_held_pause_defers_the_dictionary_removal() -> crate::Res
         );
     }
 
+    // Nothing was queued, so closing the pause removes nothing by itself...
     assert!(
-        !dict_path.exists(),
-        "and the deferred removal is carried out once the pause closes",
+        dict_path.exists(),
+        "closing the pause must not fire a removal the collection never queued",
+    );
+
+    // ...and the next pass, with no pause held, takes it.
+    assert_eq!(tree.collect_unreferenced_dictionaries()?, 1);
+    assert!(!dict_path.exists(), "a later collection removes it");
+    Ok(())
+}
+
+/// Re-registering an id during a pause must not lose the dictionary.
+///
+/// The shape this guards: a collection runs while a checkpoint holds the pause,
+/// then the same id is registered again before the pause closes. Registration
+/// finds the file already there, makes its write a no-op and durably records the
+/// id — so a removal queued by that collection would delete the dictionary the
+/// registration had just published, and the loss stays invisible until a reopen
+/// finds a version naming a file that is gone.
+#[test]
+fn a_dictionary_registered_during_a_pause_survives_it() -> crate::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let dict = Arc::new(ZstdDictionary::new(&training_corpus()));
+    let dict_id = dict.id();
+    let compression = CompressionType::zstd_dict(3, dict_id)?;
+
+    {
+        let tree = config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(compression))
+            .zstd_dictionary(Some(Arc::clone(&dict)))
+            .open()?;
+        for i in 0u32..100 {
+            tree.insert(
+                format!("key-{i:05}").as_bytes(),
+                b"value-under-the-dictionary",
+                u64::from(i),
+            );
+        }
+        tree.flush_active_memtable(0)?;
+    }
+
+    // Rewritten without it, then unregistered, so it is collectable.
+    {
+        let tree = config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(CompressionType::None))
+            .open()?;
+        tree.major_compact(u64::MAX, 0)?;
+        let crate::AnyTree::Standard(tree) = tree else {
+            panic!("a standard tree");
+        };
+        tree.collect_unreferenced_dictionaries()?;
+    }
+
+    let tree = config(dir.path())
+        .data_block_compression_policy(CompressionPolicy::all(CompressionType::None))
+        .open()?;
+    let crate::AnyTree::Standard(tree) = tree else {
+        panic!("a standard tree");
+    };
+    let dict_path = dir
+        .path()
+        .join(crate::file::DICTS_FOLDER)
+        .join(dict_id.to_string());
+
+    {
+        let _pause = tree.deletion_pause.acquire();
+        tree.collect_unreferenced_dictionaries()?;
+        // The same id comes back while the pause is still held.
+        tree.register_zstd_dictionary(Arc::clone(&dict))?;
+    }
+
+    assert!(
+        dict_path.exists(),
+        "a dictionary registered during the pause must survive it closing",
+    );
+    assert!(
+        tree.zstd_dictionaries().get(dict_id).is_some(),
+        "and stay resolvable",
+    );
+
+    // The durable state agrees: a reopen still finds it.
+    drop(tree);
+    let reopened = config(dir.path())
+        .data_block_compression_policy(CompressionPolicy::all(CompressionType::None))
+        .open()?;
+    let crate::AnyTree::Standard(reopened) = reopened else {
+        panic!("a standard tree");
+    };
+    assert!(
+        reopened.zstd_dictionaries().get(dict_id).is_some(),
+        "the registration survives a reopen, not just the live set",
     );
     Ok(())
 }
