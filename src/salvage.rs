@@ -1085,8 +1085,21 @@ fn salvage_attempt(
     } else {
         writer
     };
+    // The writer MIRRORS the source's compression descriptor, so it must be
+    // handed the dictionary that descriptor names — not the caller's current
+    // write dictionary. Giving it a different one compresses the recovered
+    // blocks against bytes the stamped `dict_id` does not describe, and the
+    // first read of the copy fails: exactly the multi-generation salvage the
+    // read set above exists to enable.
     #[cfg(zstd_any)]
-    let writer = writer.use_zstd_dictionary(options.zstd_dictionary.clone());
+    let writer = writer.use_zstd_dictionary(match table.metadata.data_block_compression {
+        crate::CompressionType::ZstdDict { dict_id, .. } => options
+            .zstd_dictionaries
+            .get(dict_id)
+            .cloned()
+            .or_else(|| options.zstd_dictionary.clone()),
+        _ => options.zstd_dictionary.clone(),
+    });
 
     let walk = match salvage_blocks(
         &table,

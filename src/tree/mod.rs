@@ -2016,6 +2016,16 @@ impl Tree {
                 continue;
             }
             crate::dicts::remove(&*self.config.fs, &folder, id, self.config.sync_mode)?;
+
+            // Out of the LIVE set too, not just off the disk. The registry holds
+            // each dictionary's raw bytes and its prepared decoder state, so a
+            // tree that rotates dictionaries over a long life would otherwise
+            // accumulate every generation it ever held until it is dropped —
+            // and `zstd_dictionaries()` would keep naming ids the tree no
+            // longer owns.
+            self.config.zstd_dictionaries.store(alloc::sync::Arc::new(
+                self.config.current_zstd_dictionaries().without(id),
+            ));
             removed += 1;
         }
         // Explicitly, and only here: the guard is what excludes a concurrent
@@ -4229,8 +4239,20 @@ impl Tree {
         // keeps `Config::dict` working: on the first open it is the only one
         // there, and it is registered at the end of this function so later
         // opens need no config at all.
+        //
+        // Under the lock for a second reason: the load SWEEPS unpublished
+        // `.tmp` registrations. Doing that before the lock lets an opener that
+        // is about to fail with `Locked` delete a live owner's in-flight
+        // registration between its write and its rename.
         #[cfg(zstd_any)]
         config.install_own_zstd_dictionaries()?;
+
+        // Only now can the compression policy be checked: it names a dictionary
+        // by id, and the tree may hold that id without the caller supplying the
+        // bytes again. Validating before the load would refuse exactly the
+        // reopen the tree owning its dictionaries exists to allow.
+        #[cfg(zstd_any)]
+        config.validate_zstd_dictionary()?;
 
         // Check for old version
         if config.fs.exists(&config.path.join("version"))? {

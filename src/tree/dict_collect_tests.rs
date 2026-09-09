@@ -104,3 +104,60 @@ fn a_collection_under_a_held_pause_defers_the_dictionary_removal() -> crate::Res
     );
     Ok(())
 }
+
+/// A collected dictionary leaves the LIVE registry, not just the disk.
+///
+/// The registry holds each dictionary's raw bytes and prepared decoder state, so
+/// a tree that rotates dictionaries would otherwise carry every generation it
+/// ever held for its whole life, and keep reporting ids it no longer owns.
+#[test]
+fn a_collected_dictionary_is_evicted_from_the_live_registry() -> crate::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let dict = ZstdDictionary::new(&training_corpus());
+    let dict_id = dict.id();
+    let compression = CompressionType::zstd_dict(3, dict_id)?;
+
+    {
+        let tree = config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(compression))
+            .zstd_dictionary(Some(Arc::new(dict)))
+            .open()?;
+        for i in 0u32..100 {
+            tree.insert(
+                format!("key-{i:05}").as_bytes(),
+                b"value-under-the-dictionary",
+                u64::from(i),
+            );
+        }
+        tree.flush_active_memtable(0)?;
+    }
+
+    {
+        let tree = config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(CompressionType::None))
+            .open()?;
+        tree.major_compact(u64::MAX, 0)?;
+        let crate::AnyTree::Standard(tree) = tree else {
+            panic!("a standard tree");
+        };
+        tree.collect_unreferenced_dictionaries()?;
+    }
+
+    let tree = config(dir.path())
+        .data_block_compression_policy(CompressionPolicy::all(CompressionType::None))
+        .open()?;
+    let crate::AnyTree::Standard(tree) = tree else {
+        panic!("a standard tree");
+    };
+    assert!(
+        tree.zstd_dictionaries().get(dict_id).is_some(),
+        "loaded at open, before the collection",
+    );
+
+    assert_eq!(tree.collect_unreferenced_dictionaries()?, 1);
+    assert!(
+        tree.zstd_dictionaries().get(dict_id).is_none(),
+        "a collected dictionary is dropped from the live set as well as the disk",
+    );
+    Ok(())
+}

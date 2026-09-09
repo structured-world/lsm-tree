@@ -1255,6 +1255,57 @@ mod zstd_dict {
     }
 
     #[test]
+    fn a_repair_stores_the_dictionary_it_was_handed() -> lsm_tree::Result<()> {
+        // Repairing a tree written before dictionaries were stored: the tables
+        // name an id, but `dicts/` does not exist, so the caller supplies the
+        // bytes to the repair. Recording that id in the rebuilt manifest without
+        // ALSO writing the file leaves a manifest naming a dictionary the tree
+        // does not have, and the next open — the whole point of the repair —
+        // fails.
+        let dir = tempfile::tempdir()?;
+        let dict = make_test_dictionary();
+        let dict_id = dict.id();
+        let compression = CompressionType::zstd_dict(3, dict_id)?;
+        let dict = Arc::new(dict);
+
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(compression))
+                .zstd_dictionary(Some(Arc::clone(&dict)))
+                .open()?;
+            for i in 0u32..100 {
+                let key = format!("key-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        // Take the tree back to the pre-storage world: the tables still name the
+        // dictionary, nothing on disk answers for it.
+        std::fs::remove_dir_all(dir.path().join("dicts"))?;
+        lose_the_manifest(dir.path())?;
+
+        let report = make_config(dir.path())
+            .zstd_dictionary(Some(dict))
+            .repair()?;
+        assert_eq!(report.unreadable, 0, "the supplied dictionary reads them");
+
+        assert!(
+            dir.path().join("dicts").join(dict_id.to_string()).exists(),
+            "a repair that records the id must also store the bytes behind it",
+        );
+
+        // And the repaired tree opens with nothing supplied.
+        let reopened = make_config(dir.path()).open()?;
+        assert_eq!(
+            reopened.get(b"key-00042", lsm_tree::MAX_SEQNO)?.as_deref(),
+            Some(b"value-00042-padding-to-make-it-longer".as_slice()),
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_salvage_resolves_the_dictionaries_the_tree_stores() -> lsm_tree::Result<()> {
         // Salvage reads the source's blocks and rewrites them, so it needs the
         // dictionary the source was written against just as a plain open does.
@@ -1429,6 +1480,81 @@ mod zstd_dict {
                 lsm_tree::Error::ZstdDictMismatch { expected, got: None } if expected == dict_id
             ),
             "expected the missing id to be named, got {err:?}",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_salvage_rewrites_an_older_generation_under_its_own_dictionary() -> lsm_tree::Result<()> {
+        // The recovered copy mirrors the SOURCE's compression descriptor, so it
+        // has to be written with the dictionary that descriptor names. Handing
+        // the writer the tree's CURRENT dictionary instead compresses the blocks
+        // against bytes the stamped id does not describe, and the copy fails on
+        // its first read — the multi-generation salvage would be impossible.
+        let dir = tempfile::tempdir()?;
+        let first = make_test_dictionary();
+        let first_id = first.id();
+        let second = ZstdDictionary::new(&b"a second dictionary with different content".repeat(40));
+        let second_id = second.id();
+        assert_ne!(first_id, second_id);
+
+        // Generation one, under the first dictionary.
+        {
+            let tree = make_config(dir.path())
+                .data_block_compression_policy(CompressionPolicy::all(CompressionType::zstd_dict(
+                    3, first_id,
+                )?))
+                .zstd_dictionary(Some(Arc::new(first)))
+                .open()?;
+            for i in 0u32..500 {
+                let key = format!("key-{i:05}");
+                let val = format!("value-{i:05}-padding-to-make-it-longer");
+                tree.insert(key.as_bytes(), val.as_bytes(), i.into());
+            }
+            tree.flush_active_memtable(0)?;
+        }
+
+        // Corrupt that table, then repair under a policy that has MOVED ON to a
+        // second dictionary: the salvage must still rewrite the old table under
+        // the dictionary it names.
+        let victim = std::fs::read_dir(dir.path().join("tables"))?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().parse::<u64>().is_ok())
+            })
+            .expect("an SST to corrupt");
+        corrupt_a_data_block(&victim)?;
+        lose_the_manifest(dir.path())?;
+
+        let report = make_config(dir.path())
+            .data_block_compression_policy(CompressionPolicy::all(CompressionType::zstd_dict(
+                3, second_id,
+            )?))
+            .zstd_dictionary(Some(Arc::new(second)))
+            .repair_with_salvage(true)?;
+        assert_eq!(
+            report.salvaged, 1,
+            "the older generation is salvaged, not dropped: {:?}",
+            report.unreadable_files,
+        );
+
+        // The salvaged copy reads back: it was written under the dictionary its
+        // own descriptor names.
+        let reopened = make_config(dir.path()).open()?;
+        let present = (0u32..500)
+            .filter(|i| {
+                let key = format!("key-{i:05}");
+                reopened
+                    .get(key.as_bytes(), lsm_tree::MAX_SEQNO)
+                    .expect("read")
+                    .is_some()
+            })
+            .count();
+        assert!(
+            present > 400,
+            "only the corrupt block's keys may be lost, got {present}/500",
         );
         Ok(())
     }

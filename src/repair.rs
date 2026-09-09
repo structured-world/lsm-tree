@@ -6220,6 +6220,21 @@ fn publish_repaired_manifest(
             .into_iter()
             .filter(|id| held.get(*id).is_some())
             .collect();
+
+        // STORE what the manifest is about to name. The set here holds the
+        // caller-supplied dictionary as well as the folder's, so a repair of a
+        // tree written before dictionaries were stored (tables naming an id,
+        // no `dicts/` at all) would otherwise commit a manifest referencing
+        // bytes that exist only in the caller's memory — and the reopen the
+        // repair exists to enable would fail on the missing file. Writing is
+        // idempotent by id, so a dictionary already on disk costs an `exists`.
+        let folder = config.path.join(crate::file::DICTS_FOLDER);
+        for id in &ids {
+            if let Some(dict) = held.get(*id) {
+                crate::dicts::write(&*config.fs, &folder, dict, config.sync_mode)?;
+            }
+        }
+
         if ids.is_empty() {
             version
         } else {

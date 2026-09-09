@@ -968,29 +968,18 @@ impl Config {
     /// the compression policy references a `dict_id` that doesn't match the
     /// configured dictionary.
     pub fn open(self) -> crate::Result<AnyTree> {
-        // `mut` only under zstd: installing the registry assigns the config a
-        // set of its own and may fill the write slot from it.
-        #[cfg_attr(
-            not(zstd_any),
-            expect(unused_mut, reason = "only the zstd build installs a registry here")
-        )]
-        let mut config = self;
-
-        // BEFORE validation, not inside `Tree::open`: the policy names a
-        // dictionary by id, and the tree may hold it without the caller
-        // supplying the bytes again. Validating first would refuse exactly the
-        // reopen this feature exists to allow.
-        #[cfg(zstd_any)]
-        config.install_own_zstd_dictionaries()?;
-        #[cfg(zstd_any)]
-        config.validate_zstd_dictionary()?;
+        // The dictionary registry is loaded and the compression policy validated
+        // inside `Tree::open`, under the directory lock — NOT here. Both read the
+        // tree's `dicts/` folder, and the load SWEEPS unpublished temps; doing
+        // that before the lock lets an opener that is about to fail with
+        // `Locked` delete a live owner's in-flight registration.
 
         // On a zstd build the live block path seals encrypted blocks through
         // the AAD-bound envelope, so the configured provider MUST implement it.
         // Reject an opaque-only provider here, at open time, instead of letting
         // it fail on the first encrypted read/write.
         #[cfg(zstd_any)]
-        if config
+        if self
             .encryption
             .as_ref()
             .is_some_and(|enc| !enc.supports_aad_block_path())
@@ -1002,10 +991,10 @@ impl Config {
             ));
         }
 
-        Ok(if config.kv_separation_opts.is_some() {
-            AnyTree::Blob(BlobTree::open(config)?)
+        Ok(if self.kv_separation_opts.is_some() {
+            AnyTree::Blob(BlobTree::open(self)?)
         } else {
-            AnyTree::Standard(Tree::open(config)?)
+            AnyTree::Standard(Tree::open(self)?)
         })
     }
 
@@ -1142,7 +1131,7 @@ impl Config {
     /// a `dict_id` that matches the configured dictionary. Catches mismatches
     /// at open time rather than at first block write/read.
     #[cfg(zstd_any)]
-    fn validate_zstd_dictionary(&self) -> crate::Result<()> {
+    pub(crate) fn validate_zstd_dictionary(&self) -> crate::Result<()> {
         let dict_id = self.zstd_dictionary.as_ref().map(|d| d.id());
 
         // NOTE: Only data block policies are validated. Index blocks never
