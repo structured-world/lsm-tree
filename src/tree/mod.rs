@@ -4149,8 +4149,10 @@ impl Tree {
         // a pool per compaction would spawn threads on each run). A caller-
         // supplied pool is left untouched. Shadowed under `parallel` only, so
         // non-parallel builds don't carry an unused `mut`.
-        // `mut` unconditionally: the dictionary set below is loaded into the
-        // config on every build, not only the parallel one.
+        // `mut` under `zstd_any` too: installing the dictionaries ASSIGNS the
+        // config a registry of its own rather than storing through the one it
+        // arrived with, which is what keeps two trees opened from clones of one
+        // config from sharing a set.
         #[cfg_attr(
             not(any(feature = "parallel", zstd_any)),
             expect(unused_mut, reason = "assigned only by the parallel / zstd builds")
