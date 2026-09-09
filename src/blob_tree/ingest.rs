@@ -237,9 +237,7 @@ impl<'a> BlobIngestion<'a> {
                 params.encryption.clone_from(&index.config.encryption);
                 #[cfg(zstd_any)]
                 {
-                    params
-                        .zstd_dictionary
-                        .clone_from(&index.config.zstd_dictionary);
+                    params.zstd_dictionaries = index.config.current_zstd_dictionaries();
                 }
                 #[cfg(feature = "metrics")]
                 {

@@ -13,7 +13,7 @@ use alloc::{string::ToString, vec::Vec};
 pub struct Accessor<'a> {
     blob_files: &'a BlobFileList,
     #[cfg(zstd_any)]
-    zstd_dictionary: Option<&'a crate::compression::ZstdDictionary>,
+    zstd_dictionaries: Option<&'a crate::compression::ZstdDictionaries>,
 }
 
 impl<'a> Accessor<'a> {
@@ -21,15 +21,16 @@ impl<'a> Accessor<'a> {
         Self {
             blob_files,
             #[cfg(zstd_any)]
-            zstd_dictionary: None,
+            zstd_dictionaries: None,
         }
     }
 
-    /// Supplies the zstd dictionary for [`CompressionType::ZstdDict`](crate::CompressionType::ZstdDict) blob reads.
+    /// Supplies the dictionaries [`CompressionType::ZstdDict`](crate::CompressionType::ZstdDict)
+    /// blob reads resolve against, each file by the id it recorded.
     #[cfg(zstd_any)]
     #[must_use]
-    pub fn with_dict(mut self, dict: Option<&'a crate::compression::ZstdDictionary>) -> Self {
-        self.zstd_dictionary = dict;
+    pub fn with_dicts(mut self, dicts: &'a crate::compression::ZstdDictionaries) -> Self {
+        self.zstd_dictionaries = Some(dicts);
         self
     }
 
@@ -67,7 +68,10 @@ impl<'a> Accessor<'a> {
         let reader = {
             let r = Reader::new(blob_file, file.as_ref());
             #[cfg(zstd_any)]
-            let r = r.with_dict(self.zstd_dictionary);
+            let r = match self.zstd_dictionaries {
+                Some(dicts) => r.with_dicts(dicts),
+                None => r,
+            };
             r
         };
 
@@ -257,7 +261,10 @@ impl<'a> Accessor<'a> {
         let reader = {
             let r = Reader::new(blob_file, file.as_ref());
             #[cfg(zstd_any)]
-            let r = r.with_dict(self.zstd_dictionary);
+            let r = match self.zstd_dictionaries {
+                Some(dicts) => r.with_dicts(dicts),
+                None => r,
+            };
             r
         };
 

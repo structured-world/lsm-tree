@@ -12,7 +12,7 @@ pub use gc::{FragmentationEntry, FragmentationMap};
 use crate::path::PathBuf;
 use crate::tree::inner::{FlushGuard, VersionsWriteGuard};
 use crate::{
-    Cache, Config, Memtable, ScanSinceEvent, SeqNo, TableId, TreeId, UserKey, UserValue,
+    Config, Memtable, ScanSinceEvent, SeqNo, TableId, TreeId, UserKey, UserValue,
     abstract_tree::{AbstractTree, RangeItem},
     coding::Decode,
     iter_guard::{IterGuard, IterGuardImpl},
@@ -54,20 +54,8 @@ impl IterGuard for Guard {
         // selective scan into a full read of the value log. A caller that
         // wants every value uses `into_inner`, and that is what arms it.
         if pred(&kv.key.user_key) {
-            resolve_value_handle(
-                self.tree.id(),
-                &self.tree.index.config.cache,
-                &self.version,
-                kv,
-                #[cfg(zstd_any)]
-                self.tree
-                    .index
-                    .config
-                    .kv_separation_opts
-                    .as_ref()
-                    .and_then(|o| o.zstd_dictionary.as_deref()),
-            )
-            .map(|(k, v)| (k, Some(v)))
+            resolve_value_handle(self.tree.id(), &self.tree.index.config, &self.version, kv)
+                .map(|(k, v)| (k, Some(v)))
         } else {
             Ok((kv.key.user_key, None))
         }
@@ -95,40 +83,38 @@ impl IterGuard for Guard {
         }
         resolve_value_handle(
             self.tree.id(),
-            &self.tree.index.config.cache,
+            &self.tree.index.config,
             &self.version,
             self.kv?,
-            #[cfg(zstd_any)]
-            self.tree
-                .index
-                .config
-                .kv_separation_opts
-                .as_ref()
-                .and_then(|o| o.zstd_dictionary.as_deref()),
         )
     }
 }
 
 fn resolve_value_handle(
     tree_id: TreeId,
-    cache: &Cache,
+    config: &Config,
     version: &Version,
     item: InternalValue,
-    #[cfg(zstd_any)] zstd_dictionary: Option<&crate::compression::ZstdDictionary>,
 ) -> RangeItem {
     if item.key.value_type.is_indirection() {
         let mut cursor = crate::io::Cursor::new(item.value);
         let vptr = BlobIndirection::decode_from(&mut cursor)?;
 
+        // The whole set, so each blob file decodes against the dictionary IT
+        // recorded. Held across the read: registration swaps the registry on a
+        // live tree, and a read works against the snapshot it started with.
+        #[cfg(zstd_any)]
+        let dicts = config.zstd_dictionaries.load();
+
         // Resolve indirection using value log
         let accessor = {
             let a = Accessor::new(&version.blob_files);
             #[cfg(zstd_any)]
-            let a = a.with_dict(zstd_dictionary);
+            let a = a.with_dicts(&dicts);
             a
         };
 
-        match accessor.get(tree_id, &item.key.user_key, &vptr.vhandle, cache) {
+        match accessor.get(tree_id, &item.key.user_key, &vptr.vhandle, &config.cache) {
             Ok(Some(v)) => {
                 let k = item.key.user_key;
                 Ok((k, v))
@@ -224,18 +210,8 @@ impl BlobTree {
             return Ok(None);
         };
 
-        let (_, v) = resolve_value_handle(
-            self.id(),
-            &self.index.config.cache,
-            &super_version.version,
-            item,
-            #[cfg(zstd_any)]
-            self.index
-                .config
-                .kv_separation_opts
-                .as_ref()
-                .and_then(|o| o.zstd_dictionary.as_deref()),
-        )?;
+        let (_, v) =
+            resolve_value_handle(self.id(), &self.index.config, &super_version.version, item)?;
 
         Ok(Some(v))
     }
@@ -265,18 +241,8 @@ impl BlobTree {
         self.index
             .scan_since_seqno_with(target_seqno, true, |version, entry| {
                 let seqno = entry.key.seqno;
-                let (key, value) = resolve_value_handle(
-                    self.id(),
-                    &self.index.config.cache,
-                    version,
-                    entry,
-                    #[cfg(zstd_any)]
-                    self.index
-                        .config
-                        .kv_separation_opts
-                        .as_ref()
-                        .and_then(|o| o.zstd_dictionary.as_deref()),
-                )?;
+                let (key, value) =
+                    resolve_value_handle(self.id(), &self.index.config, version, entry)?;
                 Ok(ScanSinceEvent::Insert { key, value, seqno })
             })
     }
@@ -305,18 +271,8 @@ impl BlobTree {
             true,
             |version, entry| {
                 let seqno = entry.key.seqno;
-                let (key, value) = resolve_value_handle(
-                    self.id(),
-                    &self.index.config.cache,
-                    version,
-                    entry,
-                    #[cfg(zstd_any)]
-                    self.index
-                        .config
-                        .kv_separation_opts
-                        .as_ref()
-                        .and_then(|o| o.zstd_dictionary.as_deref()),
-                )?;
+                let (key, value) =
+                    resolve_value_handle(self.id(), &self.index.config, version, entry)?;
                 Ok(ScanSinceEvent::Insert { key, value, seqno })
             },
             Some(&bounds),
@@ -470,17 +426,16 @@ impl<I: Iterator<Item = crate::Result<InternalValue>>> PrefetchScan<I> {
             return;
         }
 
+        // One snapshot of the set for the whole window: every file in it
+        // decodes against the dictionary it recorded, whichever generation it
+        // belongs to.
+        #[cfg(zstd_any)]
+        let dicts = self.tree.index.config.zstd_dictionaries.load();
+
         let accessor = {
             let a = Accessor::new(&self.version.blob_files);
             #[cfg(zstd_any)]
-            let a = a.with_dict(
-                self.tree
-                    .index
-                    .config
-                    .kv_separation_opts
-                    .as_ref()
-                    .and_then(|o| o.zstd_dictionary.as_deref()),
-            );
+            let a = a.with_dicts(&dicts);
             a
         };
 
@@ -1253,9 +1208,7 @@ impl AbstractTree for BlobTree {
                 params.encryption.clone_from(&self.index.config.encryption);
                 #[cfg(zstd_any)]
                 {
-                    params
-                        .zstd_dictionary
-                        .clone_from(&self.index.config.zstd_dictionary);
+                    params.zstd_dictionaries = self.index.config.current_zstd_dictionaries();
                 }
                 #[cfg(feature = "metrics")]
                 {
@@ -1541,15 +1494,9 @@ impl AbstractTree for BlobTree {
                 }
                 let (_, v) = resolve_value_handle(
                     self.id(),
-                    &self.index.config.cache,
+                    &self.index.config,
                     &super_version.version,
                     item,
-                    #[cfg(zstd_any)]
-                    self.index
-                        .config
-                        .kv_separation_opts
-                        .as_ref()
-                        .and_then(|o| o.zstd_dictionary.as_deref()),
                 )?;
                 results[idx] = Some(v);
             }

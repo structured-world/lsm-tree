@@ -38,10 +38,23 @@ pub struct SalvageOptions {
     /// Encryption provider matching the source's at-rest encryption, or `None`
     /// for an unencrypted source.
     pub encryption: Option<Arc<dyn EncryptionProvider>>,
-    /// zstd dictionary matching the source's dictionary compression, or `None`
-    /// when the source uses no dictionary.
+    /// zstd dictionary the RECOVERED copy is written against, or `None` to
+    /// rewrite without one.
+    ///
+    /// One, because a block is compressed against exactly one dictionary. It is
+    /// also joined into the read set below, so a standalone salvage that knows
+    /// only the source's dictionary can keep passing just this.
     #[cfg(zstd_any)]
     pub zstd_dictionary: Option<Arc<crate::compression::ZstdDictionary>>,
+    /// Every dictionary the SOURCE may have been written against.
+    ///
+    /// Reading is the other direction from writing: a table records the id of
+    /// the one dictionary its blocks use, and resolving that id needs the whole
+    /// set the tree holds. [`crate::repair`] fills this from the tree's `dicts/`
+    /// folder, which is what lets a table written under a dictionary the caller
+    /// never supplied be salvaged at all.
+    #[cfg(zstd_any)]
+    pub zstd_dictionaries: crate::compression::ZstdDictionaries,
     /// The open / decrypt context id for an ENCRYPTED source: block AAD binds
     /// the table identity, so an encrypted source sealed under a non-zero id
     /// only decrypts when the same id is supplied here.
@@ -882,7 +895,15 @@ fn salvage_attempt(
         params.encryption.clone_from(&options.encryption);
         #[cfg(zstd_any)]
         {
-            params.zstd_dictionary.clone_from(&options.zstd_dictionary);
+            // The read set, plus the write dictionary: a standalone salvage
+            // knows only the one its source used and passes just that, while a
+            // repair passes the tree's whole set (the source may predate the
+            // dictionary new blocks are written against).
+            let mut dicts = options.zstd_dictionaries.clone();
+            if let Some(dict) = options.zstd_dictionary.clone() {
+                dicts = dicts.with(dict);
+            }
+            params.zstd_dictionaries = dicts;
         }
         crate::table::Table::recover_inner(
             params,
@@ -1064,8 +1085,21 @@ fn salvage_attempt(
     } else {
         writer
     };
+    // The writer MIRRORS the source's compression descriptor, so it must be
+    // handed the dictionary that descriptor names — not the caller's current
+    // write dictionary. Giving it a different one compresses the recovered
+    // blocks against bytes the stamped `dict_id` does not describe, and the
+    // first read of the copy fails: exactly the multi-generation salvage the
+    // read set above exists to enable.
     #[cfg(zstd_any)]
-    let writer = writer.use_zstd_dictionary(options.zstd_dictionary.clone());
+    let writer = writer.use_zstd_dictionary(match table.metadata.data_block_compression {
+        crate::CompressionType::ZstdDict { dict_id, .. } => options
+            .zstd_dictionaries
+            .get(dict_id)
+            .cloned()
+            .or_else(|| options.zstd_dictionary.clone()),
+        _ => options.zstd_dictionary.clone(),
+    });
 
     let walk = match salvage_blocks(
         &table,
@@ -2824,10 +2858,14 @@ pub(crate) fn decompress_blob_value<'a>(
         #[cfg(zstd_any)]
         crate::CompressionType::ZstdDict { dict_id, .. } => {
             use crate::compression::CompressionProvider as _;
+            // A blob file carries ONE compression descriptor, so the caller
+            // resolves `dict_id` against whatever set it holds and passes the
+            // one dictionary the file names. Here that id is only cross-checked.
             let Some(dict) = zstd_dictionary else {
-                return Err(crate::Error::FeatureUnsupported(
-                    "salvage of a dictionary-compressed blob file",
-                ));
+                return Err(crate::Error::ZstdDictMismatch {
+                    expected: dict_id,
+                    got: None,
+                });
             };
             if dict.id() != dict_id {
                 return Err(crate::Error::ZstdDictMismatch {
