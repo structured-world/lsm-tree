@@ -2007,6 +2007,12 @@ impl Tree {
         // Explicitly, and only here: the guard is what excludes a concurrent
         // registration from the removals above, so releasing it at its last READ
         // (which is what tightening the scope would do) is precisely the race.
+        //
+        // This drop is also what satisfies `clippy::significant_drop_tightening`
+        // — it makes the guard's last use its own release, so the lint does not
+        // fire and the function needs no expectation. Adding one anyway is a
+        // BUILD FAILURE here, not dead weight: `unfulfilled_lint_expectations`
+        // is an error under the crate's `-D warnings`.
         drop(version_lock);
         Ok(removed)
     }
