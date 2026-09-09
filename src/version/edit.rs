@@ -252,6 +252,16 @@ impl VersionEdit {
         // marker either, so whenever it is written the blob section is written
         // too (a zero count when empty): the decoder reads "blob section, then
         // floor" positionally and must not mistake a floor for a blob count.
+        //
+        // The DICTIONARY section, third in the chain, is under the same
+        // decision, and for the same reason: it appears only once a tree has
+        // registered a dictionary, and a binary without dictionary support
+        // cannot serve such a tree at all — every dictionary-compressed table
+        // in it names an id that binary has no way to resolve. So the trailing
+        // bytes it rejects are the fail-fast, exactly as above, and a rollback
+        // stays possible for every tree that never registered one. Deliberate,
+        // not an omission: the manifest layout version is unchanged for all
+        // three sections.
         if !self.blob_restrictions.is_empty()
             || self.retention_floor.is_some()
             || self.dicts.is_some()
