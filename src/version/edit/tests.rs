@@ -151,6 +151,29 @@ fn a_payload_without_the_dictionary_section_decodes_it_as_unchanged() {
 }
 
 #[test]
+fn a_dictionary_section_without_a_floor_is_refused_by_the_encoder() {
+    // The appended sections are positional with no presence markers, so the
+    // dictionary ids are only findable after a floor. Encoding them without one
+    // produces a record the decoder reads as "floor = <count><first id>", which
+    // applies a fabricated retention floor and drops the whole set. Refuse to
+    // write it rather than emit bytes that decode into something else.
+    let mut edit = sample();
+    edit.retention_floor = None;
+    edit.dicts = Some(vec![7, 9]);
+
+    let mut payload = Vec::new();
+    assert!(edit.encode_payload(&mut payload).is_err());
+
+    let mut buf = Vec::new();
+    let mut scratch = Vec::new();
+    assert!(edit.append_to(&mut buf, &mut scratch).is_err());
+    assert!(
+        buf.is_empty(),
+        "no framed record is emitted for a refused edit"
+    );
+}
+
+#[test]
 fn a_truncated_dictionary_section_is_rejected() {
     // A count that outruns the payload is format drift, not power loss: the
     // framing checksum already passed. Reject rather than adopt a short set,

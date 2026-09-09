@@ -200,7 +200,12 @@ mod measure {
                     .expect("dict decompression"),
                 None => ZstdBackend::decompress(frame, block.len()).expect("plain decompression"),
             };
-            debug_assert_eq!(out.len(), block.len());
+            // Not `debug_assert_eq!`: the bench profile inherits `release` and
+            // strips debug assertions, so the check would be absent from the
+            // only build that ever runs this. The decompressed buffer has no
+            // other use, and an unvalidated round-trip would report a read
+            // throughput for work nothing proved correct.
+            assert_eq!(out.len(), block.len(), "round-trip length mismatch");
         }
         let read = started.elapsed();
 
@@ -230,6 +235,38 @@ mod measure {
             return 0.0;
         }
         (from as f64 - to as f64) / from as f64 * 100.0
+    }
+
+    /// Quantile `q` of `samples`, which must already be sorted ascending.
+    fn quantile(samples: &[f64], q: f64) -> f64 {
+        let Some(last) = samples.len().checked_sub(1) else {
+            return 0.0;
+        };
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "an index derived from a quantile in [0, 1] over a bounded sample count"
+        )]
+        let idx = (q * last as f64).round() as usize;
+        samples.get(idx).copied().unwrap_or(0.0)
+    }
+
+    /// One formatted latency row in microseconds: mean, then the tail that
+    /// actually bounds a per-output decision.
+    fn latency_line(samples: &mut [f64]) -> String {
+        let mean = if samples.is_empty() {
+            0.0
+        } else {
+            samples.iter().sum::<f64>() / samples.len() as f64
+        };
+        samples.sort_unstable_by(f64::total_cmp);
+        format!(
+            "{:>9.1}us {:>9.1}us {:>9.1}us {:>9.1}us",
+            mean,
+            quantile(samples, 0.50),
+            quantile(samples, 0.99),
+            quantile(samples, 0.999),
+        )
     }
 
     /// Writes the exact bytes this measurement used to `dir`, so the same
@@ -412,7 +449,10 @@ mod measure {
         }
 
         println!("\n=== 4. The cost of asking (probe one 16K block both ways) ===");
-        println!("{:<32} {:>14} {:>14}", "workload", "plain", "with dict");
+        println!(
+            "{:<32} {:>11} {:>11} {:>11} {:>11}",
+            "workload / variant", "mean", "p50", "p99", "p999",
+        );
         for w in WORKLOADS {
             let corpus: Vec<u8> = blocks(w, 0..20_000, 64 * 1024).concat();
             let (dict, _) = train(&corpus);
@@ -421,27 +461,28 @@ mod measure {
                 .next()
                 .expect("at least one block");
 
-            // Warm, then time a run of probes: one probe is too short to time
-            // on its own.
-            const PROBES: u32 = 200;
+            // Timed per probe, not as one batch mean: a compaction decides per
+            // OUTPUT whether to probe, so what bounds that decision is the tail,
+            // and a mean hides it.
+            const PROBES: usize = 200;
             let _ = ZstdBackend::compress(&sample, LEVEL);
-            let started = Instant::now();
+            let mut plain_us = Vec::with_capacity(PROBES);
             for _ in 0..PROBES {
+                let started = Instant::now();
                 let _ = ZstdBackend::compress(&sample, LEVEL).expect("probe");
+                plain_us.push(started.elapsed().as_secs_f64() * 1e6);
             }
-            let plain_each = started.elapsed().as_secs_f64() / f64::from(PROBES) * 1e6;
 
             let _ = ZstdBackend::compress_with_dict(&sample, LEVEL, dict.raw());
-            let started = Instant::now();
+            let mut dict_us = Vec::with_capacity(PROBES);
             for _ in 0..PROBES {
+                let started = Instant::now();
                 let _ = ZstdBackend::compress_with_dict(&sample, LEVEL, dict.raw()).expect("probe");
+                dict_us.push(started.elapsed().as_secs_f64() * 1e6);
             }
-            let dict_each = started.elapsed().as_secs_f64() / f64::from(PROBES) * 1e6;
 
-            println!(
-                "{:<32} {:>11.1}us {:>11.1}us",
-                w.name, plain_each, dict_each,
-            );
+            println!("{:<32} {}", w.name, latency_line(&mut plain_us));
+            println!("{:<32} {}", "  with dict", latency_line(&mut dict_us));
         }
     }
 }

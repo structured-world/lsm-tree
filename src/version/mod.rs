@@ -315,21 +315,34 @@ impl Version {
         &self.dicts
     }
 
-    /// The dictionary ids this version's tables actually reference, ascending.
+    /// The dictionary ids this version's files actually reference, ascending.
     ///
     /// The REGISTERED set ([`Self::dicts`]) is what the tree owes a reader; this
     /// is what it still needs. They diverge once a compaction rewrites the last
-    /// table that used a dictionary, which is exactly when the file becomes
+    /// file that used a dictionary, which is exactly when it becomes
     /// collectable.
+    ///
+    /// Blob files count as much as tables: a KV-separated tree stores its values
+    /// there, under a dictionary of their own, and a blob file whose dictionary
+    /// was collected cannot resolve a single indirection.
     #[must_use]
     pub fn referenced_dicts(&self) -> Vec<crate::file::DictId> {
-        let mut ids: Vec<crate::file::DictId> = self
-            .iter_tables()
-            .filter_map(|table| match table.metadata.data_block_compression {
+        fn dict_of(compression: crate::CompressionType) -> Option<crate::file::DictId> {
+            match compression {
                 #[cfg(zstd_any)]
                 crate::CompressionType::ZstdDict { dict_id, .. } => Some(dict_id),
                 _ => None,
-            })
+            }
+        }
+
+        let mut ids: Vec<crate::file::DictId> = self
+            .iter_tables()
+            .filter_map(|table| dict_of(table.metadata.data_block_compression))
+            .chain(
+                self.blob_files
+                    .iter()
+                    .filter_map(|bf| dict_of(bf.compression())),
+            )
             .collect();
         ids.sort_unstable();
         ids.dedup();

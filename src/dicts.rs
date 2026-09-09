@@ -18,7 +18,7 @@
 //! plausible-looking garbage.
 
 use crate::compression::{ZstdDictionaries, ZstdDictionary};
-use crate::file::{DICT_TMP_SUFFIX, DICTS_FOLDER, DictDirEntry, DictId};
+use crate::file::{DICT_TMP_SUFFIX, DictDirEntry, DictId};
 use crate::fs::{Fs, FsFile, FsOpenOptions, SyncMode};
 #[cfg(not(feature = "std"))]
 use crate::io::{Read, Write};
@@ -27,12 +27,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use std::io::{Read, Write};
-
-/// The dictionary folder of the tree rooted at `tree_path`.
-#[must_use]
-pub fn folder(tree_path: &Path) -> PathBuf {
-    tree_path.join(DICTS_FOLDER)
-}
 
 /// The file `id` is stored under.
 #[must_use]
@@ -65,6 +59,13 @@ pub fn write(
     if !fs.exists(folder)? {
         fs.create_dir_all(folder)?;
         fs.sync_directory_with(folder, sync_mode)?;
+        // And the directory that CONTAINS it: syncing `dicts/` alone persists
+        // its contents, not its own entry in the tree root. A crash could then
+        // keep the version edit that names a dictionary while the folder
+        // holding it never existed, and the scan at open would come back empty.
+        if let Some(parent) = folder.parent() {
+            fs.sync_directory_with(parent, sync_mode)?;
+        }
     }
 
     let tmp_path = folder.join(format!("{}{DICT_TMP_SUFFIX}", dict.id()));
@@ -144,6 +145,28 @@ pub fn read_all(fs: &dyn Fs, folder: &Path) -> crate::Result<ZstdDictionaries> {
         }
     }
     Ok(set)
+}
+
+/// Lists the ids the folder holds, without reading a single dictionary.
+///
+/// The collector's view: it decides what to UNLINK, and for that the names are
+/// the whole answer. Reading the bytes would make it hash every dictionary in
+/// the tree, and would fail the pass on a corrupt one it may be about to remove.
+///
+/// # Errors
+///
+/// Propagates the directory read failure.
+pub fn list_ids(fs: &dyn Fs, folder: &Path) -> crate::Result<Vec<DictId>> {
+    if !fs.exists(folder)? {
+        return Ok(Vec::new());
+    }
+    let mut ids = Vec::new();
+    for dirent in fs.read_dir(folder)? {
+        if let DictDirEntry::Dict(id) = DictDirEntry::classify(&dirent.file_name) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
 }
 
 /// Removes the dictionary stored under `id`, treating an already-absent file as

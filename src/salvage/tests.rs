@@ -1590,6 +1590,8 @@ fn salvage_propagates_an_environmental_failure_from_the_mirror_probe() -> crate:
             encryption: None,
             #[cfg(zstd_any)]
             zstd_dictionary: None,
+            #[cfg(zstd_any)]
+            zstd_dictionaries: crate::compression::ZstdDictionaries::new(),
             table_id: 0,
             expected_stored_id: None,
             output_id: None,
@@ -7184,6 +7186,8 @@ fn salvage_recovers_an_encrypted_sst_with_the_provider() -> crate::Result<()> {
         encryption: Some(Arc::clone(&enc)),
         #[cfg(zstd_any)]
         zstd_dictionary: None,
+        #[cfg(zstd_any)]
+        zstd_dictionaries: crate::compression::ZstdDictionaries::new(),
         table_id: 0,
         expected_stored_id: None,
         output_id: None,
@@ -7276,6 +7280,7 @@ fn salvage_recovers_a_dictionary_sst_with_the_dictionary() -> crate::Result<()> 
     let options = SalvageOptions {
         encryption: None,
         zstd_dictionary: Some(Arc::clone(&dict)),
+        zstd_dictionaries: crate::compression::ZstdDictionaries::new(),
         table_id: 0,
         expected_stored_id: None,
         output_id: None,
@@ -7424,6 +7429,8 @@ fn salvage_recovers_an_encrypted_sst_with_a_nonzero_table_id() -> crate::Result<
         encryption: Some(Arc::clone(&enc)),
         #[cfg(zstd_any)]
         zstd_dictionary: None,
+        #[cfg(zstd_any)]
+        zstd_dictionaries: crate::compression::ZstdDictionaries::new(),
         table_id: 0,
         expected_stored_id: None,
         output_id: None,
@@ -7445,6 +7452,8 @@ fn salvage_recovers_an_encrypted_sst_with_a_nonzero_table_id() -> crate::Result<
         encryption: Some(Arc::clone(&enc)),
         #[cfg(zstd_any)]
         zstd_dictionary: None,
+        #[cfg(zstd_any)]
+        zstd_dictionaries: crate::compression::ZstdDictionaries::new(),
         table_id: TID,
         expected_stored_id: None,
         output_id: None,

@@ -175,7 +175,21 @@ const CHECKSUM_TYPE_XXH3: u8 = 0;
 
 impl VersionEdit {
     /// Serializes the edit payload (without the framing header) into `out`.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::InvalidHeader`] when the edit carries dictionary ids but
+    /// no retention floor. The appended sections are positional, so such an
+    /// edit would encode into bytes the decoder reads as a floor built from the
+    /// dictionary count and the first id: a fabricated floor, and the whole set
+    /// lost. Refusing to write it is what keeps the encoding total.
     fn encode_payload(&self, out: &mut Vec<u8>) -> crate::Result<()> {
+        if self.dicts.is_some() && self.retention_floor.is_none() {
+            return Err(crate::Error::InvalidHeader(
+                "VersionEdit: dictionary ids without a retention floor",
+            ));
+        }
+
         out.write_u64::<LittleEndian>(self.new_version_id)?;
 
         out.write_u32::<LittleEndian>(u32_len(self.changed_levels.len())?)?;
@@ -252,14 +266,9 @@ impl VersionEdit {
             out.write_u64::<LittleEndian>(floor)?;
         }
         if let Some(dicts) = &self.dicts {
-            // Reachable only with a floor already written: `Version::diff`
-            // re-states the unchanged floor whenever it carries dictionaries,
-            // because this section is positional and cannot be told from a
-            // floor otherwise.
-            debug_assert!(
-                self.retention_floor.is_some(),
-                "a dictionary section needs the floor written before it",
-            );
+            // The floor above is already written: `Version::diff` re-states an
+            // unchanged one whenever it carries dictionaries, and the guard at
+            // the top of this function refuses any edit that did not.
             out.write_u32::<LittleEndian>(u32_len(dicts.len())?)?;
             for id in dicts {
                 out.write_u32::<LittleEndian>(*id)?;
@@ -273,8 +282,10 @@ impl VersionEdit {
     ///
     /// # Errors
     ///
-    /// Returns an error if the payload exceeds the framing payload cap or a
-    /// write fails.
+    /// Returns an error if the payload exceeds the framing payload cap, a write
+    /// fails, or the edit carries dictionary ids without a retention floor (the
+    /// positional sections cannot express that). The payload is assembled
+    /// before any of it reaches `writer`, so a refused edit emits no record.
     pub fn append_to<W: Write>(&self, writer: &mut W, scratch: &mut Vec<u8>) -> crate::Result<()> {
         framing::write_framed_record(writer, scratch, |payload| self.encode_payload(payload))
     }

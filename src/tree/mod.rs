@@ -1860,6 +1860,12 @@ impl Tree {
     /// and the tables written against it would then fail to open; this order
     /// can only leave an unreferenced file, which the next collection removes.
     ///
+    /// Both steps happen under the version lock, which is what serializes this
+    /// against [`Self::collect_unreferenced_dictionaries`]. Taking the lock only
+    /// for the edit would leave the file published in the window the collector
+    /// scans, and it would be unlinked as an orphan before the edit that names
+    /// it ever landed.
+    ///
     /// # Errors
     ///
     /// Propagates the store's write failures and the version install's.
@@ -1869,7 +1875,9 @@ impl Tree {
         dict: alloc::sync::Arc<crate::compression::ZstdDictionary>,
     ) -> crate::Result<()> {
         let id = dict.id();
-        let folder = crate::dicts::folder(&self.config.path);
+        let mut version_lock = self.version_history.write();
+
+        let folder = self.config.path.join(crate::file::DICTS_FOLDER);
         crate::dicts::write(&*self.config.fs, &folder, &dict, self.config.sync_mode)?;
 
         // Resolvable from this moment on rather than from the next open: the
@@ -1880,7 +1888,6 @@ impl Tree {
             .zstd_dictionaries
             .store(alloc::sync::Arc::new(dicts));
 
-        let mut version_lock = self.version_history.write();
         if version_lock
             .latest_version_ref()
             .version
@@ -1914,21 +1921,33 @@ impl Tree {
         self.config.current_zstd_dictionaries()
     }
 
-    /// Drops every dictionary no table references any more, returning how many
+    /// Drops every dictionary nothing references any more, returning how many
     /// files were removed.
     ///
-    /// Two stages, because "no table uses it" and "no version mentions it" are
+    /// Two stages, because "nothing uses it" and "no version mentions it" are
     /// different questions and only the second makes a file safe to unlink:
     ///
-    /// 1. The latest version stops REGISTERING an id once none of its tables
-    ///    is compressed against it. That is the version edit; it costs an
-    ///    install and nothing on disk.
+    /// 1. The latest version stops REGISTERING an id once nothing references
+    ///    it. That is the version edit; it costs an install and nothing on
+    ///    disk.
     /// 2. The file goes only when no RETAINED version registers the id any
     ///    more. A version still in the history can still be read from, and its
     ///    tables would fail to open without their dictionary.
     ///
     /// So the file survives until the versions that named it have been pruned,
     /// which is the same lifetime rule the tables themselves follow.
+    ///
+    /// REFERENCED means both directions: the files that already exist (tables
+    /// and blob files alike), and the ids the compression policy names for what
+    /// is written next. Counting only the first would unregister a dictionary
+    /// before its first table is written, and nothing puts the id back
+    /// afterwards — so a later pass would unlink the file while live tables are
+    /// compressed against it.
+    ///
+    /// The whole pass holds the version lock. Registration takes the same lock
+    /// before it writes anything, so the two cannot interleave: without that, a
+    /// registration's file could land between this scan and its removals and be
+    /// unlinked as an orphan while the edit naming it was still to come.
     ///
     /// # Errors
     ///
@@ -1937,9 +1956,11 @@ impl Tree {
     pub fn collect_unreferenced_dictionaries(&self) -> crate::Result<usize> {
         let mut version_lock = self.version_history.write();
 
-        // Stage 1: unregister what the latest version's tables no longer use.
+        // Stage 1: unregister what neither the latest version's tables nor the
+        // write policy needs.
         let latest = version_lock.latest_version_ref().version.clone();
-        let referenced = latest.referenced_dicts();
+        let mut referenced = latest.referenced_dicts();
+        referenced.extend(self.config.write_referenced_dict_ids());
         let stale: Vec<crate::file::DictId> = latest
             .dicts()
             .iter()
@@ -1969,19 +1990,24 @@ impl Tree {
             )?;
         }
 
-        // Stage 2: unlink the files no retained version names any more.
+        // Stage 2: unlink the files nothing names any more. Still under the
+        // version lock, so no registration can publish a file into the window
+        // between the listing and the removals.
         let still_owed = version_lock.registered_dicts();
-        drop(version_lock);
 
-        let folder = crate::dicts::folder(&self.config.path);
+        let folder = self.config.path.join(crate::file::DICTS_FOLDER);
         let mut removed = 0;
-        for id in crate::dicts::read_all(&*self.config.fs, &folder)?.ids() {
-            if still_owed.contains(&id) {
+        for id in crate::dicts::list_ids(&*self.config.fs, &folder)? {
+            if still_owed.contains(&id) || referenced.contains(&id) {
                 continue;
             }
             crate::dicts::remove(&*self.config.fs, &folder, id, self.config.sync_mode)?;
             removed += 1;
         }
+        // Explicitly, and only here: the guard is what excludes a concurrent
+        // registration from the removals above, so releasing it at its last READ
+        // (which is what tightening the scope would do) is precisely the race.
+        drop(version_lock);
         Ok(removed)
     }
 
@@ -4182,18 +4208,7 @@ impl Tree {
         // there, and it is registered at the end of this function so later
         // opens need no config at all.
         #[cfg(zstd_any)]
-        {
-            let folder = crate::dicts::folder(&config.path);
-            // A `.tmp` is an unpublished registration referenced by no version,
-            // so a crashed one is swept rather than left to linger.
-            crate::dicts::sweep_temps(&*config.fs, &folder)?;
-
-            let mut dicts = crate::dicts::read_all(&*config.fs, &folder)?;
-            if let Some(supplied) = config.zstd_dictionary.clone() {
-                dicts = dicts.with(supplied);
-            }
-            config.zstd_dictionaries.store(Arc::new(dicts));
-        }
+        config.install_own_zstd_dictionaries()?;
 
         // Check for old version
         if config.fs.exists(&config.path.join("version"))? {

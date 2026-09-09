@@ -5,7 +5,7 @@ use test_log::test;
 fn store() -> (tempfile::TempDir, Arc<dyn Fs>, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let fs: Arc<dyn Fs> = Arc::new(StdFs);
-    let folder = folder(dir.path());
+    let folder = dir.path().join(crate::file::DICTS_FOLDER);
     (dir, fs, folder)
 }
 

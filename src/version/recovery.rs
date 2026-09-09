@@ -171,8 +171,17 @@ fn parse_retention_floor_section(mut bytes: &[u8]) -> crate::Result<SeqNo> {
 fn parse_dicts_section(mut bytes: &[u8]) -> crate::Result<Vec<crate::file::DictId>> {
     const ERR: crate::Error = crate::Error::InvalidHeader("dicts section");
     let r = &mut bytes;
-    let count = r.read_u32::<LittleEndian>().map_err(|_| ERR)?;
-    let mut ids = Vec::with_capacity(count as usize);
+    let count = r.read_u32::<LittleEndian>().map_err(|_| ERR)? as usize;
+    // The ids are fixed-width, so the bytes that remain say how many there can
+    // be. Reserving on the count alone would let a corrupt section name four
+    // billion ids and turn the recovery into a multi-gigabyte allocation before
+    // the first short read could refuse it.
+    // Compared by division rather than `count * 4`, which overflows a 32-bit
+    // `usize` for the very counts this check exists to reject.
+    if count > r.len() / size_of::<crate::file::DictId>() {
+        return Err(ERR);
+    }
+    let mut ids = Vec::with_capacity(count);
     for _ in 0..count {
         ids.push(r.read_u32::<LittleEndian>().map_err(|_| ERR)?);
     }

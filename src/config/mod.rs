@@ -1005,6 +1005,80 @@ impl Config {
         self.zstd_dictionaries.load().as_ref().clone()
     }
 
+    /// Gives this config a registry of its OWN, holding every dictionary the
+    /// tree at [`Self::path`] stores plus the one supplied through
+    /// [`Self::zstd_dictionary`].
+    ///
+    /// Every path that opens a table has to call this first: a table resolves
+    /// the dictionary id it recorded against this set, so an unloaded one fails
+    /// every dictionary-compressed table in the tree.
+    ///
+    /// The registry is REPLACED rather than stored into, because `Config` is
+    /// `Clone` and a keyspace derives one config per partition from a base. The
+    /// clones would otherwise share a single set, and the second tree's load
+    /// would take over the first tree's registry — after which the first tree
+    /// stops resolving the tables it wrote itself.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the folder scan and the store's integrity check: a dictionary
+    /// whose bytes no longer hash to its name fails the open rather than
+    /// dropping silently out of the set.
+    #[cfg(zstd_any)]
+    pub(crate) fn install_own_zstd_dictionaries(&mut self) -> crate::Result<()> {
+        let folder = self.path.join(crate::file::DICTS_FOLDER);
+        // A `.tmp` is an unpublished registration referenced by no version, so a
+        // crashed one is swept rather than left to linger.
+        crate::dicts::sweep_temps(&*self.fs, &folder)?;
+
+        let mut dicts = crate::dicts::read_all(&*self.fs, &folder)?;
+        if let Some(supplied) = self.zstd_dictionary.clone() {
+            dicts = dicts.with(supplied);
+        }
+        self.zstd_dictionaries = Arc::new(arc_swap::ArcSwap::from_pointee(dicts));
+        Ok(())
+    }
+
+    /// The dictionary ids NEW blocks may still be written against: every one a
+    /// compression policy names, plus the supplied dictionary itself.
+    ///
+    /// A collection has to count these as referenced. "No table uses it" is a
+    /// statement about the past; a dictionary the write policy names is one the
+    /// next flush compresses against, and dropping its registration is not
+    /// recoverable — nothing puts the id back once tables start naming it, so a
+    /// later pass unlinks the file out from under them.
+    ///
+    /// Index blocks are excluded deliberately, matching
+    /// [`Self::validate_zstd_dictionary`]: the writer downgrades a `ZstdDict`
+    /// index policy to plain zstd, so no index block ever names a dictionary.
+    #[cfg(zstd_any)]
+    pub(crate) fn write_referenced_dict_ids(&self) -> alloc::vec::Vec<crate::file::DictId> {
+        let mut ids = alloc::vec::Vec::new();
+        let mut push = |id: crate::file::DictId| {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        };
+
+        for ct in self.data_block_compression_policy.iter() {
+            if let &CompressionType::ZstdDict { dict_id, .. } = ct {
+                push(dict_id);
+            }
+        }
+        if let Some(kv_opts) = &self.kv_separation_opts {
+            if let CompressionType::ZstdDict { dict_id, .. } = kv_opts.compression {
+                push(dict_id);
+            }
+            if let Some(dict) = &kv_opts.zstd_dictionary {
+                push(dict.id());
+            }
+        }
+        if let Some(dict) = &self.zstd_dictionary {
+            push(dict.id());
+        }
+        ids
+    }
+
     /// Validates that every `ZstdDict` entry in compression policies references
     /// a `dict_id` that matches the configured dictionary. Catches mismatches
     /// at open time rather than at first block write/read.
